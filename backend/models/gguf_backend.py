@@ -67,6 +67,11 @@ class GGUFBackend:
         self.cancel_event.set()
         return True
 
+    def _logits_processors(self, stop_if_cancelled: Callable[..., Any]) -> Any:
+        from llama_cpp import LogitsProcessorList
+
+        return LogitsProcessorList([stop_if_cancelled])
+
     def preflight(
         self,
         model_info: dict[str, Any],
@@ -284,7 +289,7 @@ class GGUFBackend:
 
                 if on_phase:
                     on_phase("generating")
-                from llama_cpp import LogitsProcessorList
+                logits_processors = self._logits_processors(stop_if_cancelled)
 
                 generation_started = time.perf_counter()
                 response = self.chat_handler(
@@ -295,7 +300,7 @@ class GGUFBackend:
                     top_k=64,
                     max_tokens=runtime_plan["max_output_tokens"],
                     seed=seed,
-                    logits_processor=LogitsProcessorList([stop_if_cancelled]),
+                    logits_processor=logits_processors,
                     enable_thinking=thinking,
                 )
                 message = response["choices"][0]["message"]
@@ -315,7 +320,7 @@ class GGUFBackend:
                         top_k=64,
                         max_tokens=1536,
                         seed=seed,
-                        logits_processor=LogitsProcessorList([stop_if_cancelled]),
+                        logits_processor=logits_processors,
                         enable_thinking=False,
                     )
                     message = response["choices"][0]["message"]
@@ -387,7 +392,7 @@ class GGUFBackend:
                             top_k=40,
                             max_tokens=STANDARD_OUTPUT_TOKENS,
                             seed=seed,
-                            logits_processor=LogitsProcessorList([stop_if_cancelled]),
+                            logits_processor=logits_processors,
                             enable_thinking=False,
                     )
                     repair_usage = repair_response.get("usage", {})

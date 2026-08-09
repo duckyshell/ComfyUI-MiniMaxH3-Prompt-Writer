@@ -45,7 +45,7 @@ python_embeded\python.exe -m pip install --only-binary=:all: `
   -r ComfyUI\custom_nodes\ComfyUI-MiniMaxH3-Prompt-Writer\requirements-gguf.txt
 ```
 
-This CUDA 13.0 command was tested for the v0.1.0 release with
+This CUDA 13.0 command was tested for the v0.2.0 release with
 `llama-cpp-python` 0.3.34. The requirement accepts 0.3.x releases starting at
 0.3.34, so it does not force a working newer 0.3.x installation to
 downgrade. For another CUDA/Python combination, use a compatible pre-built wheel
@@ -79,7 +79,7 @@ device; this is a capacity hint, not a quality recommendation, and selection rem
 
 ## Standard Python environments
 
-Windows Portable with CUDA 13.0 is the setup tested for the v0.1.0 release. Other
+Windows Portable with CUDA 13.0 is the setup tested for the v0.2.0 release. Other
 ComfyUI Python environments may work, but they were not part of that release
 test.
 

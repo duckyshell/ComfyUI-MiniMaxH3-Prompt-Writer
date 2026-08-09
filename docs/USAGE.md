@@ -8,7 +8,8 @@
 3. Add the media required by that mode.
 4. Set target duration and aspect ratio.
 5. Describe the intended result in **Creative brief**.
-6. Select a ready local model and press **Generate prompt**.
+6. Select a ready local model, or connect an existing local `llama.cpp` server,
+   then press **Generate prompt**.
 7. Review or edit the result, then press **Copy prompt**.
 
 H3 Prompt Writer calls its local ComfyUI routes directly. It does not queue or modify a
@@ -72,11 +73,34 @@ Ordinary use should stay on Auto. Advanced users can select:
 A manual context choice is never silently overridden. If the request does not fit,
 H3 Prompt Writer offers an explicit larger-context action.
 
+## Existing llama.cpp server
+
+Open the model picker and choose **External llama.cpp server** to use a Gemma 4
+model that is already running in `llama-server`.
+
+- Enter the local server root URL, such as `http://127.0.0.1:8080`.
+- The server must already have the model and its matching vision projector loaded.
+- External `llama-server` support is currently validated only with Gemma 4
+  multimodal GGUF models and matching vision projectors. Other models are not
+  tested or supported in v0.2.0.
+- Context size, KV cache, GPU layers, and model loading remain controlled by the
+  server. The corresponding Writer controls become read-only.
+- Disconnecting, cancelling, or closing H3 Prompt Writer does not stop the server
+  or unload its model.
+- If the server was started with `--sleep-idle-seconds`, no separate wake action
+  is needed. The next completion request wakes it automatically, and the first
+  response after sleep can take longer while the server reloads its model.
+
+The connection details are stored in the browser on this computer. Media is sent
+only to the local URL you entered.
+
 ## Model lifecycle
 
 - **Cancel** stops the active generation at the next safe checkpoint.
 - **Keep model loaded** is off by default, so VRAM is released after each prompt.
   Enable it when creating several prompts in sequence.
+- For an external server, model lifetime is managed outside H3 Prompt Writer.
+  **Keep model loaded** and prompt-model unload actions therefore do not apply.
 - The footer memory action follows the active stage: **Free ComfyUI VRAM** unloads
   workflow models without clearing cached node results; **Unload prompt model**
   releases a kept-loaded Gemma model; during generation **Stop & unload** requests

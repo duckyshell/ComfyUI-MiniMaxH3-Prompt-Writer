@@ -7,7 +7,7 @@
 A local multimodal prompt writer for MiniMax H3, hosted inside ComfyUI and powered
 by Gemma 4 GGUF models.
 
-Current release: **0.1.0** | [MIT License](LICENSE)
+Current release: **0.2.0** | [MIT License](LICENSE)
 
 H3 Prompt Writer turns a creative brief plus image, video, and declared audio
 references into an editable H3 prompt using the official MiniMax prompt-writing
@@ -24,6 +24,7 @@ guides. Media stays on the local machine.
 - Up to 9 pictures, 3 videos, and 3 audio references in Reference mode.
 - Ordered video contact sheets with Auto, 6-frame, and 8-frame sampling.
 - Local Gemma 4 multimodal inference through `llama-cpp-python`.
+- Optional connection to an existing local OpenAI-compatible `llama.cpp` server.
 - Automatic 8K/16K context selection with manual 8K/16K/24K controls.
 - Editable output, copy, text-only Refine, Cancel, and contextual GPU-memory control.
 - Official MiniMax guide selection and a user-editable Advanced System Prompt.
@@ -89,7 +90,12 @@ Copy into your H3 workflow
 ## Local validation
 
 Tested locally with Gemma 4 E4B, 12B, 26B-A4B, and 31B GGUF models across all
-all five modes.
+five modes. The external-server path was tested with Gemma 4 26B-A4B and its
+matching vision projector on `llama-server`.
+
+External `llama-server` support is currently validated only with Gemma 4
+multimodal GGUF models and matching vision projectors. Other models are not
+tested or supported in v0.2.0.
 
 MiniMax H3 prompt guides are vendored from the official MiniMax H3 repository;
 model files are provided by their respective Hugging Face repositories and are

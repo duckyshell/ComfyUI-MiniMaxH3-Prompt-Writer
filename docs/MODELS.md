@@ -46,7 +46,7 @@ and reduced decode speed substantially.
 
 ## Other models
 
-v0.1.0 has been tested only with the model and projector pairs listed above.
+v0.2.0 has been tested only with the model and projector pairs listed above.
 Other Gemma 4 GGUF files may appear in H3 Prompt Writer, but their compatibility has not
 been validated. Each directory must still contain exactly one model GGUF and one
 projector.

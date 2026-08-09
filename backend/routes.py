@@ -17,6 +17,7 @@ from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
 from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, parse_session_id
 from .memory import assess_free_vram
 from .models.gguf_backend import BACKEND as GGUF_BACKEND
+from .models.external_server_backend import BACKEND as EXTERNAL_SERVER_BACKEND
 from .models.contract import ModelError
 from .system_prompts import SystemPromptError, system_prompt_for_mode
 from .version import VERSION
@@ -31,11 +32,13 @@ STATE: dict[str, Any] = {
     "selected_model_family": None,
 }
 
-BACKENDS = {"gguf": GGUF_BACKEND}
+BACKENDS = {"gguf": GGUF_BACKEND, "external": EXTERNAL_SERVER_BACKEND}
 GENERATION_CACHE: dict[str, str] = {}
 
 
 async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: dict[str, Any]) -> None:
+    if getattr(backend, "manages_gpu_memory", True) is False:
+        return
     status = backend.status()
     desired_signature = (model["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"])
     loaded_signature = (
@@ -53,6 +56,35 @@ async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: d
             "The selected prompt model needs more free GPU memory before it can load.",
             details,
         )
+
+
+async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
+    external_config = body.get("external_server")
+    if external_config is not None:
+        if not isinstance(external_config, dict):
+            raise ModelError("INVALID_EXTERNAL_SERVER", "External server settings must be a JSON object.")
+        model = await asyncio.to_thread(EXTERNAL_SERVER_BACKEND.probe_model, external_config)
+        requested_id = str(body.get("model_id") or "")
+        if requested_id and requested_id != model["id"]:
+            raise ModelError(
+                "EXTERNAL_MODEL_CHANGED",
+                "The model loaded by llama.cpp changed. Reconnect it in the model picker.",
+                {"requested_model_id": requested_id, "current_model_id": model["id"]},
+            )
+        return model
+    return find_model(str(body.get("model_id") or ""))
+
+
+def _model_error_status(error: ModelError) -> int:
+    if error.code == "INSUFFICIENT_FREE_VRAM":
+        return 409
+    if error.code in {
+        "EXTERNAL_SERVER_UNAVAILABLE",
+        "EXTERNAL_SERVER_ERROR",
+        "EXTERNAL_SERVER_INVALID_RESPONSE",
+    }:
+        return 502
+    return 400
 
 
 def _error(code: str, message: str, *, status: int, details: Any = None) -> web.Response:
@@ -99,6 +131,18 @@ async def get_models(_request: web.Request) -> web.Response:
         "model_directory": "ComfyUI/models/LLM/",
         "setup": model_setup_catalog(),
     })
+
+
+@routes.post(f"{ROUTE_PREFIX}/external-server/probe")
+async def probe_external_server(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    if body is None:
+        return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
+    try:
+        model = await asyncio.to_thread(EXTERNAL_SERVER_BACKEND.probe_model, body)
+    except ModelError as error:
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+    return web.json_response({"model": model})
 
 
 @routes.get(f"{ROUTE_PREFIX}/guides")
@@ -157,9 +201,12 @@ async def generate(request: web.Request) -> web.Response:
 
     if STATE["active_request_id"] is not None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
-    model = find_model(body["model_id"])
+    try:
+        model = await _resolve_model(body)
+    except ModelError as error:
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
     if model is None:
-        return _error("MODEL_NOT_FOUND", "The selected local model was not found.", status=404)
+        return _error("MODEL_NOT_FOUND", "The selected prompt model was not found.", status=404)
     backend = BACKENDS.get(model["family"])
     if backend is None:
         return _error("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.", status=400)
@@ -172,7 +219,8 @@ async def generate(request: web.Request) -> web.Response:
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
     try:
-        runtime_plan = backend.preflight(
+        runtime_plan = await asyncio.to_thread(
+            backend.preflight,
             model,
             assembled,
             context_profile=body.get("context_profile", "auto"),
@@ -181,8 +229,7 @@ async def generate(request: web.Request) -> web.Response:
         )
         await _memory_preflight(backend, model, runtime_plan)
     except ModelError as error:
-        status = 409 if error.code == "INSUFFICIENT_FREE_VRAM" else 400
-        return _error(error.code, error.message, status=status, details=error.details)
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
 
     request_id = str(uuid4())
     request_started = time.perf_counter()
@@ -274,6 +321,13 @@ async def unload(_request: web.Request) -> web.Response:
     backend = BACKENDS.get(STATE.get("selected_model_family"), GGUF_BACKEND)
     if STATE["active_request_id"] is not None:
         return web.json_response({"unload_requested": backend.request_unload(), "deferred": True})
+    if getattr(backend, "externally_managed", False):
+        return web.json_response({
+            "unload_requested": False,
+            "deferred": False,
+            "externally_managed": True,
+            "message": "The external llama.cpp server owns its model lifecycle.",
+        })
     await asyncio.to_thread(backend.unload)
     return web.json_response({"unload_requested": True, "deferred": False})
 
@@ -288,9 +342,12 @@ async def refine(request: web.Request) -> web.Response:
         return _error("INVALID_REQUEST", "Required fields are missing.", status=400, details={"fields": missing})
     if STATE["active_request_id"] is not None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
-    model = find_model(body["model_id"])
+    try:
+        model = await _resolve_model(body)
+    except ModelError as error:
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
     if model is None:
-        return _error("MODEL_NOT_FOUND", "The selected local model was not found.", status=404)
+        return _error("MODEL_NOT_FOUND", "The selected prompt model was not found.", status=404)
     backend = BACKENDS.get(model["family"])
     if backend is None:
         return _error("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.", status=400)
@@ -303,7 +360,8 @@ async def refine(request: web.Request) -> web.Response:
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
     try:
-        runtime_plan = backend.preflight(
+        runtime_plan = await asyncio.to_thread(
+            backend.preflight,
             model,
             assembled,
             context_profile=body.get("context_profile", "auto"),
@@ -312,8 +370,7 @@ async def refine(request: web.Request) -> web.Response:
         )
         await _memory_preflight(backend, model, runtime_plan)
     except ModelError as error:
-        status = 409 if error.code == "INSUFFICIENT_FREE_VRAM" else 400
-        return _error(error.code, error.message, status=status, details=error.details)
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
 
     request_id = str(uuid4())
     request_started = time.perf_counter()

@@ -166,9 +166,9 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-model-row > span:nth-child(2) { display: flex; flex-direction: column; }.h3ps-model-row small { color: var(--h3ps-muted); font-size: 9px; }.h3ps-model-row strong { font-size: 10.5px; font-weight: 620; }.h3ps-model-row strong em { margin-left: 5px; padding: 2px 5px; border-radius: 4px; background: #292d35; color: var(--h3ps-muted); font-size: 8px; font-style: normal; }
 .h3ps-model-lifecycle { display:flex; align-items:center; padding:3px 6px; border:1px solid #343943; border-radius:6px; color:#8e95a0; font-size:8.5px; white-space:nowrap; }.h3ps-model-lifecycle[hidden] { display:none; }.h3ps-model-lifecycle em { font-style:normal; }.h3ps-model-lifecycle button { padding:2px 4px; border:0; background:transparent; color:#a8c8e8; font-size:8.5px; cursor:pointer; }.h3ps-model-lifecycle button:hover { color:#d6eaff; text-decoration:underline; }
 .h3ps-model-lifecycle.is-busy { width:126px; justify-content:flex-start; }
-.h3ps-model-menu { position: absolute; z-index: 20; left: 0; right: 0; bottom: calc(100% + 7px); overflow: hidden; border: 1px solid #3d424c; border-radius: 9px; background: #1a1d22; box-shadow: 0 18px 44px rgba(0,0,0,.46); }
+.h3ps-model-menu { position: static; overflow: hidden; margin-top: 7px; border: 1px solid #3d424c; border-radius: 9px; background: #1a1d22; box-shadow: 0 10px 28px rgba(0,0,0,.28); }
 .h3ps-model-menu[hidden] { display: none; }
-.h3ps-model-picker.needs-setup .h3ps-model-menu { position:static; overflow:visible; margin-top:7px; box-shadow:0 10px 28px rgba(0,0,0,.28); }
+.h3ps-model-picker.needs-setup .h3ps-model-menu { overflow:visible; }
 .h3ps-model-menu > header { display: flex; align-items: center; justify-content: space-between; height: 49px; padding: 0 11px 0 13px; border-bottom: 1px solid var(--h3ps-border-soft); background: #1d2025; }
 .h3ps-model-menu > header > span { display: flex; flex-direction: column; }
 .h3ps-model-menu > header strong { font-size: 10.5px; font-weight: 650; }
@@ -187,7 +187,7 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-other-models-popover { position:fixed; z-index:45; display:grid; grid-template-rows:49px minmax(0,1fr); max-height:min(62vh,520px); overflow:hidden; border:1px solid #414752; border-radius:9px; background:#1a1d22; box-shadow:0 20px 54px rgba(0,0,0,.58); }.h3ps-other-models-popover[hidden] { display:none; }.h3ps-other-models-popover > header { display:flex; align-items:center; justify-content:space-between; padding:0 10px 0 13px; border-bottom:1px solid var(--h3ps-border-soft); background:#1d2025; }.h3ps-other-models-popover > header > span { display:flex; flex-direction:column; }.h3ps-other-models-popover > header strong { font-size:10.5px; }.h3ps-other-models-popover > header small { margin-top:1px; color:var(--h3ps-muted); font-size:8.5px; }.h3ps-other-models-catalog { min-height:0; overflow-y:auto; padding:7px; scrollbar-width:thin; scrollbar-color:#4a5059 transparent; }.h3ps-other-models-catalog::-webkit-scrollbar { width:6px; }.h3ps-other-models-catalog::-webkit-scrollbar-thumb { border-radius:6px; background:#4a5059; }.h3ps-other-models-catalog .h3ps-model-setup-list { margin:0; }
 .h3ps-model-option { display: grid; grid-template-columns: 29px minmax(0,1fr) auto 17px; align-items: center; gap: 8px; width: 100%; min-height: 45px; padding: 5px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; }
 .h3ps-model-option:hover { background: #23262c; }
-.h3ps-model-option.is-selected { border-color: #3d424c; background: #282b32; }
+.h3ps-model-option.is-selected { border-color: #454b56; background: #282b32; box-shadow: inset 2px 0 var(--h3ps-accent-strong); }
 .h3ps-model-option.is-incomplete { opacity:.68; }
 .h3ps-model-option-icon { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 6px; background: #31353d; color: #d6d9de; font-size: 10px; font-weight: 760; }
 .h3ps-model-option > span:nth-child(2) { display: flex; flex-direction: column; min-width: 0; }
@@ -197,6 +197,39 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-model-tags em { padding: 2px 5px; border-radius: 4px; background: #343840; color: #adb2bb; font-size: 8px; font-style: normal; white-space: nowrap; }
 .h3ps-model-option > svg { color: var(--h3ps-accent-strong); opacity: 0; }
 .h3ps-model-option.is-selected > svg { opacity: 1; }
+.h3ps-external-server { margin:6px 0 0; border-top:1px solid var(--h3ps-border-soft); padding-top:6px; }
+.h3ps-external-server-row { display:grid; grid-template-columns:minmax(0,1fr) 31px; border:1px solid transparent; border-radius:7px; overflow:hidden; }
+.h3ps-external-server-row:hover, .h3ps-external-server.is-open .h3ps-external-server-row { background:#23262c; }
+.h3ps-external-server.is-selected .h3ps-external-server-row { border-color:#454b56; background:#282b32; box-shadow:inset 2px 0 var(--h3ps-accent-strong); }
+.h3ps-external-server-select { display:grid; grid-template-columns:29px minmax(0,1fr) auto 17px; align-items:center; gap:8px; min-width:0; min-height:43px; padding:4px 7px; border:0; background:transparent; color:var(--h3ps-text); text-align:left; cursor:pointer; }
+.h3ps-external-server-select > span:nth-child(2) { display:flex; min-width:0; flex-direction:column; }
+.h3ps-external-server-select strong { overflow:hidden; font-size:10px; font-weight:620; white-space:nowrap; text-overflow:ellipsis; }
+.h3ps-external-server-select small { margin-top:1px; overflow:hidden; color:var(--h3ps-muted); font-size:8.5px; white-space:nowrap; text-overflow:ellipsis; }
+.h3ps-external-server-select > em { padding:2px 5px; border-radius:4px; background:#343941; color:#afb5bf; font-size:7.5px; font-style:normal; }
+.h3ps-external-server-select > svg { color:var(--h3ps-accent-strong); opacity:0; }
+.h3ps-external-server.is-selected .h3ps-external-server-select > svg { opacity:1; }
+.h3ps-external-server-toggle { display:grid; place-items:center; min-width:31px; border:0; border-left:1px solid transparent; background:transparent; color:var(--h3ps-muted); cursor:pointer; }
+.h3ps-external-server-toggle:hover { border-left-color:#3b4048; background:#292d34; color:var(--h3ps-text); }
+.h3ps-external-server-toggle > svg { transform:rotate(90deg); transition:transform 120ms ease; }
+.h3ps-external-server.is-open .h3ps-external-server-toggle > svg { transform:rotate(-90deg); }
+.h3ps-external-server.is-connected .h3ps-model-option-icon { background:#263b35; color:#9cddc0; }
+.h3ps-external-server form { display:grid; gap:7px; margin:1px 7px 7px; padding:9px; border:1px solid #343943; border-radius:7px; background:#1d2025; }
+.h3ps-external-server form[hidden] { display:none; }
+.h3ps-external-server form label { display:grid; gap:3px; }
+.h3ps-external-server form label > span { color:#aeb4bd; font-size:8.5px; }
+.h3ps-external-server form label em { color:#737b87; font-style:normal; }
+.h3ps-external-server form input { width:100%; height:29px; padding:0 8px; border:1px solid #3a3f49; border-radius:6px; outline:0; background:#17191d; color:#e2e4e8; font:9px ui-monospace,SFMono-Regular,Consolas,monospace; }
+.h3ps-external-server form input:focus { border-color:#657383; box-shadow:0 0 0 2px rgba(105,142,178,.12); }
+.h3ps-external-server form > small { color:#858c97; font-size:8px; line-height:1.35; }
+.h3ps-external-server form > div { display:flex; align-items:center; gap:7px; }
+.h3ps-external-server form > div span { flex:1; }
+.h3ps-external-server form button { height:27px; padding:0 9px; border:1px solid #3b414b; border-radius:6px; background:#272b32; color:#d9dce1; font-size:8.5px; cursor:pointer; }
+.h3ps-external-server form button[type="submit"] { border-color:#566474; background:#303a45; color:#dcecff; }
+.h3ps-external-server form button:hover { border-color:#59616e; }
+.h3ps-external-server form button:disabled { opacity:.6; cursor:wait; }
+.h3ps-runtime-settings.is-server-managed summary { cursor:default; pointer-events:none; }
+.h3ps-runtime-settings.is-server-managed summary > svg { display:none; }
+.h3ps-runtime-settings.is-server-managed > div { display:none; }
 .h3ps-model-menu > footer { display: flex; align-items: center; gap: 13px; height: 36px; padding: 0 12px; border-top: 1px solid var(--h3ps-border-soft); background: #17191d; }
 .h3ps-model-menu > footer span { display: inline-flex; align-items: center; gap: 4px; color: var(--h3ps-muted); font-size: 8.5px; }
 .h3ps-model-menu > footer b { color: #94d6b2; font-weight: 620; }

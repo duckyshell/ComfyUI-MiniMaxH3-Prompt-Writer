@@ -10,3 +10,9 @@ loaded directly with llama.cpp. `requirements-gguf.txt` installs the adapter.
 
 Audio files remain declared references. The local adapter does not analyze their
 signal and must not infer unheard content.
+
+`external_server_backend.py` reuses the same request assembly, contact sheets,
+prompt audit, and narrow repair pipeline while sending chat completions to an
+already-running local OpenAI-compatible `llama-server`. The remote process owns
+model loading, context, KV cache, and unloading. The adapter never stops or
+unloads that process.

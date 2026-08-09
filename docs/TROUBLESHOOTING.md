@@ -28,6 +28,19 @@ Identical projector filenames from different repositories are not interchangeabl
 A CPU-only `llama-cpp-python` wheel may import successfully. Reinstall a wheel built
 for the CUDA version and Python version used by ComfyUI.
 
+## External llama.cpp server is unavailable
+
+- Use the server root URL, for example `http://127.0.0.1:8080`, not a `/v1` endpoint.
+- Confirm that `llama-server` is running and that its `/health` endpoint responds.
+- This release intentionally accepts servers on the same computer only.
+- If H3 Prompt Writer reports that vision is unavailable, restart the server with
+  the matching `mmproj` for the loaded Gemma 4 model.
+- Context and KV cache are configured when starting the server. Leave both Writer
+  settings on Auto.
+
+Cancelling a prompt closes the active request but leaves the external process and
+its loaded model unchanged.
+
 ## MODEL_LOAD_OOM
 
 - Unload other ComfyUI models and close GPU-heavy applications.

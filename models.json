@@ -1,0 +1,69 @@
+{
+  "models": [
+    {
+      "id": "gemma-4-E4B-it-Q3_K_M-GGUF",
+      "repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "revision": "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
+      "role": "gguf-very-low-memory",
+      "display_name": "Gemma 4 E4B Q3_K_M",
+      "vram_gb": 8,
+      "estimated_free_vram_mb": {"low": 4600, "standard": 4800, "extended": 5100},
+      "f16_kv_extra_mb_16k": 240,
+      "files": ["gemma-4-E4B-it-Q3_K_M.gguf", "mmproj-BF16.gguf"],
+      "recommended_context": "low",
+      "capabilities": {"images": true, "video_frames": true, "audio": false}
+    },
+    {
+      "id": "gemma-4-12b-it-Q4_K_S-GGUF",
+      "repo": "unsloth/gemma-4-12b-it-GGUF",
+      "revision": "fc034cfff751157913579611efad8462ac1be606",
+      "role": "gguf-low-memory",
+      "display_name": "Gemma 4 12B Q4_K_S",
+      "vram_gb": 12,
+      "estimated_free_vram_mb": {"low": 8800, "standard": 10300, "extended": 11200},
+      "f16_kv_extra_mb_16k": 1430,
+      "files": ["gemma-4-12b-it-Q4_K_S.gguf", "mmproj-BF16.gguf"],
+      "recommended_context": "low",
+      "capabilities": {"images": true, "video_frames": true, "audio": false}
+    },
+    {
+      "id": "gemma-4-12b-it-GGUF",
+      "repo": "unsloth/gemma-4-12b-it-GGUF",
+      "revision": "fc034cfff751157913579611efad8462ac1be606",
+      "role": "gguf",
+      "display_name": "Gemma 4 12B Q5_K_M",
+      "vram_gb": 16,
+      "estimated_free_vram_mb": {"low": 10500, "standard": 11600, "extended": 12500},
+      "f16_kv_extra_mb_16k": 1430,
+      "files": ["gemma-4-12b-it-Q5_K_M.gguf", "mmproj-BF16.gguf"],
+      "recommended_context": "standard",
+      "capabilities": {"images": true, "video_frames": true, "audio": false}
+    },
+    {
+      "id": "gemma-4-26B-A4B-it-GGUF",
+      "repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+      "revision": "c099eb48e663fd284577b04978a94ffccb261841",
+      "role": "gguf-medium",
+      "display_name": "Gemma 4 26B-A4B Q4_K_M",
+      "vram_gb": 24,
+      "estimated_free_vram_mb": {"low": 18200, "standard": 19600, "extended": 20800},
+      "f16_kv_extra_mb_16k": 1870,
+      "files": ["gemma-4-26B-A4B-it-UD-Q4_K_M.gguf", "mmproj-BF16.gguf"],
+      "recommended_context": "standard",
+      "capabilities": {"images": true, "video_frames": true, "audio": false}
+    },
+    {
+      "id": "gemma-4-31B-it-GGUF",
+      "repo": "unsloth/gemma-4-31B-it-GGUF",
+      "revision": "c1ac76e99d5513b141e8adde7288b85c3f9c32ec",
+      "role": "gguf-large",
+      "display_name": "Gemma 4 31B Q4_K_XL",
+      "vram_gb": 32,
+      "estimated_free_vram_mb": {"low": 23500, "standard": 27600, "extended": 30900},
+      "f16_kv_extra_mb_16k": 7480,
+      "files": ["gemma-4-31B-it-UD-Q4_K_XL.gguf", "mmproj-BF16.gguf"],
+      "recommended_context": "standard",
+      "capabilities": {"images": true, "video_frames": true, "audio": false}
+    }
+  ]
+}

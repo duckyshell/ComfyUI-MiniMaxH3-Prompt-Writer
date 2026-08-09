@@ -1,0 +1,2 @@
+# Optional GGUF backend. Use the CUDA wheel index matching the host CUDA runtime.
+llama-cpp-python>=0.3.34,<0.4

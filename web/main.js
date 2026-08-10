@@ -129,6 +129,16 @@ function newGenerationSeed() {
   return crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
 }
 
+function newSessionId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, "0")).join("");
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function systemPromptProfile(mode = studio?.mode) {
   return mode === "Reference" ? "reference" : "standard";
 }
@@ -1348,7 +1358,7 @@ function createStudio() {
     <div class="h3ps-toast" data-h3ps-toast><span class="h3ps-toast-icon">${icon("info", 17)}</span><span><strong data-toast-title>Notice</strong><span data-toast-message></span><button type="button" class="h3ps-toast-action" data-toast-action hidden></button><details data-toast-details hidden><summary>Technical details</summary><pre></pre></details></span></div>`;
   document.body.appendChild(root);
 
-  studio = { root, mode: "Reference", mediaFilter: "all", durationSeconds: 10, aspectRatio: "16:9", contextProfile: "auto", kvCache: "auto", modelLoaded: false, toastTimer: null, statusTimer: null, sessionId: crypto.randomUUID(), assets: [], previewAssetId: null, audioSupported: false, models: [], modelSetup: [], modelDirectory: "ComfyUI/models/LLM/", gpuMemory: null, selectedModel: null, externalServerConfig: loadExternalServerConfig(), externalModel: null, externalServerError: null, refineRestore: null, lastModelPrompt: null, lastModelMeta: null, guides: [], draggedAssetId: null, dragGhost: null, customSystemPrompts: loadCustomSystemPrompts(), systemPromptDefaults: {} };
+  studio = { root, mode: "Reference", mediaFilter: "all", durationSeconds: 10, aspectRatio: "16:9", contextProfile: "auto", kvCache: "auto", modelLoaded: false, toastTimer: null, statusTimer: null, sessionId: newSessionId(), assets: [], previewAssetId: null, audioSupported: false, models: [], modelSetup: [], modelDirectory: "ComfyUI/models/LLM/", gpuMemory: null, selectedModel: null, externalServerConfig: loadExternalServerConfig(), externalModel: null, externalServerError: null, refineRestore: null, lastModelPrompt: null, lastModelMeta: null, guides: [], draggedAssetId: null, dragGhost: null, customSystemPrompts: loadCustomSystemPrompts(), systemPromptDefaults: {} };
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
   root.addEventListener("click", (event) => {
     if (!event.target.closest("[data-asset-menu], [data-asset-menu-toggle]")) {

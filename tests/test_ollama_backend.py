@@ -168,6 +168,8 @@ class OllamaBackendTests(unittest.TestCase):
         self.assertEqual([model["remote_model"] for model in detected["compatible_models"]], ["gemma4:test"])
         model = detected["compatible_models"][0]
         self.assertEqual(model["model_context_limit"], 12288)
+        self.assertEqual(model["recommended_context"], "low")
+        self.assertTrue(model["auto_context_ladder"])
         self.assertTrue(model["thinking_detected"])
         self.assertFalse(model["tested_for_h3"])
         self.assertFalse(model["capabilities"]["audio"])
@@ -204,6 +206,20 @@ class OllamaBackendTests(unittest.TestCase):
                 context_profile="standard", kv_cache="auto", thinking=False,
             )
         self.assertEqual(manual.exception.code, "OLLAMA_MODEL_CONTEXT_LIMIT")
+
+    def test_auto_context_rejects_a_request_larger_than_the_model_limit(self):
+        assembled = self._assembled()
+        assembled["messages"][1]["content"] = "x" * 20_000
+
+        with self.assertRaises(ModelError) as raised:
+            self.backend.preflight(
+                self._model(), assembled,
+                context_profile="auto", kv_cache="auto", thinking=False,
+            )
+
+        self.assertEqual(raised.exception.code, "OLLAMA_MODEL_CONTEXT_LIMIT")
+        self.assertEqual(raised.exception.details["required_context_tokens"], 16384)
+        self.assertEqual(raised.exception.details["model_context_limit"], 12288)
 
     def test_rejects_provider_managed_kv_and_unreported_thinking(self):
         model = self._model()

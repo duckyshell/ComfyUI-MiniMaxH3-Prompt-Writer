@@ -90,7 +90,18 @@ def plan_context(
         + CHAT_TEMPLATE_OVERHEAD_TOKENS
     )
     minimum_required = estimated_input_tokens + STANDARD_OUTPUT_TOKENS + CONTEXT_SAFETY_TOKENS
-    if automatic and profile == "low" and (
+    automatic_ladder = automatic and model_info.get("auto_context_ladder") is True
+    if automatic_ladder:
+        minimum_tier_tokens = max(
+            CONTEXT_PROFILES[profile],
+            CONTEXT_PROFILES["standard"] if thinking else 0,
+            minimum_required,
+        )
+        profile = next(
+            (name for name, tokens in CONTEXT_PROFILES.items() if tokens >= minimum_tier_tokens),
+            "extended",
+        )
+    elif automatic and profile == "low" and (
         thinking or minimum_required > CONTEXT_PROFILES["low"]
     ):
         profile = "standard"

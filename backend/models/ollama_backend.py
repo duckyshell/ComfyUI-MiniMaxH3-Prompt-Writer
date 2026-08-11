@@ -241,7 +241,8 @@ class OllamaBackend:
                 "capabilities": {"images": compatible, "video_frames": compatible, "audio": False},
                 "thinking": "thinking" in capability_set,
                 "thinking_detected": "thinking" in capability_set,
-                "recommended_context": "standard",
+                "recommended_context": "low",
+                "auto_context_ladder": True,
                 "model_context_limit": _model_context_limit(details),
                 "parameter_size": detail.get("parameter_size"),
                 "quantization_level": detail.get("quantization_level"),
@@ -302,6 +303,16 @@ class OllamaBackend:
         limit = int(model_info.get("model_context_limit") or 0)
         if limit and runtime_plan["context_tokens"] > limit:
             requested = (context_profile or "auto").lower()
+            if requested == "auto" and model_info.get("auto_context_ladder") is True:
+                raise ModelError(
+                    "OLLAMA_MODEL_CONTEXT_LIMIT",
+                    "This request needs more context than the selected Ollama model supports.",
+                    {
+                        "required_context_tokens": runtime_plan["context_tokens"],
+                        "model_context_limit": limit,
+                        "suggestion": "Remove references, shorten the creative brief, or select a model with a larger context window.",
+                    },
+                )
             if requested != "auto":
                 raise ModelError(
                     "OLLAMA_MODEL_CONTEXT_LIMIT",

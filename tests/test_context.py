@@ -59,6 +59,39 @@ class ContextPlanTests(unittest.TestCase):
         )
         self.assertEqual(result["context_profile"], "standard")
 
+    def test_opt_in_auto_ladder_selects_the_smallest_sufficient_tier(self):
+        standard = plan_context(
+            request("x" * 20_000, visual_count=8),
+            {"recommended_context": "low", "auto_context_ladder": True},
+            requested_context="auto",
+            requested_kv_cache="auto",
+            thinking=False,
+        )
+        extended = plan_context(
+            request("x" * 50_000),
+            {"recommended_context": "low", "auto_context_ladder": True},
+            requested_context="auto",
+            requested_kv_cache="auto",
+            thinking=False,
+        )
+
+        self.assertEqual(standard["context_profile"], "standard")
+        self.assertEqual(extended["context_profile"], "extended")
+
+    def test_opt_in_auto_ladder_rejects_requests_larger_than_24k(self):
+        with self.assertRaises(ContextPlanError) as raised:
+            plan_context(
+                request("x" * 80_000),
+                {"recommended_context": "low", "auto_context_ladder": True},
+                requested_context="auto",
+                requested_kv_cache="auto",
+                thinking=False,
+            )
+
+        self.assertEqual(raised.exception.code, "CONTEXT_BUDGET_EXCEEDED")
+        self.assertEqual(raised.exception.details["context_profile"], "extended")
+        self.assertIsNone(raised.exception.details["suggested_context_profile"])
+
     def test_thinking_budget_is_dynamic(self):
         result = plan_context(
             request("x" * 30_000),

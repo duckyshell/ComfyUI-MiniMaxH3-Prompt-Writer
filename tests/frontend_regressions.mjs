@@ -388,6 +388,7 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(markup, /Context and KV cache/);
   assert.match(mainSource, /runtimeSettings\.hidden = provider !== "direct"/);
   assert.doesNotMatch(mainSource, /Context is sent explicitly with each request/);
+  assert.match(mainSource, /studio\.selectedModel\?\.family === "gguf"/);
   assert.doesNotMatch(mainSource, /\/api\/pull/);
   assert.doesNotMatch(mainSource, /Install .*Gemma|Cancel download|Downloading model/i);
   assert.match(mainSource, /Compatible · not yet H3-tested/);

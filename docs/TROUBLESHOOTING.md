@@ -94,6 +94,11 @@ silently rerun generation.
 
 If 24K also cannot fit, reduce the number of references or use a larger-VRAM tier.
 
+Ollama has no manual Context or KV controls in H3 Prompt Writer. Its request-aware
+Auto policy sends the smallest sufficient 8K, 16K, or 24K `num_ctx` value and checks
+the context limit declared by the selected model. If the request exceeds that limit,
+reduce the references or brief, or select an Ollama model with a larger context window.
+
 ## Unsupported or oversized media
 
 - Reference video and audio files must be 2 to 15 seconds long.

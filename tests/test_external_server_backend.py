@@ -11,6 +11,7 @@ from backend.models.external_server_backend import (
     _RemoteChatHandler,
     normalize_server_url,
 )
+from backend.models.gguf_backend import GGUFBackend
 
 
 class _FakeLlamaHandler(BaseHTTPRequestHandler):
@@ -157,14 +158,12 @@ class ExternalServerBackendTests(unittest.TestCase):
             )
         self.assertEqual(manual.exception.code, "EXTERNAL_RUNTIME_MANAGED")
 
-    def test_unload_does_not_stop_or_modify_remote_server(self):
+    def test_external_lifecycle_is_server_managed_without_local_unload_hook(self):
         model = self.backend.probe_model({"url": self.url})
-        plan = {
-            "context_tokens": 16384,
-            "kv_cache": "server",
-        }
-        self.backend.load(model, plan)
-        self.backend.unload()
+        self.assertFalse(issubclass(ExternalServerBackend, GGUFBackend))
+        self.assertTrue(self.backend.externally_managed)
+        self.assertTrue(model["externally_managed"])
+        self.assertFalse(hasattr(self.backend, "unload"))
         self.assertEqual(self.backend.probe_model({"url": self.url})["remote_model"], "gemma-test.gguf")
 
     def test_cancel_interrupts_stream_without_stopping_remote_server(self):

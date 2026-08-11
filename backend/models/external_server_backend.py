@@ -4,7 +4,7 @@ import http.client
 import json
 import socket
 import threading
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from ..context import (
@@ -15,8 +15,8 @@ from ..context import (
     THINKING_OUTPUT_TOKENS,
     estimate_text_tokens,
 )
+from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from .contract import ModelError
-from .gguf_backend import GGUFBackend
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8080"
@@ -55,20 +55,6 @@ def normalize_server_url(value: str | None) -> str:
     return f"http://{host}:{port}"
 
 
-class _NoopCloser:
-    def close(self) -> None:
-        return None
-
-
-class _EstimatedTokenizer:
-    def tokenize(self, value: bytes, add_bos: bool = True) -> list[int]:
-        count = estimate_text_tokens(value.decode("utf-8", errors="replace")) + int(add_bos)
-        return [0] * count
-
-    def close(self) -> None:
-        return None
-
-
 class _RemoteChatHandler:
     def __init__(
         self,
@@ -79,7 +65,6 @@ class _RemoteChatHandler:
         self.backend = backend
         self.endpoint = endpoint
         self.remote_model = remote_model
-        self._exit_stack = _NoopCloser()
 
     def __call__(
         self,
@@ -112,12 +97,15 @@ class _RemoteChatHandler:
         )
 
 
-class ExternalServerBackend(GGUFBackend):
+class ExternalServerBackend:
     manages_gpu_memory = False
     externally_managed = True
 
     def __init__(self) -> None:
-        super().__init__()
+        self.model_id: str | None = None
+        self.chat_handler: _RemoteChatHandler | None = None
+        self.cancel_event = threading.Event()
+        self.lock = threading.RLock()
         self._connection: http.client.HTTPConnection | None = None
         self._connection_lock = threading.Lock()
 
@@ -128,9 +116,12 @@ class ExternalServerBackend(GGUFBackend):
             "loaded_context_tokens": None,
             "loaded_kv_cache": None,
             "externally_managed": True,
-            "external_connected": self.model is not None,
+            "external_connected": self.model_id is not None,
             "external_model_id": self.model_id,
         }
+
+    def prepare_request(self) -> None:
+        self.cancel_event.clear()
 
     def cancel(self) -> bool:
         self.cancel_event.set()
@@ -145,11 +136,6 @@ class ExternalServerBackend(GGUFBackend):
 
     def request_unload(self) -> bool:
         return self.cancel()
-
-    def unload(self) -> None:
-        # The remote process owns its model lifecycle. Disconnecting Prompt Writer
-        # must never unload or stop a server managed by the user.
-        return None
 
     def _request_json(
         self,
@@ -436,37 +422,100 @@ class ExternalServerBackend(GGUFBackend):
             "thinking_budget_reduced": thinking and max_output_tokens < THINKING_OUTPUT_TOKENS,
         }
 
-    def load(self, model_info: dict[str, Any], runtime_plan: dict[str, Any]) -> None:
-        signature = (model_info["id"], runtime_plan["context_tokens"], "server")
-        if self.model is not None and self.runtime_signature == signature:
-            return
-        self.model = _EstimatedTokenizer()
+    def _connect(self, model_info: dict[str, Any]) -> None:
         self.chat_handler = _RemoteChatHandler(
             self,
             model_info["endpoint"],
             model_info["remote_model"],
         )
         self.model_id = model_info["id"]
-        self.runtime_signature = signature
 
-    def _logits_processors(self, _stop_if_cancelled: Any) -> None:
-        # Cancellation is implemented by closing the active HTTP stream. The
-        # external path must not require the local llama-cpp-python package.
-        return None
+    def generate(
+        self,
+        model_info: dict[str, Any],
+        assembled: dict[str, Any],
+        session_id: str,
+        *,
+        thinking: bool,
+        seed: int | None,
+        unload_after: bool,
+        context_profile: str | None = None,
+        kv_cache: str | None = None,
+        runtime_plan: dict[str, Any] | None = None,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        del unload_after
+        with self.lock:
+            validate_media_capabilities(model_info, assembled)
+            try:
+                runtime_plan = runtime_plan or self.preflight(
+                    model_info,
+                    assembled,
+                    context_profile=context_profile,
+                    kv_cache=kv_cache,
+                    thinking=thinking,
+                )
+                if on_phase:
+                    on_phase("loading_model")
+                self._connect(model_info)
+                if self.cancel_event.is_set():
+                    raise ModelError("GENERATION_CANCELLED", "Generation was cancelled after model loading.")
 
-    def generate(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        # The server is already warm and owns unloading. Keep the lightweight
-        # connector alive and report lifecycle metrics without pretending that
-        # Prompt Writer loaded the remote model.
-        kwargs["unload_after"] = False
-        result = super().generate(*args, **kwargs)
-        # A sleeping server may load its model as part of the completion request.
-        # That lifecycle is opaque to Prompt Writer, so do not report a fake zero.
-        result["cold_start"] = None
-        result["model_load_seconds"] = None
-        result["external_server"] = True
-        result["server_managed_lifecycle"] = True
-        return result
+                def complete(
+                    *,
+                    messages: list[dict[str, Any]],
+                    temperature: float,
+                    top_p: float,
+                    top_k: int,
+                    max_tokens: int,
+                    seed: int | None,
+                    thinking: bool,
+                ) -> dict[str, Any]:
+                    if self.chat_handler is None:
+                        raise ModelError(
+                            "EXTERNAL_SERVER_UNAVAILABLE",
+                            "The local llama.cpp server is not connected.",
+                        )
+                    return self.chat_handler(
+                        messages=messages,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        max_tokens=max_tokens,
+                        seed=seed,
+                        enable_thinking=thinking,
+                    )
+
+                result = run_h3_pipeline(
+                    model_info,
+                    assembled,
+                    session_id,
+                    runtime_plan,
+                    complete=complete,
+                    count_text_tokens=lambda text: estimate_text_tokens(text) + 1,
+                    is_cancelled=self.cancel_event.is_set,
+                    thinking=thinking,
+                    seed=seed,
+                    on_phase=on_phase,
+                )
+                return {
+                    **result,
+                    "cold_start": None,
+                    "model_load_seconds": None,
+                    "context_profile": runtime_plan["context_profile"],
+                    "context_tokens": runtime_plan["context_tokens"],
+                    "kv_cache": runtime_plan["kv_cache"],
+                    "max_output_tokens": runtime_plan["max_output_tokens"],
+                    "thinking_budget_reduced": runtime_plan["thinking_budget_reduced"],
+                    "external_server": True,
+                    "server_managed_lifecycle": True,
+                }
+            except ModelError:
+                raise
+            except MemoryError as error:
+                raise ModelError("GENERATION_OOM", "GGUF generation ran out of memory.") from error
+            except Exception as error:
+                raise ModelError("GENERATION_FAILED", "The GGUF model could not generate a prompt.", str(error)) from error
 
 
 BACKEND = ExternalServerBackend()

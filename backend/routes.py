@@ -18,6 +18,7 @@ from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, p
 from .memory import assess_free_vram
 from .models.gguf_backend import BACKEND as GGUF_BACKEND
 from .models.external_server_backend import BACKEND as EXTERNAL_SERVER_BACKEND
+from .models.ollama_backend import BACKEND as OLLAMA_BACKEND
 from .models.contract import ModelError
 from .runtime_diagnostics import get_gguf_runtime_diagnostics
 from .system_prompts import SystemPromptError, system_prompt_for_mode
@@ -33,7 +34,7 @@ STATE: dict[str, Any] = {
     "selected_model_family": None,
 }
 
-BACKENDS = {"gguf": GGUF_BACKEND, "external": EXTERNAL_SERVER_BACKEND}
+BACKENDS = {"gguf": GGUF_BACKEND, "external": EXTERNAL_SERVER_BACKEND, "ollama": OLLAMA_BACKEND}
 GENERATION_CACHE: dict[str, str] = {}
 
 
@@ -60,6 +61,19 @@ async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: d
 
 
 async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
+    ollama_model = body.get("ollama_model")
+    if ollama_model is not None:
+        if not isinstance(ollama_model, str) or not ollama_model.strip():
+            raise ModelError("INVALID_OLLAMA_MODEL", "Select an installed Ollama model.")
+        model = await asyncio.to_thread(OLLAMA_BACKEND.probe_model, ollama_model.strip())
+        requested_id = str(body.get("model_id") or "")
+        if requested_id and requested_id != model["id"]:
+            raise ModelError(
+                "OLLAMA_MODEL_CHANGED",
+                "The selected Ollama model changed. Select it again in Settings.",
+                {"requested_model_id": requested_id, "current_model_id": model["id"]},
+            )
+        return model
     external_config = body.get("external_server")
     if external_config is not None:
         if not isinstance(external_config, dict):
@@ -83,8 +97,14 @@ def _model_error_status(error: ModelError) -> int:
         "EXTERNAL_SERVER_UNAVAILABLE",
         "EXTERNAL_SERVER_ERROR",
         "EXTERNAL_SERVER_INVALID_RESPONSE",
+        "OLLAMA_NOT_RUNNING",
+        "OLLAMA_REQUEST_FAILED",
+        "OLLAMA_INVALID_RESPONSE",
+        "OLLAMA_STREAM_ERROR",
     }:
         return 502
+    if error.code == "OLLAMA_MODEL_NOT_FOUND":
+        return 404
     return 400
 
 
@@ -113,9 +133,10 @@ routes = PromptServer.instance.routes
 @routes.get(f"{ROUTE_PREFIX}/status")
 async def get_status(_request: web.Request) -> web.Response:
     backend = BACKENDS.get(STATE.get("selected_model_family"), GGUF_BACKEND)
+    backend_status = await asyncio.to_thread(backend.status)
     return web.json_response({
         **STATE,
-        **backend.status(),
+        **backend_status,
         "backend_ready": True,
         "model_backend_ready": True,
         "developer_mode": DEVELOPER_MODE,
@@ -158,6 +179,11 @@ async def probe_external_server(request: web.Request) -> web.Response:
     except ModelError as error:
         return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
     return web.json_response({"model": model})
+
+
+@routes.get(f"{ROUTE_PREFIX}/ollama/status")
+async def get_ollama_status(_request: web.Request) -> web.Response:
+    return web.json_response(await asyncio.to_thread(OLLAMA_BACKEND.detect))
 
 
 @routes.get(f"{ROUTE_PREFIX}/guides")

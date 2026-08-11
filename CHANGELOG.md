@@ -8,6 +8,9 @@
   once after UI rerenders.
 - Made dropping one media card onto another reorder it in either direction
   without requiring the pointer to cross the target card's outer edge.
+- Changed Auto video sampling to 6 frames, added explicit 4/6/8 options, and
+  cache-busted regenerated previews, contact sheets, and frames so every
+  selection displays the new sheet.
 - Added exact model scan paths, discovered GGUF/mmproj files, and pairing issues
   to local model setup details without changing discovery rules.
 - Added a lazy, cached, subprocess-isolated `llama-cpp-python` compatibility

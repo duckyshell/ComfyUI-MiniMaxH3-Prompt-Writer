@@ -102,14 +102,15 @@ class MediaStore:
     def public(self, asset: dict[str, Any]) -> dict[str, Any]:
         result = {key: value for key, value in asset.items() if not key.startswith("_")}
         result["content_url"] = f"/h3studio/media/{asset['id']}/content?session_id={asset['session_id']}"
+        content_revision = asset.get("content_revision", asset.get("sample_index", 0))
         if asset.get("_preview_path"):
-            result["preview_url"] = f"{result['content_url']}&kind=preview"
+            result["preview_url"] = f"{result['content_url']}&kind=preview&revision={content_revision}"
         if asset.get("_contact_sheet_path"):
-            result["contact_sheet_url"] = f"{result['content_url']}&kind=sheet&sample={asset.get('sample_index', 0)}"
+            result["contact_sheet_url"] = f"{result['content_url']}&kind=sheet&revision={content_revision}"
         result["frames"] = [
             {
                 "timestamp": frame["timestamp"],
-                "url": f"{result['content_url']}&kind=frame&index={index}&sample={asset.get('sample_index', 0)}",
+                "url": f"{result['content_url']}&kind=frame&index={index}&revision={content_revision}",
             }
             for index, frame in enumerate(asset.get("_frames", []))
         ]
@@ -175,8 +176,8 @@ class MediaStore:
         if asset["type"] != "video":
             raise MediaError("UNSUPPORTED_MEDIA", "Only video assets can be resampled.")
         selected_count = frame_count_mode or asset.get("frame_count_mode", "auto")
-        if selected_count not in {"auto", "6", "8"}:
-            raise MediaError("INVALID_SAMPLE_COUNT", "Frame count must be Auto, 6, or 8.")
+        if selected_count not in {"auto", "4", "6", "8"}:
+            raise MediaError("INVALID_SAMPLE_COUNT", "Frame count must be Auto, 4, 6, or 8.")
         selected_endpoints = asset.get("include_endpoints", True) if include_endpoints is None else include_endpoints
         if not isinstance(selected_endpoints, bool):
             raise MediaError("INVALID_SAMPLE_ENDPOINTS", "Include first & last frame must be true or false.")
@@ -187,6 +188,7 @@ class MediaStore:
         sample_index = 0 if settings_changed else int(asset.get("sample_index", 0)) + 1
         for frame in asset.get("_frames", []):
             Path(frame["path"]).unlink(missing_ok=True)
+        content_revision = int(asset.get("content_revision", 0)) + 1
         asset.update(process_video(
             Path(asset["_original_path"]),
             Path(asset["_original_path"]).parent,
@@ -194,6 +196,7 @@ class MediaStore:
             include_endpoints=selected_endpoints,
             sample_index=sample_index,
         ))
+        asset["content_revision"] = content_revision
         return self.public(asset)
 
     def set_analysis(self, session_id: str, asset_id: str, enabled: bool) -> dict[str, Any]:
@@ -284,6 +287,10 @@ def _av_metadata(source: Path) -> dict[str, Any]:
         }
 
 
+def _selected_frame_count(frame_count_mode: str) -> int:
+    return 6 if frame_count_mode == "auto" else int(frame_count_mode)
+
+
 def process_video(
     source: Path,
     target_dir: Path,
@@ -296,7 +303,7 @@ def process_video(
     duration = metadata["duration"]
     if not duration or duration <= 0:
         raise MediaError("MEDIA_DECODE_FAILED", "Video duration could not be determined.")
-    count = 8 if frame_count_mode == "auto" else int(frame_count_mode)
+    count = _selected_frame_count(frame_count_mode)
     margin = min(0.25, duration * 0.03)
     span = duration - 2 * margin
     offsets = (0.0, -0.22, 0.22, -0.11, 0.11)
@@ -348,8 +355,14 @@ def process_video(
     return metadata
 
 
+def _contact_sheet_columns(frame_count: int) -> int:
+    if frame_count <= 4:
+        return 2
+    return 3 if frame_count <= 6 else 4
+
+
 def _build_contact_sheet(frames: list[dict[str, Any]], target: Path) -> None:
-    columns = 3 if len(frames) <= 6 else 4
+    columns = _contact_sheet_columns(len(frames))
     rows = math.ceil(len(frames) / columns)
     cell_width = 384
     with Image.open(frames[0]["path"]) as first:

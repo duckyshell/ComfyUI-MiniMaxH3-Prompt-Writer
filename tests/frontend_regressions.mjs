@@ -408,7 +408,8 @@ test("Settings separates providers, installed models, diagnostics, and verified 
 test("Settings shows compact global System Prompt summaries and an on-demand editor", () => {
   const markup = settingsMarkup(() => "<svg></svg>");
   assert.equal((markup.match(/h3ps-system-prompt-card/g) || []).length, 1);
-  assert.match(markup, /Prompt behavior/);
+  assert.doesNotMatch(markup, /<small>H3 Prompt Writer<\/small>/);
+  assert.match(markup, /Prompt behavior · shared by all providers/);
   assert.match(markup, /data-system-prompt-overview/);
   assert.match(markup, /data-system-prompt-summary-status="standard"/);
   assert.match(markup, /data-system-prompt-summary-status="reference"/);

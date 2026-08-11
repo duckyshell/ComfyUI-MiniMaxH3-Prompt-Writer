@@ -26,7 +26,7 @@ export function settingsMarkup(icon) {
   return `
     <section class="h3ps-settings-view" data-settings-view hidden>
       <header class="h3ps-settings-heading">
-        <span><small>H3 Prompt Writer</small><strong>Settings</strong><em>Inference, runtime and prompt behavior</em></span>
+        <span><strong>Settings</strong><em>Inference, runtime and prompt behavior</em></span>
         <button class="h3ps-secondary-button" type="button" data-close-settings>${icon("chevron", 14)} Back to Generate</button>
       </header>
 
@@ -93,7 +93,7 @@ export function settingsMarkup(icon) {
         </section>
 
         <section class="h3ps-settings-card h3ps-system-prompt-card">
-          <header><span><small>Prompt behavior</small><strong>System Prompt</strong></span></header>
+          <header><span><small>Prompt behavior · shared by all providers</small><strong>System Prompt</strong></span></header>
           <div class="h3ps-system-prompt-overview" data-system-prompt-overview>
             <button type="button" data-system-prompt-profile="standard">
               <span><strong>Standard</strong><small>T2VA · I2VA · FL2VA · L2VA</small></span>

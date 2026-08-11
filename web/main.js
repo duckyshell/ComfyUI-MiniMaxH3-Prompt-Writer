@@ -1,23 +1,17 @@
 import { app } from "/scripts/app.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, freeComfyVram, generate, getGuides, getModels, getStatus, getSystemPrompt, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { createSessionId, moveOntoTarget, replaceEventListener } from "./compat.js";
+import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
+import {
+  buildGeneratePayload,
+  buildRefinePayload,
+  createStudioState,
+  saveCustomSystemPrompts,
+  saveExternalServerConfig,
+  selectModelState,
+} from "./studio_state.js";
 
 const EXTENSION_NAME = "minimax.h3.prompt.studio";
-const SYSTEM_PROMPT_STORAGE_KEY = "h3ps-system-prompts-v1";
-const EXTERNAL_SERVER_STORAGE_KEY = "h3ps-external-llama-server-v1";
-
-function loadExternalServerConfig() {
-  try {
-    const value = JSON.parse(localStorage.getItem(EXTERNAL_SERVER_STORAGE_KEY) || "null");
-    if (value && typeof value.url === "string") return { url: value.url, model: String(value.model || "") };
-  } catch {}
-  return null;
-}
-
-function saveExternalServerConfig(config) {
-  if (config) localStorage.setItem(EXTERNAL_SERVER_STORAGE_KEY, JSON.stringify(config));
-  else localStorage.removeItem(EXTERNAL_SERVER_STORAGE_KEY);
-}
 const ASPECT_RATIOS = [
   ["1:1", "Square"], ["2:3", "Portrait"], ["3:2", "Landscape"], ["3:4", "Portrait"],
   ["4:3", "Landscape"], ["9:16", "Vertical"], ["16:9", "Widescreen"], ["21:9", "Ultrawide"],
@@ -130,38 +124,19 @@ function newGenerationSeed() {
   return crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
 }
 
-function systemPromptProfile(mode = studio?.mode) {
-  return mode === "Reference" ? "reference" : "standard";
-}
-
-function loadCustomSystemPrompts() {
-  try {
-    const value = JSON.parse(localStorage.getItem(SYSTEM_PROMPT_STORAGE_KEY) || "{}");
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  } catch {
-    return {};
-  }
-}
-
-function currentSystemPromptOverride() {
-  const profile = systemPromptProfile();
-  return Object.hasOwn(studio.customSystemPrompts, profile) ? studio.customSystemPrompts[profile] : null;
-}
-
 function resizeSystemPromptEditor(textarea) {
   if (!textarea || !textarea.offsetParent) return;
   textarea.style.height = "auto";
   textarea.style.height = `${Math.max(108, textarea.scrollHeight + 2)}px`;
 }
 
-async function syncSystemPromptEditor() {
+async function syncSystemPromptEditor(profile) {
   if (!studio) return;
-  const profile = systemPromptProfile();
-  const textarea = studio.root.querySelector("[data-system-prompt]");
-  const status = studio.root.querySelector("[data-system-prompt-status]");
-  const reset = studio.root.querySelector("[data-system-prompt-reset]");
-  const count = studio.root.querySelector("[data-system-prompt-count]");
-  const requestMode = studio.mode;
+  const textarea = studio.root.querySelector(`[data-system-prompt="${profile}"]`);
+  const status = studio.root.querySelector(`[data-system-prompt-status="${profile}"]`);
+  const reset = studio.root.querySelector(`[data-system-prompt-reset="${profile}"]`);
+  const count = studio.root.querySelector(`[data-system-prompt-count="${profile}"]`);
+  const requestMode = profile === "reference" ? "Reference" : "T2VA";
   textarea.disabled = true;
   if (!studio.systemPromptDefaults[profile]) {
     try {
@@ -174,7 +149,6 @@ async function syncSystemPromptEditor() {
       return;
     }
   }
-  if (requestMode !== studio.mode) return syncSystemPromptEditor();
   const custom = Object.hasOwn(studio.customSystemPrompts, profile);
   textarea.value = custom ? studio.customSystemPrompts[profile] : studio.systemPromptDefaults[profile];
   textarea.disabled = false;
@@ -182,6 +156,10 @@ async function syncSystemPromptEditor() {
   reset.hidden = !custom;
   count.textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
   resizeSystemPromptEditor(textarea);
+}
+
+function syncSystemPromptEditors() {
+  return Promise.all([syncSystemPromptEditor("standard"), syncSystemPromptEditor("reference")]);
 }
 
 function renderPromptHighlights() {
@@ -601,6 +579,7 @@ function setGenerationState(state, label, detail) {
   const lifecycle = studio.root.querySelector("[data-model-lifecycle]");
   const lifecycleLabel = studio.root.querySelector("[data-model-lifecycle-label]");
   const busy = state === "busy";
+  studio.requestBusy = busy;
   const external = studio.selectedModel?.family === "external";
   button.classList.toggle("is-cancel", busy);
   button.innerHTML = busy ? `<span class="h3ps-spinner"></span>Cancel` : `${icon("spark", 16)}Generate prompt`;
@@ -630,7 +609,7 @@ function setGenerationState(state, label, detail) {
   }
 }
 
-function syncMemoryAction(busy = studio.root.querySelector("[data-generate]").classList.contains("is-cancel")) {
+function syncMemoryAction(busy = studio.requestBusy) {
   const button = studio.root.querySelector("[data-memory-action]");
   if (busy) {
     const external = studio.selectedModel?.family === "external";
@@ -699,7 +678,7 @@ function showVramRetry(error, retry) {
 async function runMemoryAction() {
   const button = studio.root.querySelector("[data-memory-action]");
   if (button.disabled) return;
-  const busy = studio.root.querySelector("[data-generate]").classList.contains("is-cancel");
+  const busy = studio.requestBusy;
   if (!busy && !studio.modelLoaded) {
     await releaseComfyVram();
     return;
@@ -724,8 +703,7 @@ async function runMemoryAction() {
 }
 
 async function startGenerationPreview() {
-  const button = studio.root.querySelector("[data-generate]");
-  if (button.classList.contains("is-cancel")) {
+  if (studio.requestBusy) {
     setGenerationState("busy", "Cancelling", "Stopping after the current token");
     await cancel();
     return;
@@ -752,27 +730,16 @@ async function startGenerationPreview() {
     } catch {}
   }, 650);
   try {
-    const result = await generate({
-      session_id: studio.sessionId,
-      mode: studio.mode,
-      duration_seconds: studio.durationSeconds,
-      aspect_ratio: studio.aspectRatio,
-      creative_brief: studio.root.querySelector(".h3ps-brief textarea").value,
-      model_id: studio.selectedModel.id,
-      external_server: selectedExternalServer(),
-      thinking: studio.root.querySelector("[data-thinking]").checked,
-      context_profile: studio.contextProfile,
-      kv_cache: studio.kvCache,
-      system_prompt_override: currentSystemPromptOverride(),
+    const result = await generate(buildGeneratePayload(studio, {
+      creativeBrief: studio.root.querySelector(".h3ps-brief textarea").value,
       seed: newGenerationSeed(),
-      unload_after: !studio.root.querySelector("[data-keep-loaded]").checked,
-    });
+    }));
     const output = studio.root.querySelector("[data-output]");
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
     renderPromptHighlights();
     studio.lastModelMeta = formatGenerationMeta(result);
-    studio.modelLoaded = studio.selectedModel.family === "external" ? false : studio.root.querySelector("[data-keep-loaded]").checked;
+    studio.modelLoaded = studio.selectedModel.family === "external" ? false : studio.keepModelLoaded;
     syncRuntimeSummary(result);
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
@@ -889,8 +856,19 @@ function localRuntimeLabel() {
 }
 
 function syncSelectedModelSourceLabel() {
-  if (!studio?.selectedModel) return;
-  studio.root.querySelector("[data-model-source-label]").textContent = studio.selectedModel.family === "external" ? "External server" : localRuntimeLabel();
+  if (!studio) return;
+  const source = studio.selectedModel?.family === "external" ? "External server" : studio.selectedModel ? localRuntimeLabel() : "No prompt model";
+  studio.root.querySelector("[data-model-source-label]").textContent = source;
+  studio.root.querySelector("[data-active-model-source]").textContent = source;
+}
+
+function syncActiveModelSummary(runtimeSummary = null) {
+  if (!studio) return;
+  const model = studio.selectedModel;
+  studio.root.querySelector("[data-active-model-icon]").textContent = model?.family === "external" ? "S" : "G";
+  studio.root.querySelector("[data-active-model-name]").textContent = model ? model.name.split("/").pop() : "No compatible prompt model";
+  studio.root.querySelector("[data-active-model-source]").textContent = model?.family === "external" ? "External server" : model ? localRuntimeLabel() : "Open Settings to configure";
+  if (runtimeSummary != null) studio.root.querySelector("[data-active-runtime-summary]").textContent = runtimeSummary;
 }
 
 async function inspectDirectRuntime() {
@@ -1019,8 +997,7 @@ function renderModelMenu() {
 }
 
 function selectModel(model) {
-  studio.selectedModel = model;
-  studio.audioSupported = model?.capabilities?.audio === true;
+  selectModelState(studio, model);
   const external = model?.family === "external";
   const name = model ? model.name.split("/").pop() : "No compatible local model";
   const label = studio.root.querySelector("[data-selected-model]");
@@ -1030,12 +1007,13 @@ function selectModel(model) {
   const keepLoaded = studio.root.querySelector("[data-keep-loaded]");
   const keepLoadedControl = studio.root.querySelector("[data-keep-loaded-control]");
   keepLoadedControl.hidden = external;
-  if (external) keepLoaded.checked = false;
-  studio.modelLoaded = external ? false : studio.modelLoaded;
+  keepLoaded.checked = studio.keepModelLoaded;
   const runtimeSettings = studio.root.querySelector(".h3ps-runtime-settings");
   runtimeSettings.classList.toggle("is-server-managed", external);
-  if (external) runtimeSettings.open = false;
   runtimeSettings.querySelectorAll("[data-runtime-toggle]").forEach((button) => { button.disabled = external; });
+  runtimeSettings.querySelector("[data-runtime-management]").textContent = external
+    ? "Context, KV cache and model loading are managed by the external llama.cpp server."
+    : "Direct GGUF runtime settings are applied to the next request.";
   for (const capability of ["images", "video_frames", "audio"]) {
     const value = model?.capabilities?.[capability] === true;
     const target = studio.root.querySelector(`[data-model-capability="${capability}"]`);
@@ -1062,6 +1040,8 @@ function syncThinkingAvailability() {
   const label = input.closest("label");
   const disabled = !external && context !== "auto" && resolved === "low";
   if (disabled) input.checked = false;
+  if (disabled) studio.thinking = false;
+  input.checked = studio.thinking;
   input.disabled = disabled;
   label.classList.toggle("is-disabled", disabled);
   label.title = disabled ? "Thinking needs Standard 16K or Extended 24K context." : "";
@@ -1075,24 +1055,38 @@ function syncRuntimeSummary(result = null) {
   studio.root.querySelector('[data-runtime-label="context"]').textContent = CONTEXT_LABELS[studio.contextProfile];
   studio.root.querySelector('[data-runtime-label="kv"]').textContent = KV_LABELS[studio.kvCache];
   const summary = studio.root.querySelector("[data-runtime-summary]");
+  let summaryText;
   if (studio.selectedModel?.family === "external") {
     const tokens = result?.context_tokens || studio.selectedModel.server_context_tokens;
-    summary.textContent = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Managed by server";
-    return;
-  }
-  if (result && studio.contextProfile === "auto") {
-    summary.textContent = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
+    summaryText = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Managed by server";
+  } else if (result && studio.contextProfile === "auto") {
+    summaryText = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
   } else {
-    summary.textContent = studio.contextProfile === "auto" ? "Auto" : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
+    summaryText = studio.contextProfile === "auto" ? "Auto" : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
   }
+  summary.textContent = summaryText;
+  syncActiveModelSummary(summaryText);
   studio.root.querySelectorAll("[data-runtime-option]").forEach((button) => {
     const selected = button.dataset.runtimeOption === "context" ? studio.contextProfile : studio.kvCache;
     button.classList.toggle("is-selected", button.dataset.value === selected);
   });
 }
 
-function selectedExternalServer() {
-  return studio.selectedModel?.family === "external" ? studio.externalServerConfig : null;
+function setSettingsOpen(open) {
+  if (!studio) return;
+  setOtherModelsPopover(false);
+  studio.root.querySelector("[data-settings-view]").hidden = !open;
+  studio.root.querySelectorAll("[data-generate-view]").forEach((element) => { element.hidden = open; });
+  studio.root.querySelector("[data-open-settings-header]").hidden = open;
+  studio.root.classList.toggle("is-settings-open", open);
+  if (open) {
+    renderModelMenu();
+    syncRuntimeSummary();
+    syncSystemPromptEditors();
+    requestAnimationFrame(() => {
+      studio.root.querySelectorAll("[data-system-prompt]").forEach(resizeSystemPromptEditor);
+    });
+  }
 }
 
 async function connectExternalServer(form) {
@@ -1109,7 +1103,7 @@ async function connectExternalServer(form) {
     studio.externalServerConfig = saved;
     studio.externalServerError = null;
     studio.externalModel = result.model;
-    saveExternalServerConfig(saved);
+    saveExternalServerConfig(localStorage, saved);
     studio.models = [...studio.models.filter((model) => model.family !== "external"), result.model];
     selectModel(result.model);
     showToast("llama.cpp connected", `${result.model.name} · ${Math.round(result.model.server_context_tokens / 1024)}K context`);
@@ -1128,7 +1122,7 @@ function disconnectExternalServer() {
   studio.externalServerConfig = null;
   studio.externalServerError = null;
   studio.externalModel = null;
-  saveExternalServerConfig(null);
+  saveExternalServerConfig(localStorage, null);
   studio.models = studio.models.filter((model) => model.family !== "external");
   if (wasSelected) selectModel(studio.models.find((model) => model.runtime_ready) || studio.models[0] || null);
   else renderModelMenu();
@@ -1205,20 +1199,11 @@ async function submitRefinement() {
   submit.innerHTML = `<span class="h3ps-spinner"></span>Rewriting…`;
   setGenerationState("busy", "Refining prompt", studio.selectedModel.name.split("/").pop());
   try {
-    const result = await refine({
-      session_id: studio.sessionId,
-      mode: studio.mode,
-      current_prompt: previousPrompt,
+    const result = await refine(buildRefinePayload(studio, {
+      currentPrompt: previousPrompt,
       instruction,
-      model_id: studio.selectedModel.id,
-      external_server: selectedExternalServer(),
-      thinking: studio.root.querySelector("[data-thinking]").checked,
-      context_profile: studio.contextProfile,
-      kv_cache: studio.kvCache,
-      system_prompt_override: currentSystemPromptOverride(),
       seed: newGenerationSeed(),
-      unload_after: !studio.root.querySelector("[data-keep-loaded]").checked,
-    });
+    }));
     studio.refineRestore = {
       prompt: previousPrompt,
       meta: previousMeta,
@@ -1231,7 +1216,7 @@ async function submitRefinement() {
     panel.querySelector("textarea").value = "";
     panel.querySelector("[data-refine-restore]").hidden = false;
     studio.lastModelMeta = formatGenerationMeta(result);
-    studio.modelLoaded = studio.selectedModel.family === "external" ? false : studio.root.querySelector("[data-keep-loaded]").checked;
+    studio.modelLoaded = studio.selectedModel.family === "external" ? false : studio.keepModelLoaded;
     syncRuntimeSummary(result);
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
@@ -1279,11 +1264,14 @@ function createStudio() {
             <button class="h3ps-guide-button" type="button" data-guide-toggle>Official guides ${icon("chevron", 13)}</button>
             <div class="h3ps-guide-menu" data-guide-menu hidden><span>Loading guides…</span></div>
           </div>
+          <button class="h3ps-guide-button" type="button" data-open-settings-header>Settings</button>
           <button class="h3ps-icon-button" type="button" title="Close" data-close-studio>${icon("close", 18)}</button>
         </div>
       </header>
 
-      <div class="h3ps-workspace-toolbar">
+      ${settingsMarkup(icon)}
+
+      <div class="h3ps-workspace-toolbar" data-generate-view>
         <nav class="h3ps-modes" aria-label="Generation mode">
           ${Object.keys(MODES).map((mode) => `<button type="button" role="tab" data-mode="${mode}">${mode}</button>`).join("")}
         </nav>
@@ -1293,7 +1281,7 @@ function createStudio() {
         </div>
       </div>
 
-      <div class="h3ps-workspace">
+      <div class="h3ps-workspace" data-generate-view>
         <section class="h3ps-input-panel">
           <div class="h3ps-section-heading">
             <span><small>Media</small><strong data-h3ps-mode-title></strong></span>
@@ -1313,42 +1301,7 @@ function createStudio() {
             <small class="h3ps-char-count">0 / 2,000</small>
           </label>
 
-          <div class="h3ps-model-picker" data-model-picker>
-            <div class="h3ps-model-row">
-              <span class="h3ps-model-icon">G</span>
-              <span><small data-model-source-label>Local model</small><strong data-selected-model>Scanning models…</strong></span>
-              <span class="h3ps-model-lifecycle" data-model-lifecycle hidden><em data-model-lifecycle-label>Model loaded</em></span>
-              <button class="h3ps-icon-button" type="button" title="Model options" data-model-toggle>${icon("chevron", 16)}</button>
-            </div>
-            <div class="h3ps-model-menu" data-model-menu hidden>
-              <header>
-                <span><strong>Prompt models</strong><small>Local GGUF or an existing llama.cpp server</small></span>
-                <button type="button" data-model-refresh>${icon("refresh", 13)} Refresh</button>
-              </header>
-              <div class="h3ps-model-options"><div class="h3ps-model-empty">Scanning models…</div></div>
-              <footer>
-                <span>${icon("image", 12)} Images <b data-model-capability="images">No</b></span>
-                <span>${icon("video", 12)} Video frames <b data-model-capability="video_frames">No</b></span>
-                <span>${icon("audio", 12)} Audio <b data-model-capability="audio">Not analyzed</b></span>
-                <span data-developer-mode hidden>Dev log <b>On</b></span>
-              </footer>
-            </div>
-          </div>
-          <details class="h3ps-runtime-settings">
-            <summary><span>Advanced runtime</span><small data-runtime-summary>Auto</small>${icon("chevron", 13)}</summary>
-            <div>
-              <label><span>Context</span><button type="button" data-runtime-toggle="context"><b data-runtime-label="context">Auto</b>${icon("chevron", 12)}</button><span class="h3ps-runtime-menu" data-runtime-menu="context" hidden><button type="button" data-runtime-option="context" data-value="auto">Auto</button><button type="button" data-runtime-option="context" data-value="low">8K</button><button type="button" data-runtime-option="context" data-value="standard">16K</button><button type="button" data-runtime-option="context" data-value="extended">24K</button></span></label>
-              <label><span>KV cache</span><button type="button" data-runtime-toggle="kv"><b data-runtime-label="kv">Auto</b>${icon("chevron", 12)}</button><span class="h3ps-runtime-menu" data-runtime-menu="kv" hidden><button type="button" data-runtime-option="kv" data-value="auto">Auto</button><button type="button" data-runtime-option="kv" data-value="q8">Q8</button><button type="button" data-runtime-option="kv" data-value="f16">F16</button></span></label>
-            </div>
-          </details>
-          <details class="h3ps-system-settings">
-            <summary><span>System Prompt</span><small data-system-prompt-status>Default</small>${icon("chevron", 13)}</summary>
-            <div class="h3ps-system-editor">
-              <p>Additional instructions used by H3 Prompt Writer. Official MiniMax guides are applied separately and are not modified.</p>
-              <textarea data-system-prompt maxlength="8000" spellcheck="true" disabled></textarea>
-              <footer><small data-system-prompt-count>0 / 8,000</small><button type="button" data-system-prompt-reset hidden>Reset to default</button></footer>
-            </div>
-          </details>
+          ${generateModelSummaryMarkup(icon)}
         </section>
 
         <section class="h3ps-output-panel">
@@ -1378,7 +1331,7 @@ function createStudio() {
         </section>
       </div>
 
-      <footer class="h3ps-footer">
+      <footer class="h3ps-footer" data-generate-view>
         <button class="h3ps-memory-action" type="button" data-memory-action title="Unload models held by ComfyUI without clearing cached workflow results">${icon("memory", 15)}Free ComfyUI VRAM</button>
         <div class="h3ps-status is-busy" data-status hidden><span><strong></strong><small data-status-detail></small></span></div>
         <div class="h3ps-footer-actions">
@@ -1418,7 +1371,7 @@ function createStudio() {
     <div class="h3ps-toast" data-h3ps-toast><span class="h3ps-toast-icon">${icon("info", 17)}</span><span><strong data-toast-title>Notice</strong><span data-toast-message></span><button type="button" class="h3ps-toast-action" data-toast-action hidden></button><details data-toast-details hidden><summary>Technical details</summary><pre></pre></details></span></div>`;
   document.body.appendChild(root);
 
-  studio = { root, mode: "Reference", mediaFilter: "all", durationSeconds: 10, aspectRatio: "16:9", contextProfile: "auto", kvCache: "auto", modelLoaded: false, toastTimer: null, statusTimer: null, sessionId: createSessionId(), assets: [], previewAssetId: null, audioSupported: false, models: [], modelSetup: [], modelDirectory: "ComfyUI/models/LLM/", modelDiscovery: null, gpuMemory: null, selectedModel: null, externalServerConfig: loadExternalServerConfig(), externalModel: null, externalServerError: null, ggufRuntimeDiagnostics: null, runtimeWarningShown: false, refineRestore: null, lastModelPrompt: null, lastModelMeta: null, guides: [], draggedAssetId: null, dragGhost: null, customSystemPrompts: loadCustomSystemPrompts(), systemPromptDefaults: {} };
+  studio = { root, ...createStudioState({ sessionId: createSessionId(), storage: localStorage }) };
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
   root.addEventListener("click", (event) => {
     if (!event.target.closest("[data-asset-menu], [data-asset-menu-toggle]")) {
@@ -1443,8 +1396,10 @@ function createStudio() {
     studio.mode = button.dataset.mode;
     renderMedia(studio.mode);
     syncRuntimeSummary();
-    syncSystemPromptEditor();
   }));
+  root.querySelector("[data-open-settings-header]").addEventListener("click", () => setSettingsOpen(true));
+  root.querySelector("[data-open-settings]").addEventListener("click", () => setSettingsOpen(true));
+  root.querySelector("[data-close-settings]").addEventListener("click", () => setSettingsOpen(false));
   root.querySelector("[data-clear-media]").addEventListener("click", async () => {
     try {
       await clearMedia(studio.sessionId);
@@ -1495,28 +1450,30 @@ function createStudio() {
     syncThinkingAvailability();
   }));
   syncRuntimeSummary();
-  const systemPrompt = root.querySelector("[data-system-prompt]");
-  root.querySelector(".h3ps-system-settings").addEventListener("toggle", (event) => {
-    if (event.currentTarget.open) requestAnimationFrame(() => resizeSystemPromptEditor(systemPrompt));
-  });
-  systemPrompt.addEventListener("input", () => {
-    const profile = systemPromptProfile();
+  root.querySelectorAll("[data-system-prompt]").forEach((textarea) => textarea.addEventListener("input", () => {
+    const profile = textarea.dataset.systemPrompt;
     const defaultPrompt = studio.systemPromptDefaults[profile] || "";
-    if (systemPrompt.value === defaultPrompt) delete studio.customSystemPrompts[profile];
-    else studio.customSystemPrompts[profile] = systemPrompt.value;
-    localStorage.setItem(SYSTEM_PROMPT_STORAGE_KEY, JSON.stringify(studio.customSystemPrompts));
+    if (textarea.value === defaultPrompt) delete studio.customSystemPrompts[profile];
+    else studio.customSystemPrompts[profile] = textarea.value;
+    saveCustomSystemPrompts(localStorage, studio.customSystemPrompts);
     const custom = Object.hasOwn(studio.customSystemPrompts, profile);
-    root.querySelector("[data-system-prompt-status]").textContent = custom ? "Custom" : "Default";
-    root.querySelector("[data-system-prompt-reset]").hidden = !custom;
-    root.querySelector("[data-system-prompt-count]").textContent = `${systemPrompt.value.length.toLocaleString()} / 8,000`;
-    resizeSystemPromptEditor(systemPrompt);
-  });
-  root.querySelector("[data-system-prompt-reset]").addEventListener("click", () => {
-    const profile = systemPromptProfile();
+    root.querySelector(`[data-system-prompt-status="${profile}"]`).textContent = custom ? "Custom" : "Default";
+    root.querySelector(`[data-system-prompt-reset="${profile}"]`).hidden = !custom;
+    root.querySelector(`[data-system-prompt-count="${profile}"]`).textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
+    resizeSystemPromptEditor(textarea);
+  }));
+  root.querySelectorAll("[data-system-prompt-reset]").forEach((button) => button.addEventListener("click", () => {
+    const profile = button.dataset.systemPromptReset;
     delete studio.customSystemPrompts[profile];
-    localStorage.setItem(SYSTEM_PROMPT_STORAGE_KEY, JSON.stringify(studio.customSystemPrompts));
-    syncSystemPromptEditor();
-    showToast("System Prompt reset", "H3 Prompt Writer is using its default instructions for this mode.");
+    saveCustomSystemPrompts(localStorage, studio.customSystemPrompts);
+    syncSystemPromptEditor(profile);
+    showToast("System Prompt reset", `H3 Prompt Writer is using its default ${profile} instructions.`);
+  }));
+  root.querySelector("[data-thinking]").addEventListener("change", (event) => {
+    studio.thinking = event.target.checked;
+  });
+  root.querySelector("[data-keep-loaded]").addEventListener("change", (event) => {
+    studio.keepModelLoaded = event.target.checked;
   });
   const brief = root.querySelector(".h3ps-brief textarea");
   const briefCount = root.querySelector(".h3ps-char-count");
@@ -1619,6 +1576,7 @@ function createStudio() {
     menu.hidden = !menu.hidden;
   });
   root.querySelector(".h3ps-input-panel").addEventListener("scroll", () => setOtherModelsPopover(false));
+  root.querySelector("[data-settings-view]").addEventListener("scroll", () => setOtherModelsPopover(false));
   window.addEventListener("resize", () => {
     updateBriefCount();
     if (!root.querySelector("[data-other-models-popover]").hidden) positionOtherModelsPopover();
@@ -1701,7 +1659,7 @@ function createStudio() {
   });
   renderMedia(studio.mode);
   renderPromptHighlights();
-  syncSystemPromptEditor();
+  syncSystemPromptEditors();
   refreshModels();
   return studio;
 }
@@ -1715,6 +1673,7 @@ function openStudio() {
 
 function closeStudio() {
   if (!studio) return;
+  setSettingsOpen(false);
   setOtherModelsPopover(false);
   closeVideoPreview();
   closeImagePreview();

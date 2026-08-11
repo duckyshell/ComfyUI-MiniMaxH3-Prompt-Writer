@@ -5,9 +5,11 @@ contact sheets, including projector validation and CUDA offload.
 
 `gguf_backend.py` owns local llama-cpp-python loading, tokenization,
 cancellation, and unloading. `external_server_backend.py` independently owns
-the local HTTP/SSE connection and never implements local model lifecycle hooks.
+the specialized local llama.cpp HTTP/SSE connection. `ollama_backend.py` owns
+the native Ollama contract. `api_provider_backend.py` owns one generic Chat
+Completions transport with OpenAI, Gemini, OpenRouter, and Custom presets.
 
-Both backends supply a narrow `complete(...)` callable to `backend/h3_pipeline.py`.
+All backends supply a narrow `complete(...)` callable to `backend/h3_pipeline.py`.
 The pipeline owns shared media messages, Thinking fallback, prompt audit, narrow
 repair, and normalized generation metrics. It does not own provider preflight,
 transport, or lifecycle.
@@ -23,3 +25,11 @@ prompt audit, and narrow repair pipeline while sending chat completions to an
 already-running local OpenAI-compatible `llama-server`. It does not inherit from
 the Direct GGUF backend. The remote process owns model loading, context, KV
 cache, and unloading; the adapter never stops or unloads that process.
+
+`api_provider_backend.py` keeps credentials in backend memory or reads them from
+an environment variable. Browser storage receives only non-secret connection
+configuration. The shared transport handles HTTPS/loopback HTTP, SSE, usage,
+best-effort cancellation, and normalized errors. Presets only map endpoint,
+output-token, reasoning, model metadata, and disclosure differences; they are
+not separate backends. Custom remains generic OpenAI-compatible and does not use
+llama.cpp `/health`, `/props`, context, KV, or lifecycle semantics.

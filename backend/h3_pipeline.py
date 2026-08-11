@@ -171,7 +171,7 @@ def validate_media_capabilities(model_info: dict[str, Any], assembled: dict[str,
     if unsupported:
         raise ModelError(
             "UNSUPPORTED_MEDIA",
-            "The selected GGUF model cannot analyze all enabled media.",
+            "The selected prompt model cannot analyze all enabled media.",
             {"capabilities": unsupported},
         )
 

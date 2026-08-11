@@ -39,6 +39,9 @@ export function settingsMarkup(icon) {
             <button type="button" role="tab" data-provider-option="ollama" aria-selected="false">
               <span class="h3ps-provider-icon">O</span><span><strong>Ollama</strong><small>Simple local model service</small></span>${icon("check", 14)}
             </button>
+            <button type="button" role="tab" data-provider-option="api" aria-selected="false">
+              <span class="h3ps-provider-icon">A</span><span><strong>API providers</strong><small>OpenAI-compatible local or remote API</small></span>${icon("check", 14)}
+            </button>
           </div>
         </section>
 
@@ -68,6 +71,10 @@ export function settingsMarkup(icon) {
 
           <div class="h3ps-provider-panel" data-provider-panel="ollama" hidden>
             <div data-ollama-provider-control></div>
+          </div>
+
+          <div class="h3ps-provider-panel" data-provider-panel="api" hidden>
+            <div data-api-provider-control></div>
           </div>
 
         </section>

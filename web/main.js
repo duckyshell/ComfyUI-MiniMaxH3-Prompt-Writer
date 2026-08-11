@@ -1,11 +1,12 @@
 import { app } from "/scripts/app.js";
-import { cancel, clearMedia, diagnoseGGUFRuntime, freeComfyVram, generate, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { createSessionId, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
   buildRefinePayload,
   createStudioState,
+  saveApiProviderConfig,
   saveCustomSystemPrompts,
   saveExternalServerConfig,
   saveOllamaModel,
@@ -107,10 +108,16 @@ function formatGenerationMeta(result) {
   const llm = Number(result.generation_seconds || 0).toFixed(1);
   const fallback = result.thinking_fallback ? " · Thinking fallback" : "";
   const memory = result.context_tokens ? ` · ${Math.round(result.context_tokens / 1024)}K/${String(result.kv_cache).toUpperCase()}` : "";
-  const timing = result.external_server
+  const timing = result.api_provider
+    ? `${result.total_seconds.toFixed(1)}s total (${media}s media · ${llm}s provider)`
+    : result.external_server
     ? `${result.total_seconds.toFixed(1)}s total (${media}s media · ${llm}s server)`
     : `${result.total_seconds.toFixed(1)}s total (${load}s load · ${media}s media · ${llm}s LLM)`;
-  return `${promptLengthMeta(result.prompt)} · ${timing} · ${result.tokens_per_second.toFixed(1)} tok/s${peakVram}${memory}${fallback}`;
+  const speed = Number.isFinite(result.tokens_per_second) ? ` · ${result.tokens_per_second.toFixed(1)} tok/s` : "";
+  const apiRequests = result.api_provider ? ` · ${result.provider_request_count || 1} API request${result.provider_request_count === 1 ? "" : "s"}` : "";
+  const cost = Number.isFinite(result.provider_cost_usd) ? ` · $${result.provider_cost_usd.toFixed(4)} reported` : "";
+  const usage = result.api_provider && result.usage_source ? ` · usage ${result.usage_source}` : "";
+  return `${promptLengthMeta(result.prompt)} · ${timing}${speed}${apiRequests}${cost}${usage}${peakVram}${memory}${fallback}`;
 }
 
 function syncOutputLengthMeta() {
@@ -603,14 +610,14 @@ function setGenerationState(state, label, detail) {
   const lifecycleLabel = studio.root.querySelector("[data-model-lifecycle-label]");
   const busy = state === "busy";
   studio.requestBusy = busy;
-  const external = studio.selectedModel?.family === "external";
+  const remote = ["external", "api"].includes(studio.selectedModel?.family);
   button.classList.toggle("is-cancel", busy);
   button.innerHTML = busy ? `<span class="h3ps-spinner"></span>Cancel` : `${icon("spark", 16)}Generate prompt`;
   lifecycle.hidden = !busy && !studio.modelLoaded;
   lifecycle.classList.toggle("is-busy", busy);
   if (busy) {
     studio.lifecycleDotCount = ((studio.lifecycleDotCount || 0) % 3) + 1;
-    lifecycleLabel.textContent = `${external ? "External request active" : "Prompt model active"}${".".repeat(studio.lifecycleDotCount)}`;
+    lifecycleLabel.textContent = `${remote ? "External request active" : "Prompt model active"}${".".repeat(studio.lifecycleDotCount)}`;
   } else {
     studio.lifecycleDotCount = 0;
     lifecycleLabel.textContent = "Model loaded";
@@ -635,9 +642,9 @@ function setGenerationState(state, label, detail) {
 function syncMemoryAction(busy = studio.requestBusy) {
   const button = studio.root.querySelector("[data-memory-action]");
   if (busy) {
-    const external = studio.selectedModel?.family === "external";
-    button.innerHTML = `${icon("memory", 15)}${external ? "Stop request" : "Stop & unload"}`;
-    button.title = external ? "Cancel the request without stopping or unloading the external server" : "Stop the current prompt generation and unload its local model";
+    const remote = ["external", "api"].includes(studio.selectedModel?.family);
+    button.innerHTML = `${icon("memory", 15)}${remote ? "Stop request" : "Stop & unload"}`;
+    button.title = remote ? "Cancel the request. The remote provider may continue processing or billing." : "Stop the current prompt generation and unload its local model";
   } else if (studio.modelLoaded) {
     button.innerHTML = `${icon("memory", 15)}Unload prompt model`;
     button.title = "Unload the local prompt model from GPU memory";
@@ -706,15 +713,15 @@ async function runMemoryAction() {
     await releaseComfyVram();
     return;
   }
-  const external = studio.selectedModel?.family === "external";
-  if (busy) setGenerationState("busy", external ? "Stopping request" : "Stopping & unloading", external ? "The external server will remain running" : "Cancelling the request and unloading its model");
+  const remote = ["external", "api"].includes(studio.selectedModel?.family);
+  if (busy) setGenerationState("busy", remote ? "Stopping request" : "Stopping & unloading", remote ? "Remote processing may not stop immediately" : "Cancelling the request and unloading its model");
   button.disabled = true;
   try {
     await unloadModel();
     studio.modelLoaded = false;
     showToast(
-      busy ? (external ? "Stop requested" : "Stop & unload requested") : "Prompt model unloaded",
-      busy ? (external ? "The request will stop. The external llama.cpp server remains running." : "The request will stop and release its model at the next safe point.") : "GPU memory used by the local prompt model was released.",
+      busy ? (remote ? "Stop requested" : "Stop & unload requested") : "Prompt model unloaded",
+      busy ? (remote ? "The local request will stop. The provider may continue processing or billing." : "The request will stop and release its model at the next safe point.") : "GPU memory used by the local prompt model was released.",
     );
     if (!busy) setGenerationState("idle", "", "");
   } catch (error) {
@@ -732,7 +739,7 @@ async function startGenerationPreview() {
     return;
   }
   if (!studio.selectedModel) {
-    showToast("No prompt model selected", "Choose a local GGUF model or connect an existing llama.cpp server.");
+    showToast("No prompt model selected", "Choose a local model, connect llama.cpp, or configure an API provider.");
     return;
   }
   if (!studio.selectedModel.runtime_ready) {
@@ -743,12 +750,14 @@ async function startGenerationPreview() {
   if (!studio.root.querySelector("[data-modified-badge]").hidden && !window.confirm("Replace the modified prompt with a new generation?")) return;
   const modelName = studio.selectedModel.name.split("/").pop();
   const external = studio.selectedModel.family === "external";
-  const generationDetail = external ? `${modelName} · the server may load its model if idle` : modelName;
-  setGenerationState("busy", external ? "Contacting server" : "Loading model", generationDetail);
+  const apiProvider = studio.selectedModel.family === "api";
+  const remote = external || apiProvider;
+  const generationDetail = external ? `${modelName} · the server may load its model if idle` : apiProvider ? `${modelName} · ${studio.selectedModel.api_preset}` : modelName;
+  setGenerationState("busy", remote ? "Contacting provider" : "Loading model", generationDetail);
   studio.statusTimer = setInterval(async () => {
     try {
       const status = await getStatus();
-      const labels = { loading_model: external ? "Contacting server" : "Loading model", processing_media: "Processing references", generating: "Generating", cancelling: "Cancelling" };
+      const labels = { loading_model: remote ? "Contacting provider" : "Loading model", processing_media: "Processing references", generating: "Generating", cancelling: "Cancelling" };
       if (labels[status.phase]) setGenerationState("busy", labels[status.phase], generationDetail);
     } catch {}
   }, 650);
@@ -762,7 +771,7 @@ async function startGenerationPreview() {
     studio.lastModelPrompt = result.prompt;
     renderPromptHighlights();
     studio.lastModelMeta = formatGenerationMeta(result);
-    studio.modelLoaded = studio.selectedModel.family === "external" ? false : studio.keepModelLoaded;
+    studio.modelLoaded = remote ? false : studio.keepModelLoaded;
     syncRuntimeSummary(result);
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
@@ -799,14 +808,14 @@ async function startGenerationPreview() {
     studio.statusTimer = null;
     try {
       const status = await getStatus();
-      studio.modelLoaded = studio.selectedModel?.family === "external" ? false : Boolean(status.loaded);
+      studio.modelLoaded = ["external", "api"].includes(studio.selectedModel?.family) ? false : Boolean(status.loaded);
     } catch {}
     setGenerationState("idle", "", "");
   }
 }
 
 function modelVramLabel(model) {
-  if (model?.family === "external") return "";
+  if (["external", "api"].includes(model?.family)) return "";
   const name = model?.name?.toLowerCase() || "";
   if (/e4b/.test(name)) return "8 GB VRAM";
   if (/12b/.test(name) && /q4/.test(name)) return "12 GB VRAM";
@@ -886,6 +895,8 @@ function syncSelectedModelSourceLabel() {
     ? "External server"
     : studio.selectedModel?.family === "ollama"
       ? "Ollama · local service"
+      : studio.selectedModel?.family === "api"
+        ? `${studio.selectedModel.api_preset} · API provider`
       : studio.selectedModel
         ? localRuntimeLabel()
         : "No prompt model";
@@ -894,12 +905,14 @@ function syncSelectedModelSourceLabel() {
 function syncActiveModelSummary(runtimeSummary = null) {
   if (!studio) return;
   const model = studio.selectedModel;
-  studio.root.querySelector("[data-active-model-icon]").textContent = model?.family === "external" ? "S" : model?.family === "ollama" ? "O" : "G";
+  studio.root.querySelector("[data-active-model-icon]").textContent = model?.family === "external" ? "S" : model?.family === "ollama" ? "O" : model?.family === "api" ? "A" : "G";
   studio.root.querySelector("[data-active-model-name]").textContent = model ? model.name.split("/").pop() : "No compatible prompt model";
   studio.root.querySelector("[data-active-model-source]").textContent = model?.family === "external"
     ? "External server"
     : model?.family === "ollama"
       ? "Ollama · local service"
+      : model?.family === "api"
+        ? `${model.api_preset} · API provider`
       : model ? localRuntimeLabel() : "Open Settings to configure";
   if (runtimeSummary != null) studio.root.querySelector("[data-active-runtime-summary]").textContent = runtimeSummary;
 }
@@ -1043,6 +1056,77 @@ function renderOllamaProviderControl() {
   </div>`;
 }
 
+const API_PROVIDER_UI = {
+  gemini: { name: "Gemini", icon: "G", note: "Google API", env: "GEMINI_API_KEY", keyUrl: "https://aistudio.google.com/api-keys" },
+  openai: { name: "OpenAI", icon: "O", note: "OpenAI API", env: "OPENAI_API_KEY", keyUrl: "https://platform.openai.com/api-keys" },
+  openrouter: { name: "OpenRouter", icon: "R", note: "Multi-provider gateway", env: "OPENROUTER_API_KEY", keyUrl: "https://openrouter.ai/settings/keys" },
+  custom: { name: "Custom", icon: "C", note: "Generic OpenAI-compatible", env: "OPENAI_API_KEY", keyUrl: null },
+};
+
+function apiProviderModelForSettings() {
+  if (studio.selectedModel?.family === "api") {
+    return studio.apiProviderModels.find((model) => model.id === studio.selectedModel.id) || studio.selectedModel;
+  }
+  const requested = studio.apiProviderConfig?.model_id;
+  return studio.apiProviderModels.find((model) => model.remote_model === requested)
+    || studio.apiProviderModels.find((model) => model.capabilities?.images === true)
+    || studio.apiProviderModels[0]
+    || null;
+}
+
+function renderApiProviderControl() {
+  const config = studio.apiProviderConfig;
+  const selectedPreset = API_PROVIDER_UI[config.preset] || API_PROVIDER_UI.gemini;
+  const providerMetadata = studio.apiProviderPresets.find((provider) => provider.id === config.preset) || {};
+  const connection = studio.apiProviderConnection;
+  const model = apiProviderModelForSettings();
+  const providerChoices = Object.entries(API_PROVIDER_UI).map(([id, provider]) => `
+    <button type="button" class="h3ps-api-preset ${id === config.preset ? "is-selected" : ""}" data-api-preset="${id}">
+      <span class="h3ps-provider-icon">${provider.icon}</span><span><strong>${provider.name}</strong><small>${provider.note}</small></span>${icon("check", 13)}
+    </button>`).join("");
+  const header = `<header class="h3ps-settings-section-heading"><span><small>OpenAI-compatible</small><strong>API providers</strong></span></header>`;
+  const disclosure = `<div class="h3ps-api-disclosure"><strong>What leaves this computer</strong><p>The provider receives your brief, H3 instructions, enabled prepared images and one derived contact sheet per enabled video. Original videos and audio bytes are not uploaded.</p>${config.preset === "openrouter" ? "<small>OpenRouter forwards the request to an upstream model provider with its own data policy.</small>" : ""}</div>`;
+  const policyLinks = [
+    providerMetadata.pricing_url ? `<a href="${escapeHtml(providerMetadata.pricing_url)}" target="_blank" rel="noopener noreferrer">Pricing ↗</a>` : "",
+    providerMetadata.privacy_url ? `<a href="${escapeHtml(providerMetadata.privacy_url)}" target="_blank" rel="noopener noreferrer">Data policy ↗</a>` : "",
+  ].filter(Boolean).join("");
+  if (connection) {
+    const models = studio.apiProviderModels.length ? studio.apiProviderModels : model ? [model] : [];
+    return `${header}<div class="h3ps-api-layout">
+      <div class="h3ps-api-preset-list">${providerChoices}</div>
+      <div class="h3ps-api-setup">
+        <div class="h3ps-api-connected">
+          <span class="h3ps-provider-icon">${selectedPreset.icon}</span>
+          <span><strong>${escapeHtml(connection.provider_name)}</strong><small>${escapeHtml(connection.base_url)} · ${escapeHtml(connection.key_hint || connection.environment_name || "no key")}</small></span>
+          <em>${connection.connection_verified ? "Connected" : "Configured"}</em>
+        </div>
+        <label class="h3ps-api-model-select"><span>Model</span><select data-api-model>${models.map((item) => `<option value="${escapeHtml(item.remote_model)}" ${item.remote_model === model?.remote_model ? "selected" : ""}>${escapeHtml(item.name)}${item.model_context_limit ? ` · ${Math.round(item.model_context_limit / 1024)}K` : ""}</option>`).join("")}</select></label>
+        <div class="h3ps-api-badges"><span class="${model?.capabilities?.images ? "is-ready" : ""}">${model?.capabilities?.images ? "Vision" : "Text only / unknown"}</span><span>${model?.thinking ? "Reasoning control" : "Standard generation"}</span><span>Provider managed</span></div>
+        <div class="h3ps-api-actions"><span>${policyLinks}</span><button type="button" data-api-model-refresh>${icon("refresh", 13)} Refresh models</button><button type="button" data-api-disconnect>Disconnect</button></div>
+        ${disclosure}
+        <p class="h3ps-api-cancel-note">Stop aborts H3's connection. The remote provider may continue processing or billing.</p>
+      </div>
+    </div>`;
+  }
+  const environment = config.environment_name || selectedPreset.env;
+  return `${header}<div class="h3ps-api-layout">
+    <div class="h3ps-api-preset-list">${providerChoices}</div>
+    <form class="h3ps-api-setup" data-api-provider-form>
+      <div class="h3ps-api-intro"><strong>Connect ${selectedPreset.name}</strong><p>One shared Chat Completions backend. Provider-specific fields are applied by the selected preset.</p></div>
+      ${config.preset === "custom" ? `<label><span>API base URL</span><input name="base_url" type="url" value="${escapeHtml(config.base_url)}" placeholder="https://host.example/v1 or http://localhost:8000/v1" required><small>Remote endpoints require HTTPS; loopback HTTP is allowed for local vLLM or LM Studio.</small></label>` : ""}
+      <label><span>Credential source</span><select name="credential_source"><option value="session" ${config.credential_source === "session" ? "selected" : ""}>Session only</option><option value="environment" ${config.credential_source === "environment" ? "selected" : ""}>Environment variable</option></select></label>
+      ${config.credential_source === "environment"
+        ? `<label><span>Environment variable</span><input name="environment_name" type="text" value="${escapeHtml(environment)}" pattern="[A-Z_][A-Z0-9_]*" required><small>The secret stays in the ComfyUI process environment.</small></label>`
+        : `<label><span>API key ${config.preset === "custom" ? "<em>optional</em>" : ""}</span><input name="api_key" type="password" value="" placeholder="Paste key for this session" autocomplete="off" spellcheck="false" ${config.preset === "custom" ? "" : "required"}><small>The key is sent once to the local H3 backend, kept only in memory, and never saved in localStorage.</small></label>`}
+      <label><span>Model ID <em>optional before connect</em></span><input name="model_id" type="text" value="${escapeHtml(config.model_id)}" placeholder="Choose from provider list or enter an exact ID" spellcheck="false"></label>
+      ${config.preset === "custom" ? `<div class="h3ps-api-custom-options"><label><input name="custom_images" type="checkbox" ${config.custom_images ? "checked" : ""}><span>Endpoint accepts image_url inputs</span></label><label><span>Known context <em>optional</em></span><input name="custom_context_tokens" type="number" min="4096" step="1024" value="${config.custom_context_tokens || ""}" placeholder="32768"></label></div>` : ""}
+      ${studio.apiProviderError ? `<div class="h3ps-api-error"><strong>${escapeHtml(studio.apiProviderError.code || "Connection failed")}</strong><span>${escapeHtml(studio.apiProviderError.message)}</span></div>` : ""}
+      ${disclosure}
+      <div class="h3ps-api-actions"><span>${selectedPreset.keyUrl ? `<a href="${selectedPreset.keyUrl}" target="_blank" rel="noopener noreferrer">Create or manage key ↗</a>` : ""}${policyLinks}</span><button class="h3ps-api-primary" type="submit">Connect &amp; test</button></div>
+    </form>
+  </div>`;
+}
+
 function setOtherModelsPopover(open) {
   if (!studio) return;
   const popover = studio.root.querySelector("[data-other-models-popover]");
@@ -1087,7 +1171,7 @@ function directModelForSettings() {
 }
 
 function syncProviderSettings() {
-  const provider = ["direct", "external", "ollama"].includes(studio.settingsProvider) ? studio.settingsProvider : "direct";
+  const provider = ["direct", "external", "ollama", "api"].includes(studio.settingsProvider) ? studio.settingsProvider : "direct";
   studio.root.querySelectorAll("[data-provider-option]").forEach((button) => {
     const selected = button.dataset.providerOption === provider;
     button.classList.toggle("is-selected", selected);
@@ -1099,15 +1183,18 @@ function syncProviderSettings() {
   const runtimeSettings = studio.root.querySelector(".h3ps-runtime-settings");
   const serverManaged = provider === "external";
   const ollamaManaged = provider === "ollama";
-  runtimeSettings.classList.toggle("is-server-managed", serverManaged || ollamaManaged);
-  runtimeSettings.querySelector('[data-runtime-toggle="context"]').disabled = serverManaged;
-  runtimeSettings.querySelector('[data-runtime-toggle="kv"]').disabled = serverManaged || ollamaManaged;
+  const apiManaged = provider === "api";
+  runtimeSettings.classList.toggle("is-server-managed", serverManaged || ollamaManaged || apiManaged);
+  runtimeSettings.querySelector('[data-runtime-toggle="context"]').disabled = serverManaged || apiManaged;
+  runtimeSettings.querySelector('[data-runtime-toggle="kv"]').disabled = serverManaged || ollamaManaged || apiManaged;
   runtimeSettings.querySelector("[data-runtime-management]").textContent = serverManaged
     ? studio.externalModel
       ? "Context, KV cache and model loading are managed by the external llama.cpp server."
       : "Connect the external llama.cpp server to inspect its managed context."
     : ollamaManaged
       ? "Context is sent explicitly with each request. KV cache is managed by Ollama."
+      : apiManaged
+        ? "Context, KV cache and model lifecycle are managed by the selected API provider."
       : "Direct GGUF runtime settings are applied to the next request.";
 }
 
@@ -1134,6 +1221,7 @@ function renderInferenceSettings() {
   studio.root.querySelector("[data-verified-models-slot]").innerHTML = studio.modelSetup.length ? renderOtherModelsTrigger() : "";
   studio.root.querySelector("[data-external-provider-control]").innerHTML = renderExternalServerControl();
   studio.root.querySelector("[data-ollama-provider-control]").innerHTML = renderOllamaProviderControl();
+  studio.root.querySelector("[data-api-provider-control]").innerHTML = renderApiProviderControl();
   const catalog = studio.root.querySelector("[data-other-models-catalog]");
   catalog.innerHTML = `<div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>`;
   syncSelectedModelSourceLabel();
@@ -1142,7 +1230,7 @@ function renderInferenceSettings() {
 
 function selectSettingsProvider(provider) {
   setOtherModelsPopover(false);
-  studio.settingsProvider = ["direct", "external", "ollama"].includes(provider) ? provider : "direct";
+  studio.settingsProvider = ["direct", "external", "ollama", "api"].includes(provider) ? provider : "direct";
   if (studio.settingsProvider === "external" && studio.externalModel) {
     selectModel(studio.externalModel);
     return;
@@ -1162,21 +1250,36 @@ function selectSettingsProvider(provider) {
       return;
     }
   }
+  if (studio.settingsProvider === "api") {
+    studio.contextProfile = "auto";
+    studio.kvCache = "auto";
+    const model = apiProviderModelForSettings();
+    if (studio.apiProviderConnection && model && studio.selectedModel?.id !== model.id) {
+      selectModel(model);
+      return;
+    }
+  }
   renderInferenceSettings();
   syncRuntimeSummary();
 }
 
 function selectModel(model) {
   selectModelState(studio, model);
-  const external = model?.family === "external";
+  const remote = ["external", "api"].includes(model?.family);
   if (model?.family === "ollama") {
     studio.kvCache = "auto";
     studio.ollamaModelName = model.remote_model;
     saveOllamaModel(localStorage, model.remote_model);
   }
+  if (model?.family === "api") {
+    studio.contextProfile = "auto";
+    studio.kvCache = "auto";
+    studio.apiProviderConfig.model_id = model.remote_model;
+    saveApiProviderConfig(localStorage, studio.apiProviderConfig);
+  }
   const keepLoaded = studio.root.querySelector("[data-keep-loaded]");
   const keepLoadedControl = studio.root.querySelector("[data-keep-loaded-control]");
-  keepLoadedControl.hidden = external;
+  keepLoadedControl.hidden = remote;
   keepLoaded.checked = studio.keepModelLoaded;
   renderInferenceSettings();
   renderMedia(studio.mode);
@@ -1192,7 +1295,7 @@ function syncThinkingAvailability() {
   const resolved = context === "auto" ? (studio.selectedModel?.recommended_context || "standard") : context;
   const input = studio.root.querySelector("[data-thinking]");
   const label = input.closest("label");
-  const unsupported = studio.selectedModel?.family === "ollama" && studio.selectedModel.thinking !== true;
+  const unsupported = ["ollama", "api"].includes(studio.selectedModel?.family) && studio.selectedModel.thinking !== true;
   const disabled = unsupported || (!external && context !== "auto" && resolved === "low");
   if (disabled) input.checked = false;
   if (disabled) studio.thinking = false;
@@ -1200,7 +1303,7 @@ function syncThinkingAvailability() {
   input.disabled = disabled;
   label.classList.toggle("is-disabled", disabled);
   label.title = unsupported
-    ? "This Ollama model does not report thinking support."
+    ? "This provider model does not report thinking controls."
     : disabled ? "Thinking needs Standard 16K or Extended 24K context." : "";
 }
 
@@ -1219,6 +1322,9 @@ function syncRuntimeSummary(result = null) {
   } else if (studio.selectedModel?.family === "ollama") {
     const tokens = result?.context_tokens || (studio.contextProfile === "auto" ? null : ({ low: 8192, standard: 16384, extended: 24576 }[studio.contextProfile]));
     activeSummary = tokens ? `Ollama · ${Math.round(tokens / 1024)}K` : "Ollama · Auto";
+  } else if (studio.selectedModel?.family === "api") {
+    const tokens = result?.context_limit_known ? result.context_tokens : studio.selectedModel.model_context_limit;
+    activeSummary = tokens ? `API · ${Math.round(tokens / 1024)}K` : "API · Provider managed";
   } else if (result && studio.contextProfile === "auto") {
     activeSummary = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
   } else {
@@ -1230,6 +1336,8 @@ function syncRuntimeSummary(result = null) {
       : "Connect server"
     : studio.settingsProvider === "ollama"
       ? studio.contextProfile === "auto" ? "Ollama · Auto" : `Ollama · ${CONTEXT_LABELS[studio.contextProfile]}`
+    : studio.settingsProvider === "api"
+      ? studio.apiProviderConnection ? "API · Connected" : "API · Setup"
     : studio.contextProfile === "auto"
       ? "Auto"
       : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
@@ -1244,13 +1352,13 @@ function syncRuntimeSummary(result = null) {
 function setSettingsOpen(open) {
   if (!studio) return;
   setOtherModelsPopover(false);
-  if (!open) studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : "direct";
+  if (!open) studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : studio.selectedModel?.family === "api" ? "api" : "direct";
   studio.root.querySelector("[data-settings-view]").hidden = !open;
   studio.root.querySelectorAll("[data-generate-view]").forEach((element) => { element.hidden = open; });
   studio.root.querySelector("[data-open-settings-header]").hidden = open;
   studio.root.classList.toggle("is-settings-open", open);
   if (open) {
-    studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : "direct";
+    studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : studio.selectedModel?.family === "api" ? "api" : "direct";
     renderInferenceSettings();
     syncRuntimeSummary();
     syncSystemPromptEditors();
@@ -1300,18 +1408,133 @@ function disconnectExternalServer() {
   showToast("External server disconnected", "The llama.cpp process was left running and unchanged.");
 }
 
+async function connectConfiguredApiProvider(form) {
+  const submit = form.querySelector('[type="submit"]');
+  const source = form.elements.credential_source.value;
+  const contextValue = Number(form.elements.custom_context_tokens?.value || 0);
+  const config = {
+    preset: studio.apiProviderConfig.preset,
+    base_url: form.elements.base_url?.value.trim() || "",
+    model_id: form.elements.model_id.value.trim(),
+    credential_source: source,
+    environment_name: form.elements.environment_name?.value.trim() || "",
+    custom_images: Boolean(form.elements.custom_images?.checked),
+    custom_context_tokens: Number.isInteger(contextValue) && contextValue >= 4096 ? contextValue : null,
+  };
+  submit.disabled = true;
+  submit.textContent = "Connecting…";
+  try {
+    const result = await probeApiProvider({
+      preset: config.preset,
+      base_url: config.base_url,
+      model_id: config.model_id,
+      credential: {
+        source,
+        value: form.elements.api_key?.value || "",
+        environment_name: config.environment_name,
+      },
+      custom_capabilities: {
+        images: config.custom_images,
+        context_tokens: config.custom_context_tokens,
+      },
+    });
+    if (studio.apiProviderConnection?.id && studio.apiProviderConnection.id !== result.connection.id) {
+      disconnectApiProvider(studio.apiProviderConnection.id).catch(() => {});
+    }
+    studio.apiProviderConfig = config;
+    studio.apiProviderConnection = result.connection;
+    studio.apiProviderModels = result.models || [];
+    studio.apiProviderError = null;
+    saveApiProviderConfig(localStorage, config);
+    studio.models = [...studio.models.filter((model) => model.family !== "api"), ...studio.apiProviderModels];
+    const model = result.model || apiProviderModelForSettings();
+    if (model) selectModel(model);
+    else {
+      renderInferenceSettings();
+      syncRuntimeSummary();
+    }
+    showToast(
+      `${result.connection.provider_name} connected`,
+      model ? `${model.name} · ${model.capabilities?.images ? "vision ready" : "text only or vision unknown"}${result.connection.connection_verified ? "" : " · endpoint unverified"}` : "Connected. Enter an exact model ID or refresh the model list.",
+    );
+  } catch (error) {
+    studio.apiProviderError = error;
+    showToast(error.code || "API connection failed", error.message, error.details);
+    renderInferenceSettings();
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "Connect & test";
+  }
+}
+
+async function disconnectConfiguredApiProvider({ announce = true } = {}) {
+  const connection = studio.apiProviderConnection;
+  const wasSelected = studio.selectedModel?.family === "api";
+  if (connection?.id) {
+    try {
+      await disconnectApiProvider(connection.id);
+    } catch {}
+  }
+  studio.apiProviderConnection = null;
+  studio.apiProviderModels = [];
+  studio.apiProviderError = null;
+  studio.models = studio.models.filter((model) => model.family !== "api");
+  if (wasSelected) selectModel(studio.models.find((model) => model.runtime_ready) || studio.models[0] || null);
+  studio.settingsProvider = "api";
+  renderInferenceSettings();
+  syncRuntimeSummary();
+  if (announce) showToast("API provider disconnected", "The session credential was removed from backend memory.");
+}
+
+async function chooseApiProviderPreset(preset) {
+  if (!API_PROVIDER_UI[preset] || preset === studio.apiProviderConfig.preset) return;
+  if (studio.apiProviderConnection) await disconnectConfiguredApiProvider({ announce: false });
+  studio.apiProviderConfig = {
+    ...studio.apiProviderConfig,
+    preset,
+    base_url: "",
+    model_id: "",
+    environment_name: API_PROVIDER_UI[preset].env,
+    custom_images: false,
+    custom_context_tokens: null,
+  };
+  saveApiProviderConfig(localStorage, studio.apiProviderConfig);
+  studio.settingsProvider = "api";
+  renderInferenceSettings();
+}
+
+async function refreshApiProviderModels() {
+  if (!studio.apiProviderConnection) return;
+  try {
+    const result = await getApiProviderModels(studio.apiProviderConnection.id);
+    const selectedRemote = studio.selectedModel?.family === "api" ? studio.selectedModel.remote_model : studio.apiProviderConfig.model_id;
+    studio.apiProviderConnection = result.connection;
+    studio.apiProviderModels = result.models || [];
+    studio.models = [...studio.models.filter((model) => model.family !== "api"), ...studio.apiProviderModels];
+    const model = studio.apiProviderModels.find((item) => item.remote_model === selectedRemote) || apiProviderModelForSettings();
+    if (model) selectModel(model);
+    else renderInferenceSettings();
+    showToast("API models refreshed", `${studio.apiProviderModels.length} model${studio.apiProviderModels.length === 1 ? "" : "s"} reported.`);
+  } catch (error) {
+    studio.apiProviderError = error;
+    showToast(error.code || "Model refresh failed", error.message, error.details);
+  }
+}
+
 async function refreshModels() {
   try {
-    const [result, status, ollamaStatus] = await Promise.all([
+    const [result, status, ollamaStatus, apiPresets] = await Promise.all([
       getModels(),
       getStatus(),
       getOllamaStatus().catch((error) => ({ state: "error", running: false, compatible_models: [], error: { code: error.code, message: error.message } })),
+      getApiProviderPresets().catch(() => ({ presets: [] })),
     ]);
     const selectedId = studio.selectedModel?.id;
     const selectedBeforeRefresh = studio.selectedModel;
     studio.ollamaStatus = ollamaStatus;
     studio.ollamaError = ollamaStatus.error || null;
-    studio.models = [...result.models, ...(ollamaStatus.compatible_models || [])];
+    studio.apiProviderPresets = apiPresets.presets || [];
+    studio.models = [...result.models, ...(ollamaStatus.compatible_models || []), ...studio.apiProviderModels];
     studio.externalModel = null;
     studio.externalServerError = null;
     if (studio.externalServerConfig) {
@@ -1331,6 +1554,7 @@ async function refreshModels() {
     selectModel(
       studio.models.find((model) => model.id === selectedId)
       || (selectedBeforeRefresh?.family === "ollama" ? selectedBeforeRefresh : null)
+      || (selectedBeforeRefresh?.family === "api" ? selectedBeforeRefresh : null)
       || studio.models.find((model) => model.runtime_ready)
       || studio.models[0]
       || null,
@@ -1378,7 +1602,7 @@ async function submitRefinement() {
     return;
   }
   if (!studio.selectedModel) {
-    showToast("No prompt model selected", "Choose a local GGUF model or connect an existing llama.cpp server.");
+    showToast("No prompt model selected", "Choose a local model, connect llama.cpp, or configure an API provider.");
     return;
   }
   if (!studio.selectedModel.runtime_ready) {
@@ -1410,7 +1634,7 @@ async function submitRefinement() {
     panel.querySelector("textarea").value = "";
     panel.querySelector("[data-refine-restore]").hidden = false;
     studio.lastModelMeta = formatGenerationMeta(result);
-    studio.modelLoaded = studio.selectedModel.family === "external" ? false : studio.keepModelLoaded;
+    studio.modelLoaded = ["external", "api"].includes(studio.selectedModel.family) ? false : studio.keepModelLoaded;
     syncRuntimeSummary(result);
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
@@ -1432,7 +1656,7 @@ async function submitRefinement() {
     submit.innerHTML = `${icon("spark", 13)} Rewrite`;
     try {
       const status = await getStatus();
-      studio.modelLoaded = studio.selectedModel?.family === "external" ? false : Boolean(status.loaded);
+      studio.modelLoaded = ["external", "api"].includes(studio.selectedModel?.family) ? false : Boolean(status.loaded);
     } catch {}
     setGenerationState("idle", "", "");
   }
@@ -1706,6 +1930,21 @@ function createStudio() {
     selectModel(localModels().find((model) => model.id === event.target.value));
   });
   root.querySelector("[data-provider-detail]").addEventListener("click", (event) => {
+    const apiPreset = event.target.closest("[data-api-preset]");
+    if (apiPreset) {
+      chooseApiProviderPreset(apiPreset.dataset.apiPreset);
+      return;
+    }
+    const apiDisconnect = event.target.closest("[data-api-disconnect]");
+    if (apiDisconnect) {
+      disconnectConfiguredApiProvider();
+      return;
+    }
+    const apiModelRefresh = event.target.closest("[data-api-model-refresh]");
+    if (apiModelRefresh) {
+      refreshApiProviderModels();
+      return;
+    }
     const ollamaRefresh = event.target.closest("[data-ollama-refresh]");
     if (ollamaRefresh) {
       refreshOllama();
@@ -1744,12 +1983,35 @@ function createStudio() {
     }
   });
   root.querySelector("[data-provider-detail]").addEventListener("change", (event) => {
+    const credentialSource = event.target.closest('[data-api-provider-form] [name="credential_source"]');
+    if (credentialSource) {
+      studio.apiProviderConfig.credential_source = credentialSource.value;
+      if (credentialSource.value === "environment" && !studio.apiProviderConfig.environment_name) {
+        studio.apiProviderConfig.environment_name = API_PROVIDER_UI[studio.apiProviderConfig.preset].env;
+      }
+      saveApiProviderConfig(localStorage, studio.apiProviderConfig);
+      renderInferenceSettings();
+      return;
+    }
+    const apiModel = event.target.closest("[data-api-model]");
+    if (apiModel) {
+      const model = studio.apiProviderModels.find((item) => item.remote_model === apiModel.value);
+      if (model) selectModel(model);
+      return;
+    }
     const select = event.target.closest("[data-ollama-model]");
-    if (!select) return;
-    const model = ollamaModels().find((item) => item.remote_model === select.value);
-    if (model) selectModel(model);
+    if (select) {
+      const model = ollamaModels().find((item) => item.remote_model === select.value);
+      if (model) selectModel(model);
+    }
   });
   root.querySelector("[data-provider-detail]").addEventListener("submit", (event) => {
+    const apiForm = event.target.closest("[data-api-provider-form]");
+    if (apiForm) {
+      event.preventDefault();
+      connectConfiguredApiProvider(apiForm);
+      return;
+    }
     const form = event.target.closest("[data-external-server-form]");
     if (!form) return;
     event.preventDefault();

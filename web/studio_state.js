@@ -1,6 +1,42 @@
 export const SYSTEM_PROMPT_STORAGE_KEY = "h3ps-system-prompts-v1";
 export const EXTERNAL_SERVER_STORAGE_KEY = "h3ps-external-llama-server-v1";
 export const OLLAMA_MODEL_STORAGE_KEY = "h3ps-ollama-model-v1";
+export const API_PROVIDER_STORAGE_KEY = "h3ps-api-provider-v1";
+
+export function loadApiProviderConfig(storage = globalThis.localStorage) {
+  try {
+    const value = JSON.parse(storage?.getItem(API_PROVIDER_STORAGE_KEY) || "null");
+    if (!value || !["openai", "gemini", "openrouter", "custom"].includes(value.preset)) return null;
+    return {
+      preset: value.preset,
+      base_url: typeof value.base_url === "string" ? value.base_url : "",
+      model_id: typeof value.model_id === "string" ? value.model_id : "",
+      credential_source: value.credential_source === "environment" ? "environment" : "session",
+      environment_name: typeof value.environment_name === "string" ? value.environment_name : "",
+      custom_images: value.custom_images === true,
+      custom_context_tokens: Number.isInteger(value.custom_context_tokens) ? value.custom_context_tokens : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveApiProviderConfig(storage, config) {
+  if (!config) {
+    storage?.removeItem(API_PROVIDER_STORAGE_KEY);
+    return;
+  }
+  const safe = {
+    preset: config.preset,
+    base_url: String(config.base_url || ""),
+    model_id: String(config.model_id || ""),
+    credential_source: config.credential_source === "environment" ? "environment" : "session",
+    environment_name: String(config.environment_name || ""),
+    custom_images: config.custom_images === true,
+    custom_context_tokens: Number.isInteger(config.custom_context_tokens) ? config.custom_context_tokens : null,
+  };
+  storage?.setItem(API_PROVIDER_STORAGE_KEY, JSON.stringify(safe));
+}
 
 export function loadOllamaModel(storage = globalThis.localStorage) {
   const value = storage?.getItem(OLLAMA_MODEL_STORAGE_KEY);
@@ -59,13 +95,22 @@ export function selectedOllamaModel(state) {
   return state.selectedModel?.family === "ollama" ? state.selectedModel.remote_model : null;
 }
 
+export function selectedApiProvider(state) {
+  if (state.selectedModel?.family !== "api") return null;
+  return {
+    connection_id: state.selectedModel.api_connection_id,
+    model_id: state.selectedModel.remote_model,
+  };
+}
+
 export function selectModelState(state, model) {
   state.selectedModel = model || null;
   state.audioSupported = model?.capabilities?.audio === true;
   if (model?.family === "external") state.settingsProvider = "external";
   else if (model?.family === "ollama") state.settingsProvider = "ollama";
+  else if (model?.family === "api") state.settingsProvider = "api";
   else if (model?.family === "gguf") state.settingsProvider = "direct";
-  if (model?.family === "external") {
+  if (["external", "api"].includes(model?.family)) {
     state.keepModelLoaded = false;
     state.modelLoaded = false;
   }
@@ -79,6 +124,7 @@ function sharedInferencePayload(state) {
     model_id: state.selectedModel?.id,
     external_server: selectedExternalServer(state),
     ollama_model: selectedOllamaModel(state),
+    api_provider: selectedApiProvider(state),
     thinking: state.thinking,
     context_profile: state.contextProfile,
     kv_cache: state.kvCache,
@@ -97,6 +143,7 @@ export function buildGeneratePayload(state, { creativeBrief, seed }) {
     model_id: state.selectedModel?.id,
     external_server: selectedExternalServer(state),
     ollama_model: selectedOllamaModel(state),
+    api_provider: selectedApiProvider(state),
     thinking: state.thinking,
     context_profile: state.contextProfile,
     kv_cache: state.kvCache,
@@ -149,6 +196,19 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     ollamaStatus: null,
     ollamaModelName: loadOllamaModel(storage),
     ollamaError: null,
+    apiProviderConfig: loadApiProviderConfig(storage) || {
+      preset: "gemini",
+      base_url: "",
+      model_id: "",
+      credential_source: "session",
+      environment_name: "",
+      custom_images: false,
+      custom_context_tokens: null,
+    },
+    apiProviderConnection: null,
+    apiProviderModels: [],
+    apiProviderPresets: [],
+    apiProviderError: null,
     ggufRuntimeDiagnostics: null,
     runtimeWarningShown: false,
     refineRestore: null,

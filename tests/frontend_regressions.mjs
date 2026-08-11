@@ -9,6 +9,7 @@ const stateSource = await readFile(new URL("../web/studio_state.js", import.meta
 const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
   EXTERNAL_SERVER_STORAGE_KEY,
+  API_PROVIDER_STORAGE_KEY,
   OLLAMA_MODEL_STORAGE_KEY,
   SYSTEM_PROMPT_STORAGE_KEY,
   buildGeneratePayload,
@@ -16,9 +17,11 @@ const {
   createStudioState,
   currentSystemPromptOverride,
   loadCustomSystemPrompts,
+  loadApiProviderConfig,
   loadExternalServerConfig,
   loadOllamaModel,
   saveCustomSystemPrompts,
+  saveApiProviderConfig,
   saveExternalServerConfig,
   saveOllamaModel,
   selectModelState,
@@ -114,6 +117,31 @@ test("settings storage preserves the existing keys and schemas", () => {
   });
 });
 
+test("API provider storage persists configuration but never secret values", () => {
+  const storage = memoryStorage();
+  saveApiProviderConfig(storage, {
+    preset: "openrouter",
+    base_url: "https://openrouter.ai/api/v1",
+    model_id: "provider/model",
+    credential_source: "session",
+    environment_name: "",
+    custom_images: true,
+    custom_context_tokens: 32768,
+    api_key: "must-not-be-stored",
+  });
+  const serialized = storage.entries()[API_PROVIDER_STORAGE_KEY];
+  assert.doesNotMatch(serialized, /must-not-be-stored/);
+  assert.deepEqual(loadApiProviderConfig(storage), {
+    preset: "openrouter",
+    base_url: "https://openrouter.ai/api/v1",
+    model_id: "provider/model",
+    credential_source: "session",
+    environment_name: "",
+    custom_images: true,
+    custom_context_tokens: 32768,
+  });
+});
+
 test("studio state owns model, runtime, lifecycle, and System Prompt settings", () => {
   const storage = memoryStorage({ [SYSTEM_PROMPT_STORAGE_KEY]: JSON.stringify({ reference: "Custom reference" }) });
   const state = createStudioState({ sessionId: "11111111-2222-4333-8444-555555555555", storage });
@@ -140,6 +168,10 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
 
   selectModelState(state, { id: "ollama::gemma4:12b", family: "ollama", remote_model: "gemma4:12b", capabilities: { audio: false } });
   assert.equal(state.settingsProvider, "ollama");
+
+  selectModelState(state, { id: "api::connection::model", family: "api", api_connection_id: "connection", remote_model: "model", capabilities: { audio: false } });
+  assert.equal(state.settingsProvider, "api");
+  assert.equal(state.keepModelLoaded, false);
   assert.equal(state.keepModelLoaded, false);
 });
 
@@ -165,6 +197,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     model_id: "external-model",
     external_server: state.externalServerConfig,
     ollama_model: null,
+    api_provider: null,
     thinking: true,
     context_profile: "standard",
     kv_cache: "q8",
@@ -180,6 +213,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     model_id: "external-model",
     external_server: state.externalServerConfig,
     ollama_model: null,
+    api_provider: null,
     thinking: true,
     context_profile: "standard",
     kv_cache: "q8",
@@ -197,6 +231,20 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   const ollamaPayload = buildGeneratePayload(state, { creativeBrief: "A quiet shot.", seed: 3407 });
   assert.equal(ollamaPayload.ollama_model, "gemma4:12b");
   assert.equal(ollamaPayload.external_server, null);
+  assert.equal(ollamaPayload.api_provider, null);
+
+  const apiModel = {
+    id: "api::connection-id::provider/model",
+    family: "api",
+    api_connection_id: "connection-id",
+    remote_model: "provider/model",
+    capabilities: { audio: false, images: true },
+  };
+  selectModelState(state, apiModel);
+  const apiPayload = buildGeneratePayload(state, { creativeBrief: "A quiet shot.", seed: 3407 });
+  assert.deepEqual(apiPayload.api_provider, { connection_id: "connection-id", model_id: "provider/model" });
+  assert.equal(apiPayload.external_server, null);
+  assert.equal(apiPayload.ollama_model, null);
 });
 
 test("Settings separates providers, installed models, diagnostics, and verified models", () => {
@@ -204,9 +252,12 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(markup, /data-provider-option="direct"/);
   assert.match(markup, /data-provider-option="external"/);
   assert.match(markup, /data-provider-option="ollama"/);
+  assert.match(markup, /data-provider-option="api"/);
   assert.match(markup, /data-provider-panel="direct"/);
   assert.match(markup, /data-provider-panel="external"/);
   assert.match(markup, /data-provider-panel="ollama"/);
+  assert.match(markup, /data-provider-panel="api"/);
+  assert.match(markup, /API providers/);
   assert.match(markup, /data-installed-model/);
   assert.match(markup, /data-model-refresh/);
   assert.match(markup, /data-model-scan-slot/);
@@ -219,6 +270,8 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.doesNotMatch(mainSource, /\/api\/pull/);
   assert.match(mainSource, /Compatible · not yet H3-tested/);
   assert.match(mainSource, /data-copy-ollama-command/);
+  assert.match(mainSource, /data-api-provider-form/);
+  assert.match(mainSource, /The key is sent once to the local H3 backend/);
 });
 
 test("Settings shows one switchable System Prompt editor and Generate keeps lifecycle controls", () => {

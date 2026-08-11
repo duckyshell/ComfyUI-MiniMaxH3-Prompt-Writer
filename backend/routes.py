@@ -19,6 +19,7 @@ from .memory import assess_free_vram
 from .models.gguf_backend import BACKEND as GGUF_BACKEND
 from .models.external_server_backend import BACKEND as EXTERNAL_SERVER_BACKEND
 from .models.ollama_backend import BACKEND as OLLAMA_BACKEND
+from .models.api_provider_backend import BACKEND as API_PROVIDER_BACKEND
 from .models.contract import ModelError
 from .runtime_diagnostics import get_gguf_runtime_diagnostics
 from .system_prompts import SystemPromptError, system_prompt_for_mode
@@ -34,7 +35,12 @@ STATE: dict[str, Any] = {
     "selected_model_family": None,
 }
 
-BACKENDS = {"gguf": GGUF_BACKEND, "external": EXTERNAL_SERVER_BACKEND, "ollama": OLLAMA_BACKEND}
+BACKENDS = {
+    "gguf": GGUF_BACKEND,
+    "external": EXTERNAL_SERVER_BACKEND,
+    "ollama": OLLAMA_BACKEND,
+    "api": API_PROVIDER_BACKEND,
+}
 GENERATION_CACHE: dict[str, str] = {}
 
 
@@ -61,6 +67,19 @@ async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: d
 
 
 async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
+    api_provider = body.get("api_provider")
+    if api_provider is not None:
+        if not isinstance(api_provider, dict):
+            raise ModelError("INVALID_API_PROVIDER", "API provider settings must be a JSON object.")
+        model = API_PROVIDER_BACKEND.resolve_model(api_provider)
+        requested_id = str(body.get("model_id") or "")
+        if requested_id and requested_id != model["id"]:
+            raise ModelError(
+                "API_MODEL_CHANGED",
+                "The selected API model changed. Select it again in Settings.",
+                {"requested_model_id": requested_id, "current_model_id": model["id"]},
+            )
+        return model
     ollama_model = body.get("ollama_model")
     if ollama_model is not None:
         if not isinstance(ollama_model, str) or not ollama_model.strip():
@@ -105,6 +124,24 @@ def _model_error_status(error: ModelError) -> int:
         return 502
     if error.code == "OLLAMA_MODEL_NOT_FOUND":
         return 404
+    if error.code == "API_AUTHENTICATION_FAILED":
+        return 401
+    if error.code == "API_PAYMENT_REQUIRED":
+        return 402
+    if error.code == "API_PERMISSION_DENIED":
+        return 403
+    if error.code == "API_MODEL_NOT_FOUND":
+        return 404
+    if error.code == "API_RATE_LIMITED":
+        return 429
+    if error.code in {
+        "API_PROVIDER_UNAVAILABLE",
+        "API_STREAM_INTERRUPTED",
+        "API_REQUEST_TIMEOUT",
+        "API_RESPONSE_INVALID",
+        "API_GENERATION_FAILED",
+    }:
+        return 502
     return 400
 
 
@@ -184,6 +221,46 @@ async def probe_external_server(request: web.Request) -> web.Response:
 @routes.get(f"{ROUTE_PREFIX}/ollama/status")
 async def get_ollama_status(_request: web.Request) -> web.Response:
     return web.json_response(await asyncio.to_thread(OLLAMA_BACKEND.detect))
+
+
+@routes.get(f"{ROUTE_PREFIX}/api-provider/presets")
+async def get_api_provider_presets(_request: web.Request) -> web.Response:
+    return web.json_response({"presets": API_PROVIDER_BACKEND.preset_catalog()})
+
+
+@routes.post(f"{ROUTE_PREFIX}/api-provider/probe")
+async def probe_api_provider(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    if body is None:
+        return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
+    try:
+        result = await asyncio.to_thread(API_PROVIDER_BACKEND.probe, body)
+    except ModelError as error:
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+    return web.json_response(result)
+
+
+@routes.post(f"{ROUTE_PREFIX}/api-provider/models")
+async def get_api_provider_models(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    connection_id = str((body or {}).get("connection_id") or "").strip()
+    if not connection_id:
+        return _error("INVALID_REQUEST", "A provider connection ID is required.", status=400)
+    try:
+        result = await asyncio.to_thread(API_PROVIDER_BACKEND.list_models, connection_id)
+    except ModelError as error:
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+    return web.json_response(result)
+
+
+@routes.post(f"{ROUTE_PREFIX}/api-provider/disconnect")
+async def disconnect_api_provider(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    connection_id = str((body or {}).get("connection_id") or "").strip()
+    if not connection_id:
+        return _error("INVALID_REQUEST", "A provider connection ID is required.", status=400)
+    disconnected = await asyncio.to_thread(API_PROVIDER_BACKEND.disconnect, connection_id)
+    return web.json_response({"disconnected": disconnected})
 
 
 @routes.get(f"{ROUTE_PREFIX}/guides")
@@ -319,7 +396,7 @@ async def generate(request: web.Request) -> web.Response:
             operation="generate",
             total_seconds=total_seconds,
             peak_vram_mb=peak_vram_mb,
-            metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "reserved_output_tokens", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit")},
+            metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "reserved_output_tokens", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit", "api_provider", "provider_request_count", "usage_source", "provider_request_ids", "provider_cost_usd", "upstream_providers") if key in result},
             input_sequence=debug_input_sequence if DEVELOPER_MODE else None,
             output=result["prompt"],
         )
@@ -341,7 +418,7 @@ async def generate(request: web.Request) -> web.Response:
             peak_vram_mb=peak_vram_mb,
             error={"code": error.code, "message": error.message, "details": error.details},
         )
-        status = 499 if error.code == "GENERATION_CANCELLED" else 500
+        status = 499 if error.code == "GENERATION_CANCELLED" else _model_error_status(error)
         return _error(error.code, error.message, status=status, details=error.details)
     finally:
         vram_monitor.stop()
@@ -363,11 +440,12 @@ async def unload(_request: web.Request) -> web.Response:
     if STATE["active_request_id"] is not None:
         return web.json_response({"unload_requested": backend.request_unload(), "deferred": True})
     if getattr(backend, "externally_managed", False):
+        family = STATE.get("selected_model_family")
         return web.json_response({
             "unload_requested": False,
             "deferred": False,
             "externally_managed": True,
-            "message": "The external llama.cpp server owns its model lifecycle.",
+            "message": "The API provider owns its model lifecycle." if family == "api" else "The external llama.cpp server owns its model lifecycle.",
         })
     await asyncio.to_thread(backend.unload)
     return web.json_response({"unload_requested": True, "deferred": False})
@@ -459,7 +537,7 @@ async def refine(request: web.Request) -> web.Response:
             operation="refine",
             total_seconds=total_seconds,
             peak_vram_mb=peak_vram_mb,
-            metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "reserved_output_tokens", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit")},
+            metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "reserved_output_tokens", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit", "api_provider", "provider_request_count", "usage_source", "provider_request_ids", "provider_cost_usd", "upstream_providers") if key in result},
             input_sequence=debug_input_sequence if DEVELOPER_MODE else None,
             output=result["prompt"],
         )
@@ -481,7 +559,7 @@ async def refine(request: web.Request) -> web.Response:
             peak_vram_mb=peak_vram_mb,
             error={"code": error.code, "message": error.message, "details": error.details},
         )
-        status = 499 if error.code == "GENERATION_CANCELLED" else 500
+        status = 499 if error.code == "GENERATION_CANCELLED" else _model_error_status(error)
         return _error(error.code, error.message, status=status, details=error.details)
     finally:
         vram_monitor.stop()

@@ -1,9 +1,9 @@
 export function generateModelSummaryMarkup(icon) {
   return `
-    <button class="h3ps-active-model" type="button" data-open-settings>
+    <button class="h3ps-active-model" type="button" title="Open model settings" data-open-settings>
       <span class="h3ps-active-model-icon" data-active-model-icon>G</span>
       <span><small data-active-model-source>Prompt model</small><strong data-active-model-name>Scanning models…</strong></span>
-      <em data-active-runtime-summary>Auto</em>
+      <em data-active-runtime-summary>Runtime · Auto</em>
       ${icon("chevron", 14)}
     </button>`;
 }

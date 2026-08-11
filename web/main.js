@@ -1118,11 +1118,11 @@ function syncRuntimeSummary(result = null) {
   let activeSummary;
   if (studio.selectedModel?.family === "external") {
     const tokens = result?.context_tokens || studio.selectedModel.server_context_tokens;
-    activeSummary = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Managed by server";
+    activeSummary = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Server managed";
   } else if (result && studio.contextProfile === "auto") {
     activeSummary = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
   } else {
-    activeSummary = studio.contextProfile === "auto" ? "Auto" : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
+    activeSummary = studio.contextProfile === "auto" ? "Runtime · Auto" : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
   }
   const settingsSummary = studio.settingsProvider === "external"
     ? studio.externalModel?.server_context_tokens

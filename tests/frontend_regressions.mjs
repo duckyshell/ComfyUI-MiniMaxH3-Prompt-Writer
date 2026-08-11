@@ -207,6 +207,9 @@ test("Settings shows one switchable System Prompt editor and Generate keeps life
   assert.match(mainSource, /data-thinking/);
   assert.match(mainSource, /data-keep-loaded/);
   assert.match(mainSource, /data-memory-action/);
+  assert.match(settingsSource, /title="Open model settings"/);
+  assert.match(settingsSource, /data-active-runtime-summary>Runtime · Auto</);
+  assert.match(mainSource, /"Server managed"/);
   assert.match(mainSource, /generate\(buildGeneratePayload\(studio/);
   assert.match(mainSource, /refine\(buildRefinePayload\(studio/);
 });

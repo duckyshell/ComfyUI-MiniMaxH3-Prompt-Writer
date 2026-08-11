@@ -6,6 +6,8 @@
   LAN HTTP origins.
 - Fixed repeated media drop listeners that could upload the same file more than
   once after UI rerenders.
+- Made dropping one media card onto another reorder it in either direction
+  without requiring the pointer to cross the target card's outer edge.
 - Added exact model scan paths, discovered GGUF/mmproj files, and pairing issues
   to local model setup details without changing discovery rules.
 - Added a lazy, cached, subprocess-isolated `llama-cpp-python` compatibility

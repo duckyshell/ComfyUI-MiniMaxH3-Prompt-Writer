@@ -4,7 +4,7 @@ import test from "node:test";
 
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");
-const { createSessionId, replaceEventListener } = await import(`data:text/javascript;base64,${encoded}`);
+const { createSessionId, moveOntoTarget, replaceEventListener } = await import(`data:text/javascript;base64,${encoded}`);
 
 test("createSessionId falls back to a valid UUID v4", () => {
   const fallbackCrypto = {
@@ -31,4 +31,10 @@ test("replacing a persistent media listener prevents duplicate dispatch", () => 
 
   media.dispatchEvent(new Event("drop"));
   assert.deepEqual(calls, ["current-mode"]);
+});
+
+test("dropping on another media card moves in either direction without an edge hit", () => {
+  const assets = [{ id: "picture" }, { id: "video" }, { id: "audio" }];
+  assert.deepEqual(moveOntoTarget(assets, "picture", "video").map((asset) => asset.id), ["video", "picture", "audio"]);
+  assert.deepEqual(moveOntoTarget(assets, "audio", "video").map((asset) => asset.id), ["picture", "audio", "video"]);
 });

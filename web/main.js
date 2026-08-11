@@ -1,6 +1,6 @@
 import { app } from "/scripts/app.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, freeComfyVram, generate, getGuides, getModels, getStatus, getSystemPrompt, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
-import { createSessionId, replaceEventListener } from "./compat.js";
+import { createSessionId, moveOntoTarget, replaceEventListener } from "./compat.js";
 
 const EXTENSION_NAME = "minimax.h3.prompt.studio";
 const SYSTEM_PROMPT_STORAGE_KEY = "h3ps-system-prompts-v1";
@@ -404,7 +404,10 @@ function bindMediaActions(mode) {
     card.addEventListener("dragover", (event) => {
       if (!studio.draggedAssetId || studio.draggedAssetId === card.dataset.assetId) return;
       studio.root.querySelectorAll(".is-drop-before, .is-drop-after").forEach((item) => item.classList.remove("is-drop-before", "is-drop-after"));
-      const after = event.clientX > card.getBoundingClientRect().left + card.offsetWidth / 2;
+      const modeAssets = studio.assets.filter((asset) => asset.mode === mode);
+      const sourceIndex = modeAssets.findIndex((asset) => asset.id === studio.draggedAssetId);
+      const targetIndex = modeAssets.findIndex((asset) => asset.id === card.dataset.assetId);
+      const after = sourceIndex < targetIndex;
       card.classList.add(after ? "is-drop-after" : "is-drop-before");
     });
   });
@@ -419,15 +422,9 @@ function bindMediaActions(mode) {
     if (sourceId) {
       if (!targetId || sourceId === targetId) return;
       const modeAssets = studio.assets.filter((asset) => asset.mode === mode);
-      const sourceIndex = modeAssets.findIndex((asset) => asset.id === sourceId);
-      if (sourceIndex < 0) return;
-      const [moved] = modeAssets.splice(sourceIndex, 1);
-      let insertionIndex = modeAssets.findIndex((asset) => asset.id === targetId);
-      if (insertionIndex < 0) return;
-      if (event.target.closest("[data-asset-id]")?.classList.contains("is-drop-after")) insertionIndex += 1;
-      modeAssets.splice(insertionIndex, 0, moved);
+      const reorderedAssets = moveOntoTarget(modeAssets, sourceId, targetId);
       try {
-        const result = await reorderMedia(studio.sessionId, mode, modeAssets.map((asset) => asset.id));
+        const result = await reorderMedia(studio.sessionId, mode, reorderedAssets.map((asset) => asset.id));
         studio.assets = result.assets;
         renderMedia(mode);
       } catch (error) {

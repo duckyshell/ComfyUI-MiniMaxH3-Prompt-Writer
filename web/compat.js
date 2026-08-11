@@ -26,3 +26,13 @@ export function replaceEventListener(target, type, key, listener, options) {
   target.addEventListener(type, listener, options);
   listeners.set(slot, { listener, options });
 }
+
+export function moveOntoTarget(items, sourceId, targetId, getId = (item) => item.id) {
+  const sourceIndex = items.findIndex((item) => getId(item) === sourceId);
+  const targetIndex = items.findIndex((item) => getId(item) === targetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return [...items];
+  const reordered = [...items];
+  const [moved] = reordered.splice(sourceIndex, 1);
+  reordered.splice(targetIndex, 0, moved);
+  return reordered;
+}

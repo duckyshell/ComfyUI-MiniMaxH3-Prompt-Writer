@@ -382,8 +382,15 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.doesNotMatch(markup, /data-model-menu/);
   assert.match(markup, /Context and KV cache/);
   assert.doesNotMatch(mainSource, /\/api\/pull/);
+  assert.doesNotMatch(mainSource, /Install .*Gemma|Cancel download|Downloading model/i);
   assert.match(mainSource, /Compatible · not yet H3-tested/);
   assert.match(mainSource, /data-copy-ollama-command/);
+  assert.match(mainSource, /Copy command/);
+  assert.match(mainSource, /data-ollama-model/);
+  assert.match(mainSource, /Need models on another drive\?/);
+  assert.match(mainSource, /OLLAMA_MODELS/);
+  assert.match(mainSource, /syncOllamaAutoDetection/);
+  assert.match(mainSource, /setTimeout\(\(\) => refreshOllama\(\{ automatic: true \}\), 4000\)/);
   assert.match(mainSource, /data-api-provider-form/);
   assert.match(mainSource, /The key is sent once to the local H3 backend/);
   assert.match(mainSource, /Reasoning provider managed/);

@@ -263,6 +263,8 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     ollamaStatus: null,
     ollamaModelName: loadOllamaModel(storage),
     ollamaError: null,
+    ollamaPollTimer: null,
+    ollamaRefreshBusy: false,
     apiProviderConfig: loadApiProviderConfig(storage) || {
       preset: "gemini",
       base_url: "",

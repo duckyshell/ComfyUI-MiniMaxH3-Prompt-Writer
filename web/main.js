@@ -1019,28 +1019,29 @@ function renderOllamaProviderControl() {
   const status = studio.ollamaStatus;
   if (!status) {
     return `<header class="h3ps-settings-section-heading"><span><small>Local service</small><strong>Ollama</strong></span></header>
-      ${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state"><span class="h3ps-spinner"></span><strong>Checking Ollama…</strong><p>Looking for the local service and installed models.</p></div>`;
+      ${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state"><span class="h3ps-spinner"></span><span class="h3ps-ollama-state-copy"><strong>Checking Ollama…</strong><p>Looking for the local service and installed models.</p></span></div>`;
   }
-  const refresh = `<button type="button" data-ollama-refresh>${icon("refresh", 13)} Check again</button>`;
+  const ready = status.state === "ready";
+  const refresh = ready ? `<button type="button" data-ollama-refresh>${icon("refresh", 13)} Refresh</button>` : "";
   const header = `<header class="h3ps-settings-section-heading"><span><small>Local service</small><strong>Ollama</strong></span>${refresh}</header>`;
   if (status.state === "not_installed") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state">
-      <span class="h3ps-ollama-state-icon">1</span><strong>Get Ollama</strong>
-      <p>Install the official Ollama app, open it once, then return here.</p>
-      <a class="h3ps-ollama-primary" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Open official download ↗</a>
+      <span class="h3ps-ollama-state-icon">1</span><span class="h3ps-ollama-state-copy"><strong>Get Ollama</strong>
+      <p>Install the official Ollama app, open it once, then return here. This page will detect it automatically.</p></span>
+      <a class="h3ps-ollama-primary" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Official download ↗</a>
     </div>`;
   }
   if (status.state === "not_running") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state">
-      <span class="h3ps-ollama-state-icon">1</span><strong>Start Ollama</strong>
-      <p>Ollama is installed, but its local service is not responding. Open the Ollama app, then check again.</p>
-      <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Check connection</button>
+      <span class="h3ps-ollama-state-icon">1</span><span class="h3ps-ollama-state-copy"><strong>Start Ollama</strong>
+      <p>Ollama is installed, but its local service is not responding. Open the Ollama app; this page checks automatically.</p></span>
+      <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Check now</button>
     </div>`;
   }
   if (status.state === "error") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state is-error">
-      <span class="h3ps-ollama-state-icon">!</span><strong>Ollama could not be inspected</strong>
-      <p>${escapeHtml(status.error?.message || "The service returned an unexpected response.")}</p>
+      <span class="h3ps-ollama-state-icon">!</span><span class="h3ps-ollama-state-copy"><strong>Ollama could not be inspected</strong>
+      <p>${escapeHtml(status.error?.message || "The service returned an unexpected response.")}</p></span>
       <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Try again</button>
     </div>`;
   }
@@ -1049,9 +1050,11 @@ function renderOllamaProviderControl() {
     const suggested = status.recommended_model;
     const command = suggested ? `ollama pull ${suggested}` : null;
     return `${header}${ollamaJourneyMarkup("model")}<div class="h3ps-ollama-state">
-      <span class="h3ps-ollama-state-icon">2</span><strong>Add a compatible prompt model</strong>
-      <p>Ollama is running, but no locally installed model reports both vision and text generation support.</p>
-      ${command ? `<div class="h3ps-ollama-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-ollama-command="${escapeHtml(command)}">Copy</button></div><small>Run this command in Terminal or PowerShell, then check again.</small>` : `<small>Install a vision-capable model in Ollama, then check again. Tested tags will appear here only after validation.</small>`}
+      <span class="h3ps-ollama-state-icon">2</span><span class="h3ps-ollama-state-copy"><strong>Add a compatible prompt model</strong>
+      <p>Ollama is running, but no installed model reports both vision and text generation support.</p>
+      ${command ? `<div class="h3ps-ollama-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-ollama-command="${escapeHtml(command)}">Copy command</button></div><small>Run this in Terminal or PowerShell. This page detects the model automatically.</small>` : `<small>Install a vision-capable model in Ollama. Tested tags appear here only after validation.</small>`}
+      <details class="h3ps-ollama-storage-help"><summary>Need models on another drive?</summary><p>Ollama manages one global model store. Set <code>OLLAMA_MODELS</code> before pulling a model, then restart Ollama. <a href="https://docs.ollama.com/windows#changing-model-location" target="_blank" rel="noopener noreferrer">Official instructions ↗</a></p></details></span>
+      <button class="h3ps-ollama-secondary" type="button" data-ollama-refresh>Check again</button>
     </div>`;
   }
   const selected = ollamaModelForSettings();
@@ -1243,6 +1246,7 @@ function selectSettingsProvider(provider) {
   rememberRuntimePreferences();
   studio.settingsProvider = ["direct", "external", "ollama", "api"].includes(provider) ? provider : "direct";
   applyRuntimePreferences(studio.settingsProvider);
+  syncOllamaAutoDetection();
   if (studio.settingsProvider === "external" && studio.externalModel) {
     selectModel(studio.externalModel);
     return;
@@ -1407,6 +1411,17 @@ function setSettingsOpen(open) {
     syncSystemPromptEditors();
     setSystemPromptProfile(studio.settingsPromptProfile);
   }
+  syncOllamaAutoDetection();
+}
+
+function syncOllamaAutoDetection() {
+  clearTimeout(studio?.ollamaPollTimer);
+  if (!studio) return;
+  studio.ollamaPollTimer = null;
+  const settingsOpen = studio.root.classList.contains("is-settings-open");
+  const needsDetection = studio.settingsProvider === "ollama" && studio.ollamaStatus?.state !== "ready";
+  if (!settingsOpen || !needsDetection) return;
+  studio.ollamaPollTimer = setTimeout(() => refreshOllama({ automatic: true }), 4000);
 }
 
 async function connectExternalServer(form) {
@@ -1618,9 +1633,13 @@ async function refreshModels() {
   }
 }
 
-async function refreshOllama() {
+async function refreshOllama({ automatic = false } = {}) {
+  if (studio.ollamaRefreshBusy) return;
+  studio.ollamaRefreshBusy = true;
+  clearTimeout(studio.ollamaPollTimer);
+  studio.ollamaPollTimer = null;
   const control = studio.root.querySelector("[data-ollama-provider-control]");
-  if (control) control.innerHTML = renderOllamaProviderControl();
+  if (control && !automatic) control.innerHTML = renderOllamaProviderControl();
   try {
     const status = await getOllamaStatus();
     studio.ollamaStatus = status;
@@ -1633,6 +1652,9 @@ async function refreshOllama() {
     studio.ollamaStatus = { state: "error", running: false, compatible_models: [], error: { code: error.code, message: error.message } };
     studio.ollamaError = error;
     renderInferenceSettings();
+  } finally {
+    studio.ollamaRefreshBusy = false;
+    syncOllamaAutoDetection();
   }
 }
 

@@ -1,5 +1,6 @@
 import { app } from "/scripts/app.js";
-import { cancel, clearMedia, freeComfyVram, generate, getGuides, getModels, getStatus, getSystemPrompt, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { cancel, clearMedia, diagnoseGGUFRuntime, freeComfyVram, generate, getGuides, getModels, getStatus, getSystemPrompt, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { createSessionId, replaceEventListener } from "./compat.js";
 
 const EXTENSION_NAME = "minimax.h3.prompt.studio";
 const SYSTEM_PROMPT_STORAGE_KEY = "h3ps-system-prompts-v1";
@@ -407,11 +408,11 @@ function bindMediaActions(mode) {
       card.classList.add(after ? "is-drop-after" : "is-drop-before");
     });
   });
-  media.addEventListener("dragover", (event) => {
+  replaceEventListener(media, "dragover", "media", (event) => {
     event.preventDefault();
     if (studio.draggedAssetId) event.dataTransfer.dropEffect = "move";
   });
-  media.addEventListener("drop", async (event) => {
+  replaceEventListener(media, "drop", "media", async (event) => {
     event.preventDefault();
     const sourceId = event.dataTransfer.getData("application/x-h3ps-asset") || studio.draggedAssetId;
     const targetId = event.target.closest("[data-asset-id]")?.dataset.assetId;
@@ -740,6 +741,7 @@ async function startGenerationPreview() {
     showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}. Open the model menu to finish setup.`);
     return;
   }
+  if (!await inspectDirectRuntime()) return;
   if (!studio.root.querySelector("[data-modified-badge]").hidden && !window.confirm("Replace the modified prompt with a new generation?")) return;
   const modelName = studio.selectedModel.name.split("/").pop();
   const external = studio.selectedModel.family === "external";
@@ -848,6 +850,26 @@ function renderModelSetupRows() {
     </div>`).join("");
 }
 
+function modelDiscoveryDetails() {
+  const roots = studio.modelDiscovery?.roots || [];
+  if (!roots.length) return "";
+  const lines = [];
+  for (const root of roots) {
+    lines.push(root.path);
+    lines.push(`  Model GGUF: ${root.model_files.length}`);
+    for (const path of root.model_files) lines.push(`    ${path}`);
+    lines.push(`  mmproj GGUF: ${root.projector_files.length}`);
+    for (const path of root.projector_files) lines.push(`    ${path}`);
+    for (const issue of root.issues) lines.push(`  Issue: ${issue}`);
+  }
+  return lines.join("\n");
+}
+
+function renderModelScanDetails() {
+  const discovery = modelDiscoveryDetails();
+  return discovery ? `<details class="h3ps-model-scan"><summary>Scan details</summary><pre>${escapeHtml(discovery)}</pre></details>` : "";
+}
+
 function renderModelSetup() {
   const directory = studio.modelDirectory || "ComfyUI/models/LLM/";
   return `
@@ -856,8 +878,57 @@ function renderModelSetup() {
       <p>Open the two verified Hugging Face pages, download both files, then place them in:</p>
       <button type="button" class="h3ps-model-path" data-copy-model-path><code>${escapeHtml(directory)}</code>${icon("copy", 13)}</button>
       <p>Using multiple models? Keep each model and its matching vision projector together in a separate subfolder.</p>
+      ${renderModelScanDetails()}
       <div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>
     </div>`;
+}
+
+function localRuntimeLabel() {
+  const diagnostics = studio?.ggufRuntimeDiagnostics;
+  if (!diagnostics) return "Local GGUF · llama-cpp-python";
+  if (diagnostics.status !== "ok") return "Runtime could not be inspected";
+  const offload = diagnostics.gpu_offload ? "GPU offload available" : "GPU offload unavailable";
+  return `${offload}${diagnostics.backend ? ` · ${diagnostics.backend}` : ""}`;
+}
+
+function syncSelectedModelSourceLabel() {
+  if (!studio?.selectedModel) return;
+  studio.root.querySelector("[data-model-source-label]").textContent = studio.selectedModel.family === "external" ? "External server" : localRuntimeLabel();
+}
+
+async function inspectDirectRuntime() {
+  if (studio.selectedModel?.family !== "gguf") return true;
+  if (!studio.ggufRuntimeDiagnostics) {
+    try {
+      const result = await diagnoseGGUFRuntime();
+      studio.ggufRuntimeDiagnostics = result.diagnostics;
+    } catch (error) {
+      showToast("Runtime could not be inspected", "The isolated compatibility check was unavailable. Generation will continue with the existing runtime behavior.", error.details || error.message);
+      return true;
+    }
+    renderModelMenu();
+    syncSelectedModelSourceLabel();
+  }
+
+  const diagnostics = studio.ggufRuntimeDiagnostics;
+  const blocking = diagnostics.status === "crashed" || diagnostics.status === "unavailable";
+  if (blocking) {
+    const warning = diagnostics.warnings?.[0];
+    showToast(
+      warning ? "Native runtime configuration issue" : "Native runtime compatibility check failed",
+      warning?.message || diagnostics.message,
+      diagnostics,
+    );
+    return false;
+  }
+  if (diagnostics.status !== "ok" && !studio.runtimeWarningShown) {
+    studio.runtimeWarningShown = true;
+    showToast("Runtime could not be inspected", diagnostics.message, diagnostics);
+  } else if (diagnostics.gpu_offload === false && !studio.runtimeWarningShown) {
+    studio.runtimeWarningShown = true;
+    showToast("GPU offload unavailable", "This llama.cpp build may generate on CPU and can be much slower. Install a GPU-enabled wheel that matches ComfyUI's Python and runtime.", diagnostics);
+  }
+  return true;
 }
 
 function renderOtherModelsTrigger() {
@@ -940,12 +1011,12 @@ function renderModelMenu() {
   const modelOptions = studio.models.filter((model) => model.family !== "external").map((model) => `
     <button class="h3ps-model-option ${model.id === studio.selectedModel?.id ? "is-selected" : ""} ${model.runtime_ready ? "" : "is-incomplete"}" type="button" data-model-id="${escapeHtml(model.id)}">
       <span class="h3ps-model-option-icon">${model.family === "external" ? "S" : "G"}</span>
-      <span><strong>${escapeHtml(model.name.split("/").pop())}</strong><small>${model.family === "external" ? escapeHtml(model.source_label) : model.runtime_ready ? "Local GGUF · llama-cpp-python" : escapeHtml(model.setup_message || `Missing ${model.missing_dependencies.join(", ")}`)}</small></span>
+      <span><strong>${escapeHtml(model.name.split("/").pop())}</strong><small>${model.family === "external" ? escapeHtml(model.source_label) : model.runtime_ready ? escapeHtml(localRuntimeLabel()) : escapeHtml(model.setup_message || `Missing ${model.missing_dependencies.join(", ")}`)}</small></span>
       <span class="h3ps-model-tags">${modelVramLabel(model) ? `<em>${modelVramLabel(model)}</em>` : ""}${model.format ? `<em>${escapeHtml(model.format)}</em>` : ""}</span>
       ${icon("check", 15)}
     </button>`).join("");
   const readyLocal = studio.models.some((model) => model.family !== "external" && model.runtime_ready);
-  options.innerHTML = `${modelOptions}${renderExternalServerControl()}${readyLocal || studio.externalModel ? renderOtherModelsTrigger() : renderModelSetup()}`;
+  options.innerHTML = `${modelOptions}${renderExternalServerControl()}${readyLocal || studio.externalModel ? `${renderModelScanDetails()}${renderOtherModelsTrigger()}` : renderModelSetup()}`;
   const catalog = studio.root.querySelector("[data-other-models-catalog]");
   catalog.innerHTML = `<div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>`;
 }
@@ -957,7 +1028,7 @@ function selectModel(model) {
   const name = model ? model.name.split("/").pop() : "No compatible local model";
   const label = studio.root.querySelector("[data-selected-model]");
   label.innerHTML = `${escapeHtml(name)}${model?.format ? ` <em>${escapeHtml(model.format)}</em>` : ""}`;
-  studio.root.querySelector("[data-model-source-label]").textContent = external ? "External server" : "Local model";
+  syncSelectedModelSourceLabel();
   studio.root.querySelector(".h3ps-model-icon").textContent = external ? "S" : "G";
   const keepLoaded = studio.root.querySelector("[data-keep-loaded]");
   const keepLoadedControl = studio.root.querySelector("[data-keep-loaded-control]");
@@ -1084,6 +1155,7 @@ async function refreshModels() {
       }
     }
     studio.modelSetup = result.setup || [];
+    studio.modelDiscovery = result.discovery || null;
     studio.modelDirectory = result.model_directory || "ComfyUI/models/LLM/";
     studio.gpuMemory = status.gpu_memory;
     studio.modelLoaded = Boolean(status.loaded);
@@ -1128,6 +1200,7 @@ async function submitRefinement() {
     showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}.`);
     return;
   }
+  if (!await inspectDirectRuntime()) return;
 
   const previousPrompt = output.value;
   const previousMeta = studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent;
@@ -1348,7 +1421,7 @@ function createStudio() {
     <div class="h3ps-toast" data-h3ps-toast><span class="h3ps-toast-icon">${icon("info", 17)}</span><span><strong data-toast-title>Notice</strong><span data-toast-message></span><button type="button" class="h3ps-toast-action" data-toast-action hidden></button><details data-toast-details hidden><summary>Technical details</summary><pre></pre></details></span></div>`;
   document.body.appendChild(root);
 
-  studio = { root, mode: "Reference", mediaFilter: "all", durationSeconds: 10, aspectRatio: "16:9", contextProfile: "auto", kvCache: "auto", modelLoaded: false, toastTimer: null, statusTimer: null, sessionId: crypto.randomUUID(), assets: [], previewAssetId: null, audioSupported: false, models: [], modelSetup: [], modelDirectory: "ComfyUI/models/LLM/", gpuMemory: null, selectedModel: null, externalServerConfig: loadExternalServerConfig(), externalModel: null, externalServerError: null, refineRestore: null, lastModelPrompt: null, lastModelMeta: null, guides: [], draggedAssetId: null, dragGhost: null, customSystemPrompts: loadCustomSystemPrompts(), systemPromptDefaults: {} };
+  studio = { root, mode: "Reference", mediaFilter: "all", durationSeconds: 10, aspectRatio: "16:9", contextProfile: "auto", kvCache: "auto", modelLoaded: false, toastTimer: null, statusTimer: null, sessionId: createSessionId(), assets: [], previewAssetId: null, audioSupported: false, models: [], modelSetup: [], modelDirectory: "ComfyUI/models/LLM/", modelDiscovery: null, gpuMemory: null, selectedModel: null, externalServerConfig: loadExternalServerConfig(), externalModel: null, externalServerError: null, ggufRuntimeDiagnostics: null, runtimeWarningShown: false, refineRestore: null, lastModelPrompt: null, lastModelMeta: null, guides: [], draggedAssetId: null, dragGhost: null, customSystemPrompts: loadCustomSystemPrompts(), systemPromptDefaults: {} };
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
   root.addEventListener("click", (event) => {
     if (!event.target.closest("[data-asset-menu], [data-asset-menu-toggle]")) {

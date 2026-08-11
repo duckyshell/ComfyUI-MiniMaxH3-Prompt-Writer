@@ -11,7 +11,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .assembly import AssemblyError, assemble_refinement, assemble_request
-from .catalog import discover_models, find_model, model_setup_catalog
+from .catalog import discover_models_with_diagnostics, find_model, model_setup_catalog
 from .devlog import DEVELOPER_MODE, LOG_PATH, PeakVRAMMonitor, gpu_memory_snapshot, write_event
 from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
 from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, parse_session_id
@@ -19,6 +19,7 @@ from .memory import assess_free_vram
 from .models.gguf_backend import BACKEND as GGUF_BACKEND
 from .models.external_server_backend import BACKEND as EXTERNAL_SERVER_BACKEND
 from .models.contract import ModelError
+from .runtime_diagnostics import get_gguf_runtime_diagnostics
 from .system_prompts import SystemPromptError, system_prompt_for_mode
 from .version import VERSION
 
@@ -126,11 +127,25 @@ async def get_status(_request: web.Request) -> web.Response:
 
 @routes.get(f"{ROUTE_PREFIX}/models")
 async def get_models(_request: web.Request) -> web.Response:
+    models, discovery = discover_models_with_diagnostics()
     return web.json_response({
-        "models": discover_models(),
+        "models": models,
         "model_directory": "ComfyUI/models/LLM/",
         "setup": model_setup_catalog(),
+        "discovery": discovery,
     })
+
+
+@routes.post(f"{ROUTE_PREFIX}/runtime/gguf/diagnostics")
+async def diagnose_gguf_runtime(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    if body is None:
+        return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
+    force = body.get("refresh", False)
+    if not isinstance(force, bool):
+        return _error("INVALID_REQUEST", "The refresh field must be a boolean.", status=400)
+    diagnostics = await asyncio.to_thread(get_gguf_runtime_diagnostics, force=force)
+    return web.json_response({"diagnostics": diagnostics})
 
 
 @routes.post(f"{ROUTE_PREFIX}/external-server/probe")

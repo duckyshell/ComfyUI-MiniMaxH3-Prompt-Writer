@@ -1,0 +1,114 @@
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from backend import runtime_diagnostics
+
+
+def completed(payload: dict, *, stderr: str = "", returncode: int = 0):
+    stdout = runtime_diagnostics.PROBE_MARKER + json.dumps(payload)
+    return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+class RuntimeDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        runtime_diagnostics._CACHE = None
+
+    def test_cuda_is_reported_only_when_system_info_names_it(self):
+        payload = {
+            "status": "ok",
+            "package_version": "0.3.34",
+            "python": "3.13.0",
+            "platform": "Windows",
+            "gpu_offload": True,
+            "system_info": "CUDA : ARCHS = 890 | CPU : AVX2 = 1",
+        }
+        with (
+            patch.object(runtime_diagnostics.subprocess, "run", return_value=completed(payload)),
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value={"name": "NVIDIA Test"}),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertTrue(result["gpu_offload"])
+        self.assertEqual(result["backend"], "CUDA")
+
+    def test_gpu_offload_does_not_invent_a_backend(self):
+        payload = {
+            "status": "ok",
+            "gpu_offload": True,
+            "system_info": "CPU : AVX2 = 1",
+        }
+        with (
+            patch.object(runtime_diagnostics.subprocess, "run", return_value=completed(payload)),
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value=None),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertTrue(result["gpu_offload"])
+        self.assertIsNone(result["backend"])
+
+    def test_native_crash_returns_exit_code_without_claiming_a_cause(self):
+        crash = SimpleNamespace(stdout="", stderr="fatal native exception", returncode=0xC000001D)
+        with (
+            patch.object(runtime_diagnostics.subprocess, "run", return_value=crash),
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value=None),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertEqual(result["status"], "crashed")
+        self.assertEqual(result["return_code_hex"], "0xC000001D")
+        self.assertNotIn("AVX", result["message"])
+
+    def test_stale_hip_path_on_nvidia_is_reported_as_environment_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing_rocm = Path(directory) / "missing-rocm"
+            payload = {"status": "unavailable", "gpu_offload": None, "system_info": None, "error": "path not found"}
+            with (
+                patch.object(runtime_diagnostics.subprocess, "run", return_value=completed(payload)),
+                patch.object(runtime_diagnostics, "_host_accelerator", return_value={"name": "NVIDIA GeForce"}),
+                patch.dict(os.environ, {"HIP_PATH": str(missing_rocm)}, clear=True),
+            ):
+                result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["warnings"][0]["code"], "INVALID_HIP_PATH")
+        self.assertIn("NVIDIA", result["message"])
+
+    def test_probe_is_cached(self):
+        payload = {"status": "ok", "gpu_offload": False, "system_info": "CPU : AVX2 = 1"}
+        with (
+            patch.object(runtime_diagnostics.subprocess, "run", return_value=completed(payload)) as run,
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value=None),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            first = runtime_diagnostics.get_gguf_runtime_diagnostics()
+            second = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertEqual(first, second)
+        run.assert_called_once()
+
+    def test_timeout_is_nonfatal(self):
+        timeout = subprocess.TimeoutExpired(["python"], 12, output=b"partial", stderr=b"waiting")
+        with (
+            patch.object(runtime_diagnostics.subprocess, "run", side_effect=timeout),
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value=None),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertEqual(result["status"], "timeout")
+        self.assertIsNone(result["gpu_offload"])
+        self.assertEqual(result["stdout"], "partial")
+        self.assertEqual(result["stderr"], "waiting")
+
+
+if __name__ == "__main__":
+    unittest.main()

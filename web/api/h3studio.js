@@ -24,6 +24,7 @@ function post(path, body = {}) {
 
 export const getStatus = () => request("/status");
 export const getModels = () => request("/models");
+export const diagnoseGGUFRuntime = (refresh = false) => post("/runtime/gguf/diagnostics", { refresh });
 export const probeExternalServer = (payload) => post("/external-server/probe", payload);
 export const getGuides = () => request("/guides");
 export const getGuide = (mode) => request(`/guides/${encodeURIComponent(mode)}`);

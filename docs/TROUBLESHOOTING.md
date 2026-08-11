@@ -15,6 +15,11 @@ directory, and the tier that fits detected total VRAM.
 Both files must be together below `ComfyUI/models/LLM/`. Press **Refresh** after
 adding them.
 
+Expand **Scan details** in the model picker to see every LLM directory that was
+scanned, the model and `mmproj` GGUF files found, and any missing or ambiguous
+pairing. H3 Prompt Writer does not guess between multiple models or projectors in
+one folder.
+
 ## Model shows a missing dependency
 
 - `llama-cpp-python`: install `requirements-gguf.txt` using ComfyUI's Python.
@@ -28,8 +33,35 @@ Identical projector filenames from different repositories are not interchangeabl
 A CPU-only `llama-cpp-python` wheel may import successfully. Reinstall a wheel built
 for the CUDA version and Python version used by ComfyUI.
 
+Before the first Direct GGUF generation, H3 Prompt Writer checks the native runtime
+in an isolated child process without loading the model. The UI reports one of:
+
+- **GPU offload available** — the build reports GPU-offload support.
+- **GPU offload unavailable** — generation may run on CPU and be much slower.
+- **Runtime could not be inspected** — the check failed or timed out, so no backend
+  claim can be made.
+
+CUDA, ROCm, or Vulkan is shown only when the native runtime's own system information
+identifies that backend. GPU-offload availability alone does not identify CUDA.
+
+## Native runtime compatibility check failed
+
+The compatibility check runs in a child process so an import-time native crash does
+not terminate ComfyUI. Technical details include the child exit code, Python and
+`llama-cpp-python` versions where available, and selected runtime environment paths.
+
+Windows exit code `0xC000001D` means the native runtime crashed with an illegal
+instruction. It indicates an incompatible native build or runtime, but does not by
+itself prove that AVX512 is the cause.
+
+If an NVIDIA system reports a missing AMD ROCm path, check for a stale `HIP_PATH`
+environment variable or a mismatched native wheel. H3 Prompt Writer reports this as
+a likely runtime/environment mismatch and does not modify the environment.
+
 ## External llama.cpp server is unavailable
 
+- External server settings are in the model picker under **External llama.cpp
+  server** and require H3 Prompt Writer v0.2.0 or newer.
 - Use the server root URL, for example `http://127.0.0.1:8080`, not a `/v1` endpoint.
 - Confirm that `llama-server` is running and that its `/health` endpoint responds.
 - This release intentionally accepts servers on the same computer only.

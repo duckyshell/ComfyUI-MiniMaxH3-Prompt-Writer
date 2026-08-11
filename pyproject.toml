@@ -1,6 +1,6 @@
 [project]
 name = "MiniMaxH3-Prompt-Writer"
-version = "0.2.0"
+version = "0.2.1"
 description = "A local multimodal MiniMax H3 prompt writer for ComfyUI, powered by Gemma 4 GGUF models."
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

@@ -24,6 +24,7 @@ from ..prompt_repair import (
     reference_tags,
     unexpected_audio_task,
 )
+from ..runtime_diagnostics import cached_gguf_runtime_diagnostics
 from .contract import ModelError, final_text
 
 
@@ -133,7 +134,11 @@ class GGUFBackend:
             raise ModelError("MODEL_LOAD_OOM", "The GGUF model did not fit in available memory.") from error
         except Exception as error:
             self.unload()
-            raise ModelError("MODEL_LOAD_FAILED", "The GGUF model could not be loaded.", str(error)) from error
+            details: dict[str, Any] = {"exception": str(error)}
+            runtime = cached_gguf_runtime_diagnostics()
+            if runtime is not None:
+                details["runtime"] = runtime
+            raise ModelError("MODEL_LOAD_FAILED", "The GGUF model could not be loaded.", details) from error
 
     def unload(self) -> None:
         if self.model is not None:

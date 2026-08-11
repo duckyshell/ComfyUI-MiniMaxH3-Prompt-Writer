@@ -7,7 +7,7 @@
 A local multimodal prompt writer for MiniMax H3, hosted inside ComfyUI and powered
 by Gemma 4 GGUF models.
 
-Current release: **0.2.0** | [MIT License](LICENSE)
+Current release: **0.2.1** | [MIT License](LICENSE)
 
 H3 Prompt Writer turns a creative brief plus image, video, and declared audio
 references into an editable H3 prompt using the official MiniMax prompt-writing

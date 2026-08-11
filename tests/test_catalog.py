@@ -40,6 +40,13 @@ class ModelDiscoveryTests(unittest.TestCase):
         ):
             return catalog.discover_models()
 
+    def discover_with_diagnostics(self, roots: list[Path]):
+        with (
+            patch.object(catalog.folder_paths, "get_folder_paths", return_value=[str(root) for root in roots]),
+            patch.object(catalog.importlib.util, "find_spec", return_value=object()),
+        ):
+            return catalog.discover_models_with_diagnostics()
+
     def test_single_flat_pair_is_paired_automatically(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -96,6 +103,48 @@ class ModelDiscoveryTests(unittest.TestCase):
             self.assertEqual(len(models), 2)
             self.assertTrue(all(model["runtime_ready"] for model in models))
             self.assertTrue(all(Path(model["projector"]).parent == Path(model["path"]).parent for model in models))
+
+    def test_discovery_reports_actual_roots_and_missing_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            existing = Path(directory)
+            missing = existing / "missing"
+
+            models, diagnostics = self.discover_with_diagnostics([existing, missing])
+
+            self.assertEqual(models, [])
+            self.assertEqual([root["path"] for root in diagnostics["roots"]], [str(existing), str(missing)])
+            self.assertEqual(diagnostics["roots"][0]["issues"], ["No GGUF model or mmproj files were found."])
+            self.assertEqual(diagnostics["roots"][1]["issues"], ["Directory does not exist."])
+
+    def test_discovery_reports_files_and_missing_projector_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_path = root / "gemma-4-test.gguf"
+            model_path.touch()
+
+            models, diagnostics = self.discover_with_diagnostics([root])
+
+            self.assertEqual(len(models), 1)
+            self.assertEqual(diagnostics["roots"][0]["model_files"], [str(model_path.resolve())])
+            self.assertEqual(diagnostics["roots"][0]["projector_files"], [])
+            self.assertIn("no mmproj GGUF", diagnostics["roots"][0]["issues"][0])
+            self.assertEqual(diagnostics["totals"]["incomplete_models"], 1)
+
+    def test_discovery_summary_preserves_ready_pairing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "gemma-4-test.gguf").touch()
+            (root / "mmproj-BF16.gguf").touch()
+
+            models, diagnostics = self.discover_with_diagnostics([root])
+
+            self.assertTrue(models[0]["runtime_ready"])
+            self.assertEqual(diagnostics["totals"], {
+                "models": 1,
+                "projectors": 1,
+                "ready_models": 1,
+                "incomplete_models": 0,
+            })
 
 
 if __name__ == "__main__":

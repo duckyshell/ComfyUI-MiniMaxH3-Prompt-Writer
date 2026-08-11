@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 - 2026-08-11
+
+- Added a browser-compatible UUID fallback for ComfyUI opened through non-secure
+  LAN HTTP origins.
+- Fixed repeated media drop listeners that could upload the same file more than
+  once after UI rerenders.
+- Added exact model scan paths, discovered GGUF/mmproj files, and pairing issues
+  to local model setup details without changing discovery rules.
+- Added a lazy, cached, subprocess-isolated `llama-cpp-python` compatibility
+  check before Direct GGUF generation and refinement.
+- Added actionable details for native probe crashes, invalid CUDA/HIP runtime
+  paths, and unavailable GPU offload without assuming a specific backend.
+
 ## 0.1.0 - 2026-08-09
 
 - First public release of the ComfyUI UI extension.

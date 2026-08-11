@@ -69,17 +69,33 @@ def _display_name(path: Path) -> str:
     return path.stem
 
 
-def discover_models() -> list[dict[str, Any]]:
+def discover_models_with_diagnostics() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+    scanned_roots: list[dict[str, Any]] = []
 
     for root_name in folder_paths.get_folder_paths("LLM"):
         root = Path(root_name)
+        root_diagnostics: dict[str, Any] = {
+            "path": str(root),
+            "exists": root.exists(),
+            "model_files": [],
+            "projector_files": [],
+            "issues": [],
+        }
+        scanned_roots.append(root_diagnostics)
         if not root.exists():
+            root_diagnostics["issues"].append("Directory does not exist.")
             continue
 
         gguf_files = [path for path in root.rglob("*.gguf") if "mmproj" not in path.name.lower()]
         projectors = [path for path in root.rglob("*.gguf") if "mmproj" in path.name.lower()]
+        root_diagnostics["model_files"] = [str(path.resolve()) for path in sorted(gguf_files)]
+        root_diagnostics["projector_files"] = [str(path.resolve()) for path in sorted(projectors)]
+        if not gguf_files and not projectors:
+            root_diagnostics["issues"].append("No GGUF model or mmproj files were found.")
+        elif not gguf_files:
+            root_diagnostics["issues"].append("Vision projector files were found, but no model GGUF was found.")
         for model_path in gguf_files:
             model_id = str(model_path.resolve())
             if model_id in seen:
@@ -97,8 +113,14 @@ def discover_models() -> list[dict[str, Any]]:
             if ambiguous_projector:
                 missing_dependencies.append("unambiguous mmproj GGUF")
                 setup_message = "Multiple models or vision projectors share this folder. Keep each model and its matching projector in a separate subfolder."
+                root_diagnostics["issues"].append(
+                    f"{model_path.parent}: multiple model or mmproj files make pairing ambiguous."
+                )
             elif projector is None:
                 missing_dependencies.append("mmproj GGUF")
+                root_diagnostics["issues"].append(
+                    f"{model_path}: no mmproj GGUF was found in the same folder."
+                )
             capabilities = _gemma_capabilities(name)
             configured = _configured_models().get(model_path.name, {})
             candidates.append(
@@ -121,7 +143,21 @@ def discover_models() -> list[dict[str, Any]]:
                 }
             )
 
-    return sorted(candidates, key=lambda item: item["name"].lower())
+    models = sorted(candidates, key=lambda item: item["name"].lower())
+    diagnostics = {
+        "roots": scanned_roots,
+        "totals": {
+            "models": len(models),
+            "projectors": sum(len(root["projector_files"]) for root in scanned_roots),
+            "ready_models": sum(1 for model in models if model["runtime_ready"]),
+            "incomplete_models": sum(1 for model in models if not model["runtime_ready"]),
+        },
+    }
+    return models, diagnostics
+
+
+def discover_models() -> list[dict[str, Any]]:
+    return discover_models_with_diagnostics()[0]
 
 
 def find_model(model_id: str) -> dict[str, Any] | None:

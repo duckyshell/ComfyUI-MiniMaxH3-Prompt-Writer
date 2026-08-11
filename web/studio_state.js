@@ -47,6 +47,8 @@ export function selectedExternalServer(state) {
 export function selectModelState(state, model) {
   state.selectedModel = model || null;
   state.audioSupported = model?.capabilities?.audio === true;
+  if (model?.family === "external") state.settingsProvider = "external";
+  else if (model?.family === "gguf") state.settingsProvider = "direct";
   if (model?.family === "external") {
     state.keepModelLoaded = false;
     state.modelLoaded = false;
@@ -105,6 +107,8 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     kvCache: "auto",
     thinking: false,
     keepModelLoaded: false,
+    settingsProvider: "direct",
+    settingsPromptProfile: "standard",
     modelLoaded: false,
     requestBusy: false,
     toastTimer: null,

@@ -8,17 +8,14 @@ export function generateModelSummaryMarkup(icon) {
     </button>`;
 }
 
-function systemPromptCard(profile, title, description, icon) {
+function systemPromptPanel(profile, description, icon, hidden = false) {
   return `
-    <section class="h3ps-settings-card h3ps-system-prompt-card" data-system-prompt-card="${profile}">
-      <header>
-        <span><small>System Prompt</small><strong>${title}</strong></span>
-        <span><em data-system-prompt-status="${profile}">Default</em>${icon("check", 13)}</span>
-      </header>
+    <div class="h3ps-system-prompt-panel" data-system-prompt-panel="${profile}" ${hidden ? "hidden" : ""}>
+      <span class="h3ps-system-prompt-panel-status"><em data-system-prompt-status="${profile}">Default</em>${icon("check", 13)}</span>
       <p>${description} Official MiniMax guides are applied separately and are not modified.</p>
       <textarea data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
       <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden>Reset to default</button></footer>
-    </section>`;
+    </div>`;
 }
 
 export function settingsMarkup(icon) {
@@ -30,25 +27,48 @@ export function settingsMarkup(icon) {
       </header>
 
       <div class="h3ps-settings-content">
-        <section class="h3ps-settings-card h3ps-inference-settings">
-          <header><span><small>Inference</small><strong>Provider and model</strong></span><button type="button" data-model-refresh>${icon("refresh", 13)} Refresh</button></header>
-          <div class="h3ps-model-picker" data-model-picker>
-            <div class="h3ps-model-row">
+        <section class="h3ps-settings-card h3ps-provider-settings">
+          <header><span><small>Inference</small><strong>Provider</strong></span></header>
+          <div class="h3ps-provider-selector" role="tablist" aria-label="Inference provider">
+            <button type="button" role="tab" data-provider-option="direct" aria-selected="true">
+              <span class="h3ps-provider-icon">G</span><span><strong>Direct GGUF</strong><small>Models installed in ComfyUI</small></span>${icon("check", 14)}
+            </button>
+            <button type="button" role="tab" data-provider-option="external" aria-selected="false">
+              <span class="h3ps-provider-icon">S</span><span><strong>External llama.cpp</strong><small>Existing local llama-server</small></span>${icon("check", 14)}
+            </button>
+          </div>
+        </section>
+
+        <section class="h3ps-settings-card h3ps-provider-detail" data-provider-detail>
+          <div class="h3ps-provider-panel" data-provider-panel="direct">
+            <header class="h3ps-settings-section-heading">
+              <span><small>Model</small><strong>Installed model</strong></span>
+              <button type="button" data-model-refresh>${icon("refresh", 13)} Refresh</button>
+            </header>
+            <div class="h3ps-installed-model-control">
               <span class="h3ps-model-icon">G</span>
-              <span><small data-model-source-label>Local model</small><strong data-selected-model>Scanning models…</strong></span>
+              <label><span>Model used for Direct GGUF</span><select data-installed-model aria-label="Installed model"><option>Scanning models…</option></select></label>
               <span class="h3ps-model-lifecycle" data-model-lifecycle hidden><em data-model-lifecycle-label>Model loaded</em></span>
-              <button class="h3ps-icon-button" type="button" title="Model options" data-model-toggle>${icon("chevron", 16)}</button>
             </div>
-            <div class="h3ps-model-menu" data-model-menu hidden>
-              <header><span><strong>Prompt models</strong><small>Local GGUF or an existing llama.cpp server</small></span></header>
-              <div class="h3ps-model-options"><div class="h3ps-model-empty">Scanning models…</div></div>
-              <footer>
-                <span>${icon("image", 12)} Images <b data-model-capability="images">No</b></span>
-                <span>${icon("video", 12)} Video frames <b data-model-capability="video_frames">No</b></span>
-                <span>${icon("audio", 12)} Audio <b data-model-capability="audio">Not analyzed</b></span>
-                <span data-developer-mode hidden>Dev log <b>On</b></span>
-              </footer>
+            <p class="h3ps-installed-model-source" data-model-source-label>Local GGUF · llama-cpp-python</p>
+            <div data-direct-model-status></div>
+            <div class="h3ps-model-utilities">
+              <div data-model-scan-slot></div>
+              <div data-verified-models-slot></div>
             </div>
+          </div>
+
+          <div class="h3ps-provider-panel" data-provider-panel="external" hidden>
+            <header class="h3ps-settings-section-heading"><span><small>Connection</small><strong>External llama.cpp server</strong></span></header>
+            <div data-external-provider-control></div>
+          </div>
+
+          <div class="h3ps-model-capabilities" data-model-capabilities>
+            <small>Capabilities</small>
+            <span>${icon("image", 12)} Images <b data-model-capability="images">No</b></span>
+            <span>${icon("video", 12)} Video frames <b data-model-capability="video_frames">No</b></span>
+            <span>${icon("audio", 12)} Audio <b data-model-capability="audio">Not analyzed</b></span>
+            <span data-developer-mode hidden>Dev log <b>On</b></span>
           </div>
         </section>
 
@@ -61,10 +81,15 @@ export function settingsMarkup(icon) {
           <p data-runtime-management>Direct GGUF runtime settings are applied to the next request.</p>
         </section>
 
-        <div class="h3ps-system-prompts-grid">
-          ${systemPromptCard("standard", "Standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
-          ${systemPromptCard("reference", "Reference", "Instructions used by Reference mode.", icon)}
-        </div>
+        <section class="h3ps-settings-card h3ps-system-prompt-card">
+          <header><span><small>Generation behavior</small><strong>System Prompt</strong></span></header>
+          <div class="h3ps-system-prompt-profiles" role="tablist" aria-label="System Prompt profile">
+            <button type="button" role="tab" data-system-prompt-profile="standard" aria-selected="true">Standard<small>T2VA · I2VA · FL2VA · L2VA</small></button>
+            <button type="button" role="tab" data-system-prompt-profile="reference" aria-selected="false">Reference<small>Reference mode</small></button>
+          </div>
+          ${systemPromptPanel("standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
+          ${systemPromptPanel("reference", "Instructions used by Reference mode.", icon, true)}
+        </section>
       </div>
     </section>`;
 }

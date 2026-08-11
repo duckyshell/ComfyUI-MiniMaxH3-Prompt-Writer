@@ -125,9 +125,9 @@ function newGenerationSeed() {
 }
 
 function resizeSystemPromptEditor(textarea) {
-  if (!textarea || !textarea.offsetParent) return;
-  textarea.style.height = "auto";
-  textarea.style.height = `${Math.max(108, textarea.scrollHeight + 2)}px`;
+  if (!textarea) return;
+  textarea.style.height = "";
+  textarea.style.overflowY = "auto";
 }
 
 async function syncSystemPromptEditor(profile) {
@@ -160,6 +160,20 @@ async function syncSystemPromptEditor(profile) {
 
 function syncSystemPromptEditors() {
   return Promise.all([syncSystemPromptEditor("standard"), syncSystemPromptEditor("reference")]);
+}
+
+function setSystemPromptProfile(profile) {
+  if (!studio) return;
+  studio.settingsPromptProfile = profile === "reference" ? "reference" : "standard";
+  studio.root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => {
+    const selected = button.dataset.systemPromptProfile === studio.settingsPromptProfile;
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-selected", String(selected));
+  });
+  studio.root.querySelectorAll("[data-system-prompt-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.systemPromptPanel !== studio.settingsPromptProfile;
+  });
+  syncSystemPromptEditor(studio.settingsPromptProfile);
 }
 
 function renderPromptHighlights() {
@@ -837,13 +851,11 @@ function renderModelScanDetails() {
 function renderModelSetup() {
   const directory = studio.modelDirectory || "ComfyUI/models/LLM/";
   return `
-    <div class="h3ps-model-setup">
+    <div class="h3ps-model-setup h3ps-direct-model-empty">
       <strong>No compatible local model found</strong>
       <p>Open the two verified Hugging Face pages, download both files, then place them in:</p>
       <button type="button" class="h3ps-model-path" data-copy-model-path><code>${escapeHtml(directory)}</code>${icon("copy", 13)}</button>
       <p>Using multiple models? Keep each model and its matching vision projector together in a separate subfolder.</p>
-      ${renderModelScanDetails()}
-      <div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>
     </div>`;
 }
 
@@ -857,9 +869,15 @@ function localRuntimeLabel() {
 
 function syncSelectedModelSourceLabel() {
   if (!studio) return;
-  const source = studio.selectedModel?.family === "external" ? "External server" : studio.selectedModel ? localRuntimeLabel() : "No prompt model";
-  studio.root.querySelector("[data-model-source-label]").textContent = source;
-  studio.root.querySelector("[data-active-model-source]").textContent = source;
+  const localModel = studio.selectedModel?.family === "gguf"
+    ? studio.selectedModel
+    : studio.models.find((model) => model.family === "gguf" && model.runtime_ready) || studio.models.find((model) => model.family === "gguf");
+  studio.root.querySelector("[data-model-source-label]").textContent = localModel ? localRuntimeLabel() : "No compatible Direct GGUF model";
+  studio.root.querySelector("[data-active-model-source]").textContent = studio.selectedModel?.family === "external"
+    ? "External server"
+    : studio.selectedModel
+      ? localRuntimeLabel()
+      : "No prompt model";
 }
 
 function syncActiveModelSummary(runtimeSummary = null) {
@@ -881,7 +899,7 @@ async function inspectDirectRuntime() {
       showToast("Runtime could not be inspected", "The isolated compatibility check was unavailable. Generation will continue with the existing runtime behavior.", error.details || error.message);
       return true;
     }
-    renderModelMenu();
+    renderInferenceSettings();
     syncSelectedModelSourceLabel();
   }
 
@@ -909,7 +927,7 @@ async function inspectDirectRuntime() {
 function renderOtherModelsTrigger() {
   return `
     <button class="h3ps-other-models-trigger" type="button" data-other-models-toggle aria-expanded="false">
-      <span><strong>Browse other models</strong><small>Verified model and projector pairs</small></span>${icon("chevron", 14)}
+      <span><strong>Browse verified models</strong><small>Model and projector download pairs</small></span>${icon("chevron", 14)}
     </button>`;
 }
 
@@ -917,30 +935,26 @@ function renderExternalServerControl() {
   const connected = studio.externalModel;
   const config = studio.externalServerConfig || { url: "http://127.0.0.1:8080", model: "" };
   const title = connected ? connected.name.split("/").pop() : "External llama.cpp server";
-  const selected = connected && connected.id === studio.selectedModel?.id;
+  const contextLabel = Number.isFinite(connected?.server_context_tokens)
+    ? ` · ${Math.round(connected.server_context_tokens / 1024)}K context`
+    : "";
   const state = connected
-    ? `External llama.cpp · ${connected.endpoint}`
+    ? `${connected.endpoint}${contextLabel}`
     : studio.externalServerError
       ? "Saved server is offline"
-      : "Use a model already running in llama.cpp";
+      : "Connect to a model already running in llama-server";
   return `
-    <div class="h3ps-external-server ${connected ? "is-connected" : ""} ${selected ? "is-selected" : ""}">
-      <div class="h3ps-external-server-row">
-        <button type="button" class="h3ps-external-server-select" data-external-server-select>
-          <span class="h3ps-model-option-icon">S</span>
-          <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(state)}</small></span>
-          ${connected ? "<em>API</em>" : ""}
-          ${icon("check", 15)}
-        </button>
-        <button type="button" class="h3ps-external-server-toggle" data-external-server-toggle aria-label="${connected ? "Server settings" : "Connect external server"}" aria-expanded="false">
-          ${icon("chevron", 14)}
-        </button>
+    <div class="h3ps-external-connection ${connected ? "is-connected" : ""}">
+      <div class="h3ps-external-connection-status">
+        <span class="h3ps-provider-icon">S</span>
+        <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(state)}</small></span>
+        <em>${connected ? "Connected" : studio.externalServerError ? "Offline" : "Not connected"}</em>
       </div>
-      <form data-external-server-form hidden>
+      <form data-external-server-form>
         <label><span>Server URL</span><input name="url" type="url" value="${escapeHtml(config.url)}" placeholder="http://127.0.0.1:8080" required></label>
         <label><span>Model ID <em>optional</em></span><input name="model" type="text" value="${escapeHtml(config.model)}" placeholder="Use the first loaded model"></label>
         <small>Localhost only. Context, KV cache and model loading stay under server control.</small>
-        <div><button type="button" data-external-server-disconnect ${connected || studio.externalServerConfig ? "" : "hidden"}>Disconnect</button><span></span><button type="submit">Connect</button></div>
+        <div><button type="button" data-external-server-disconnect ${connected || studio.externalServerConfig ? "" : "hidden"}>Disconnect</button><span></span><button type="submit">${connected ? "Reconnect" : "Connect"}</button></div>
       </form>
     </div>`;
 }
@@ -958,74 +972,123 @@ function setOtherModelsPopover(open) {
 function positionOtherModelsPopover() {
   const popover = studio?.root.querySelector("[data-other-models-popover]");
   const trigger = studio?.root.querySelector("[data-other-models-toggle]");
-  const picker = studio?.root.querySelector("[data-model-picker]");
-  if (!popover || popover.hidden || !trigger || !picker) return;
+  const panel = studio?.root.querySelector('[data-provider-panel="direct"]');
+  if (!popover || popover.hidden || !trigger || !panel) return;
   const margin = 12;
   const gap = 8;
-  const pickerRect = picker.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
   const triggerRect = trigger.getBoundingClientRect();
-  const width = Math.min(pickerRect.width, window.innerWidth - margin * 2);
+  const width = Math.min(panelRect.width, 560, window.innerWidth - margin * 2);
   popover.style.width = `${width}px`;
   const maxHeight = Math.min(window.innerHeight * 0.62, 520, window.innerHeight - margin * 2);
   const height = Math.min(popover.scrollHeight, maxHeight);
-  let left = pickerRect.right + gap;
-  if (left + width > window.innerWidth - margin) left = pickerRect.left - width - gap;
+  let left = triggerRect.right + gap;
+  if (left + width > window.innerWidth - margin) left = triggerRect.left - width - gap;
   left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
   const top = Math.max(margin, Math.min(triggerRect.top, window.innerHeight - height - margin));
   popover.style.left = `${left}px`;
   popover.style.top = `${top}px`;
 }
 
-function renderModelMenu() {
-  const options = studio.root.querySelector(".h3ps-model-options");
-  if (!studio.models.length) {
-    setOtherModelsPopover(false);
-    options.innerHTML = `${renderExternalServerControl()}${renderModelSetup()}`;
-    return;
-  }
-  const modelOptions = studio.models.filter((model) => model.family !== "external").map((model) => `
-    <button class="h3ps-model-option ${model.id === studio.selectedModel?.id ? "is-selected" : ""} ${model.runtime_ready ? "" : "is-incomplete"}" type="button" data-model-id="${escapeHtml(model.id)}">
-      <span class="h3ps-model-option-icon">${model.family === "external" ? "S" : "G"}</span>
-      <span><strong>${escapeHtml(model.name.split("/").pop())}</strong><small>${model.family === "external" ? escapeHtml(model.source_label) : model.runtime_ready ? escapeHtml(localRuntimeLabel()) : escapeHtml(model.setup_message || `Missing ${model.missing_dependencies.join(", ")}`)}</small></span>
-      <span class="h3ps-model-tags">${modelVramLabel(model) ? `<em>${modelVramLabel(model)}</em>` : ""}${model.format ? `<em>${escapeHtml(model.format)}</em>` : ""}</span>
-      ${icon("check", 15)}
-    </button>`).join("");
-  const readyLocal = studio.models.some((model) => model.family !== "external" && model.runtime_ready);
-  options.innerHTML = `${modelOptions}${renderExternalServerControl()}${readyLocal || studio.externalModel ? `${renderModelScanDetails()}${renderOtherModelsTrigger()}` : renderModelSetup()}`;
-  const catalog = studio.root.querySelector("[data-other-models-catalog]");
-  catalog.innerHTML = `<div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>`;
+function localModels() {
+  return studio.models.filter((model) => model.family === "gguf");
 }
 
-function selectModel(model) {
-  selectModelState(studio, model);
-  const external = model?.family === "external";
-  const name = model ? model.name.split("/").pop() : "No compatible local model";
-  const label = studio.root.querySelector("[data-selected-model]");
-  label.innerHTML = `${escapeHtml(name)}${model?.format ? ` <em>${escapeHtml(model.format)}</em>` : ""}`;
-  syncSelectedModelSourceLabel();
-  studio.root.querySelector(".h3ps-model-icon").textContent = external ? "S" : "G";
-  const keepLoaded = studio.root.querySelector("[data-keep-loaded]");
-  const keepLoadedControl = studio.root.querySelector("[data-keep-loaded-control]");
-  keepLoadedControl.hidden = external;
-  keepLoaded.checked = studio.keepModelLoaded;
-  const runtimeSettings = studio.root.querySelector(".h3ps-runtime-settings");
-  runtimeSettings.classList.toggle("is-server-managed", external);
-  runtimeSettings.querySelectorAll("[data-runtime-toggle]").forEach((button) => { button.disabled = external; });
-  runtimeSettings.querySelector("[data-runtime-management]").textContent = external
-    ? "Context, KV cache and model loading are managed by the external llama.cpp server."
-    : "Direct GGUF runtime settings are applied to the next request.";
+function directModelForSettings() {
+  const models = localModels();
+  if (studio.selectedModel?.family === "gguf") {
+    return models.find((model) => model.id === studio.selectedModel.id) || studio.selectedModel;
+  }
+  return models.find((model) => model.runtime_ready) || models[0] || null;
+}
+
+function updateCapabilityBadges(model) {
   for (const capability of ["images", "video_frames", "audio"]) {
     const value = model?.capabilities?.[capability] === true;
     const target = studio.root.querySelector(`[data-model-capability="${capability}"]`);
     target.textContent = capability === "audio" ? "Not analyzed" : value ? "Yes" : "No";
     target.classList.toggle("is-off", capability !== "audio" && !value);
   }
-  renderModelMenu();
+}
+
+function syncProviderSettings() {
+  const provider = studio.settingsProvider === "external" ? "external" : "direct";
+  studio.root.querySelectorAll("[data-provider-option]").forEach((button) => {
+    const selected = button.dataset.providerOption === provider;
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-selected", String(selected));
+  });
+  studio.root.querySelectorAll("[data-provider-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.providerPanel !== provider;
+  });
+  const capabilityModel = provider === "external" ? studio.externalModel : directModelForSettings();
+  updateCapabilityBadges(capabilityModel);
+  const runtimeSettings = studio.root.querySelector(".h3ps-runtime-settings");
+  const serverManaged = provider === "external";
+  runtimeSettings.classList.toggle("is-server-managed", serverManaged);
+  runtimeSettings.querySelectorAll("[data-runtime-toggle]").forEach((button) => { button.disabled = serverManaged; });
+  runtimeSettings.querySelector("[data-runtime-management]").textContent = serverManaged
+    ? studio.externalModel
+      ? "Context, KV cache and model loading are managed by the external llama.cpp server."
+      : "Connect the external llama.cpp server to inspect its managed context."
+    : "Direct GGUF runtime settings are applied to the next request.";
+}
+
+function renderInferenceSettings() {
+  const models = localModels();
+  const directModel = directModelForSettings();
+  const select = studio.root.querySelector("[data-installed-model]");
+  select.disabled = !models.length;
+  select.innerHTML = models.length
+    ? models.map((model) => {
+      const suffix = [modelVramLabel(model), model.format, model.runtime_ready ? "" : "Needs setup"].filter(Boolean).join(" · ");
+      return `<option value="${escapeHtml(model.id)}" ${model.id === directModel?.id ? "selected" : ""}>${escapeHtml(model.name.split("/").pop())}${suffix ? ` — ${escapeHtml(suffix)}` : ""}</option>`;
+    }).join("")
+    : "<option>No compatible model found</option>";
+  const directStatus = studio.root.querySelector("[data-direct-model-status]");
+  if (!models.length) {
+    directStatus.innerHTML = renderModelSetup();
+  } else if (directModel && !directModel.runtime_ready) {
+    directStatus.innerHTML = `<div class="h3ps-direct-model-warning"><strong>Model needs attention</strong><span>${escapeHtml(directModel.setup_message || `Missing ${directModel.missing_dependencies?.join(", ") || "required files"}`)}</span></div>`;
+  } else {
+    directStatus.innerHTML = "";
+  }
+  studio.root.querySelector("[data-model-scan-slot]").innerHTML = renderModelScanDetails();
+  studio.root.querySelector("[data-verified-models-slot]").innerHTML = studio.modelSetup.length ? renderOtherModelsTrigger() : "";
+  studio.root.querySelector("[data-external-provider-control]").innerHTML = renderExternalServerControl();
+  const catalog = studio.root.querySelector("[data-other-models-catalog]");
+  catalog.innerHTML = `<div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>`;
+  syncSelectedModelSourceLabel();
+  syncProviderSettings();
+}
+
+function selectSettingsProvider(provider) {
+  setOtherModelsPopover(false);
+  studio.settingsProvider = provider === "external" ? "external" : "direct";
+  if (studio.settingsProvider === "external" && studio.externalModel) {
+    selectModel(studio.externalModel);
+    return;
+  }
+  if (studio.settingsProvider === "direct") {
+    const model = directModelForSettings();
+    if (model && studio.selectedModel?.id !== model.id) {
+      selectModel(model);
+      return;
+    }
+  }
+  renderInferenceSettings();
+  syncRuntimeSummary();
+}
+
+function selectModel(model) {
+  selectModelState(studio, model);
+  const external = model?.family === "external";
+  const keepLoaded = studio.root.querySelector("[data-keep-loaded]");
+  const keepLoadedControl = studio.root.querySelector("[data-keep-loaded-control]");
+  keepLoadedControl.hidden = external;
+  keepLoaded.checked = studio.keepModelLoaded;
+  renderInferenceSettings();
   renderMedia(studio.mode);
-  const picker = studio.root.querySelector("[data-model-picker]");
-  const menu = studio.root.querySelector("[data-model-menu]");
-  menu.hidden = true;
-  picker.classList.remove("is-open");
   setOtherModelsPopover(false);
   syncRuntimeSummary();
   syncThinkingAvailability();
@@ -1055,17 +1118,24 @@ function syncRuntimeSummary(result = null) {
   studio.root.querySelector('[data-runtime-label="context"]').textContent = CONTEXT_LABELS[studio.contextProfile];
   studio.root.querySelector('[data-runtime-label="kv"]').textContent = KV_LABELS[studio.kvCache];
   const summary = studio.root.querySelector("[data-runtime-summary]");
-  let summaryText;
+  let activeSummary;
   if (studio.selectedModel?.family === "external") {
     const tokens = result?.context_tokens || studio.selectedModel.server_context_tokens;
-    summaryText = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Managed by server";
+    activeSummary = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Managed by server";
   } else if (result && studio.contextProfile === "auto") {
-    summaryText = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
+    activeSummary = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
   } else {
-    summaryText = studio.contextProfile === "auto" ? "Auto" : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
+    activeSummary = studio.contextProfile === "auto" ? "Auto" : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
   }
-  summary.textContent = summaryText;
-  syncActiveModelSummary(summaryText);
+  const settingsSummary = studio.settingsProvider === "external"
+    ? studio.externalModel?.server_context_tokens
+      ? `Server · ${Math.round(studio.externalModel.server_context_tokens / 1024)}K`
+      : "Connect server"
+    : studio.contextProfile === "auto"
+      ? "Auto"
+      : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
+  summary.textContent = settingsSummary;
+  syncActiveModelSummary(activeSummary);
   studio.root.querySelectorAll("[data-runtime-option]").forEach((button) => {
     const selected = button.dataset.runtimeOption === "context" ? studio.contextProfile : studio.kvCache;
     button.classList.toggle("is-selected", button.dataset.value === selected);
@@ -1075,17 +1145,17 @@ function syncRuntimeSummary(result = null) {
 function setSettingsOpen(open) {
   if (!studio) return;
   setOtherModelsPopover(false);
+  if (!open) studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : "direct";
   studio.root.querySelector("[data-settings-view]").hidden = !open;
   studio.root.querySelectorAll("[data-generate-view]").forEach((element) => { element.hidden = open; });
   studio.root.querySelector("[data-open-settings-header]").hidden = open;
   studio.root.classList.toggle("is-settings-open", open);
   if (open) {
-    renderModelMenu();
+    studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : "direct";
+    renderInferenceSettings();
     syncRuntimeSummary();
     syncSystemPromptEditors();
-    requestAnimationFrame(() => {
-      studio.root.querySelectorAll("[data-system-prompt]").forEach(resizeSystemPromptEditor);
-    });
+    setSystemPromptProfile(studio.settingsPromptProfile);
   }
 }
 
@@ -1110,7 +1180,7 @@ async function connectExternalServer(form) {
   } catch (error) {
     studio.externalServerError = error;
     showToast(error.code || "Connection failed", error.message, error.details);
-    renderModelMenu();
+    renderInferenceSettings();
   } finally {
     submit.disabled = false;
     submit.textContent = "Connect";
@@ -1125,7 +1195,9 @@ function disconnectExternalServer() {
   saveExternalServerConfig(localStorage, null);
   studio.models = studio.models.filter((model) => model.family !== "external");
   if (wasSelected) selectModel(studio.models.find((model) => model.runtime_ready) || studio.models[0] || null);
-  else renderModelMenu();
+  studio.settingsProvider = "external";
+  renderInferenceSettings();
+  syncRuntimeSummary();
   showToast("External server disconnected", "The llama.cpp process was left running and unchanged.");
 }
 
@@ -1153,12 +1225,6 @@ async function refreshModels() {
     const developerMode = studio.root.querySelector("[data-developer-mode]");
     developerMode.hidden = !status.developer_mode;
     selectModel(studio.models.find((model) => model.id === selectedId) || studio.models.find((model) => model.runtime_ready) || studio.models[0] || null);
-    const needsSetup = !studio.models.some((model) => model.runtime_ready);
-    const picker = studio.root.querySelector("[data-model-picker]");
-    const menu = studio.root.querySelector("[data-model-menu]");
-    picker.classList.toggle("needs-setup", needsSetup);
-    picker.classList.toggle("is-open", needsSetup);
-    menu.hidden = !needsSetup;
     setGenerationState("idle", "", "");
   } catch (error) {
     showToast(error.code || "Model scan failed", error.message, error.details);
@@ -1377,11 +1443,6 @@ function createStudio() {
     if (!event.target.closest("[data-asset-menu], [data-asset-menu-toggle]")) {
       root.querySelectorAll("[data-asset-menu]").forEach((menu) => { menu.hidden = true; });
     }
-    const modelMenuFocused = root.querySelector("[data-model-menu]").contains(document.activeElement);
-    if (!event.target.closest("[data-model-picker], [data-other-models-popover]") && !modelMenuFocused) {
-      root.querySelector("[data-model-menu]").hidden = true;
-      root.querySelector("[data-model-picker]").classList.remove("is-open");
-    }
     if (!event.target.closest("[data-other-models-toggle], [data-other-models-popover]")) setOtherModelsPopover(false);
     if (!event.target.closest(".h3ps-runtime-settings")) {
       root.querySelectorAll("[data-runtime-menu]").forEach((menu) => { menu.hidden = true; });
@@ -1450,6 +1511,9 @@ function createStudio() {
     syncThinkingAvailability();
   }));
   syncRuntimeSummary();
+  root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => button.addEventListener("click", () => {
+    setSystemPromptProfile(button.dataset.systemPromptProfile);
+  }));
   root.querySelectorAll("[data-system-prompt]").forEach((textarea) => textarea.addEventListener("input", () => {
     const profile = textarea.dataset.systemPrompt;
     const defaultPrompt = studio.systemPromptDefaults[profile] || "";
@@ -1496,40 +1560,18 @@ function createStudio() {
     root.querySelector("[data-aspect-description]").textContent = option[1];
     root.querySelector('[data-choice-menu="aspect"]').hidden = true;
   }));
-  root.querySelector("[data-model-toggle]").addEventListener("click", () => {
-    const picker = root.querySelector("[data-model-picker]");
-    const menu = root.querySelector("[data-model-menu]");
-    const open = menu.hidden;
-    menu.hidden = !open;
-    picker.classList.toggle("is-open", open);
-    if (!open) setOtherModelsPopover(false);
-  });
+  root.querySelectorAll("[data-provider-option]").forEach((button) => button.addEventListener("click", () => {
+    selectSettingsProvider(button.dataset.providerOption);
+  }));
   root.querySelector("[data-model-refresh]").addEventListener("click", async () => {
     await refreshModels();
-    showToast("Models refreshed", `${studio.models.length} supported local model${studio.models.length === 1 ? "" : "s"} found.`);
+    const count = localModels().length;
+    showToast("Models refreshed", `${count} supported local model${count === 1 ? "" : "s"} found.`);
   });
-  root.querySelector(".h3ps-model-options").addEventListener("click", (event) => {
-    const externalSelect = event.target.closest("[data-external-server-select]");
-    if (externalSelect) {
-      if (studio.externalModel) {
-        selectModel(studio.externalModel);
-      } else {
-        const server = externalSelect.closest(".h3ps-external-server");
-        const form = server.querySelector("[data-external-server-form]");
-        form.hidden = !form.hidden;
-        server.classList.toggle("is-open", !form.hidden);
-        server.querySelector("[data-external-server-toggle]").setAttribute("aria-expanded", String(!form.hidden));
-      }
-      return;
-    }
-    const externalToggle = event.target.closest("[data-external-server-toggle]");
-    if (externalToggle) {
-      const form = externalToggle.closest(".h3ps-external-server").querySelector("[data-external-server-form]");
-      form.hidden = !form.hidden;
-      externalToggle.closest(".h3ps-external-server").classList.toggle("is-open", !form.hidden);
-      externalToggle.setAttribute("aria-expanded", String(!form.hidden));
-      return;
-    }
+  root.querySelector("[data-installed-model]").addEventListener("change", (event) => {
+    selectModel(localModels().find((model) => model.id === event.target.value));
+  });
+  root.querySelector("[data-provider-detail]").addEventListener("click", (event) => {
     const externalDisconnect = event.target.closest("[data-external-server-disconnect]");
     if (externalDisconnect) {
       disconnectExternalServer();
@@ -1554,14 +1596,8 @@ function createStudio() {
       showToast("Model path copied", studio.modelDirectory || "ComfyUI/models/LLM/");
       return;
     }
-    const button = event.target.closest("[data-model-id]");
-    if (button) {
-      selectModel(studio.models.find((model) => model.id === button.dataset.modelId));
-      root.querySelector("[data-model-menu]").hidden = true;
-      root.querySelector("[data-model-picker]").classList.remove("is-open");
-    }
   });
-  root.querySelector(".h3ps-model-options").addEventListener("submit", (event) => {
+  root.querySelector("[data-provider-detail]").addEventListener("submit", (event) => {
     const form = event.target.closest("[data-external-server-form]");
     if (!form) return;
     event.preventDefault();

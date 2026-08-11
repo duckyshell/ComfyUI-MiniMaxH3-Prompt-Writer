@@ -100,9 +100,15 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(state.keepModelLoaded, false);
   assert.equal(state.modelLoaded, false);
   assert.equal(state.audioSupported, false);
+  assert.equal(state.settingsProvider, "external");
+  assert.equal(state.settingsPromptProfile, "standard");
   assert.equal(systemPromptProfile("Reference"), "reference");
   assert.equal(systemPromptProfile("T2VA"), "standard");
   assert.equal(currentSystemPromptOverride(state, "Reference"), "Custom reference");
+
+  selectModelState(state, { id: "direct-model", family: "gguf", capabilities: { audio: true } });
+  assert.equal(state.settingsProvider, "direct");
+  assert.equal(state.audioSupported, true);
 });
 
 test("Generate and Refine payloads are built from state rather than Settings DOM", () => {
@@ -149,10 +155,29 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   });
 });
 
-test("Settings owns inference/runtime/prompts while Generate keeps operational lifecycle controls", () => {
+test("Settings separates providers, installed models, diagnostics, and verified models", () => {
   const markup = settingsMarkup(() => "<svg></svg>");
-  assert.match(markup, /Provider and model/);
+  assert.match(markup, /data-provider-option="direct"/);
+  assert.match(markup, /data-provider-option="external"/);
+  assert.match(markup, /data-provider-panel="direct"/);
+  assert.match(markup, /data-provider-panel="external"/);
+  assert.match(markup, /data-installed-model/);
+  assert.match(markup, /data-model-refresh/);
+  assert.match(markup, /data-model-scan-slot/);
+  assert.match(markup, /data-verified-models-slot/);
+  assert.match(markup, /data-model-capabilities/);
+  assert.doesNotMatch(markup, /Prompt models/);
+  assert.doesNotMatch(markup, /data-model-menu/);
   assert.match(markup, /Context and KV cache/);
+});
+
+test("Settings shows one switchable System Prompt editor and Generate keeps lifecycle controls", () => {
+  const markup = settingsMarkup(() => "<svg></svg>");
+  assert.equal((markup.match(/h3ps-system-prompt-card/g) || []).length, 1);
+  assert.match(markup, /data-system-prompt-profile="standard"/);
+  assert.match(markup, /data-system-prompt-profile="reference"/);
+  assert.match(markup, /data-system-prompt-panel="standard"/);
+  assert.match(markup, /data-system-prompt-panel="reference"[^>]*hidden/);
   assert.match(markup, /data-system-prompt="standard"/);
   assert.match(markup, /data-system-prompt="reference"/);
   assert.doesNotMatch(markup, /data-keep-loaded/);

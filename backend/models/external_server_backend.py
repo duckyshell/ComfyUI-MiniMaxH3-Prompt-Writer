@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import socket
 import threading
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -229,15 +228,10 @@ class ExternalServerBackend:
                     message or f"The llama.cpp server returned HTTP {response.status}.",
                     {"url": endpoint, "status": response.status, "response": data},
                 )
-            if connection.sock is not None:
-                connection.sock.settimeout(0.25)
             while True:
                 if self.cancel_event.is_set():
                     raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
-                try:
-                    line = response.readline()
-                except socket.timeout:
-                    continue
+                line = response.readline()
                 if not line:
                     break
                 decoded = line.decode("utf-8", errors="replace").strip()

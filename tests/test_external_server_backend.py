@@ -15,6 +15,7 @@ from backend.models.gguf_backend import GGUFBackend
 
 
 class _FakeLlamaHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     last_completion = None
     slow_started = threading.Event()
 
@@ -59,6 +60,24 @@ class _FakeLlamaHandler(BaseHTTPRequestHandler):
                     time.sleep(0.05)
             except OSError:
                 pass
+            return
+        if payload.get("top_k") == 998:
+            delayed_chunks = [
+                {"choices": [{"delta": {"content": "SERVER_"}, "finish_reason": None}]},
+                {"choices": [{"delta": {"content": "OK"}, "finish_reason": "stop"}]},
+                {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 3}},
+            ]
+            delayed_body = "".join(
+                f"data: {json.dumps(chunk)}\n\n" for chunk in delayed_chunks
+            ) + "data: [DONE]\n\n"
+            delayed_encoded = delayed_body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(delayed_encoded)))
+            self.end_headers()
+            self.wfile.flush()
+            time.sleep(0.4)
+            self.wfile.write(delayed_encoded)
             return
         chunks = [
             {"choices": [{"delta": {"content": "SERVER_"}, "finish_reason": None}]},
@@ -195,6 +214,22 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertIsInstance(result.get("error"), ModelError)
         self.assertEqual(result["error"].code, "GENERATION_CANCELLED")
         self.assertEqual(self.backend.probe_model({"url": self.url})["remote_model"], "gemma-test.gguf")
+
+    def test_stream_tolerates_delayed_first_event(self):
+        handler = _RemoteChatHandler(self.backend, self.url, "gemma-test.gguf")
+
+        response = handler(
+            messages=[{"role": "user", "content": "delayed first token"}],
+            temperature=1.0,
+            top_p=0.95,
+            top_k=998,
+            max_tokens=1536,
+            seed=42,
+            enable_thinking=False,
+        )
+
+        self.assertEqual(response["choices"][0]["message"]["content"], "SERVER_OK")
+        self.assertEqual(response["usage"], {"prompt_tokens": 12, "completion_tokens": 3})
 
     def test_external_generation_does_not_import_local_llama_cpp(self):
         model = self.backend.probe_model({"url": self.url})

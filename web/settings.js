@@ -36,6 +36,9 @@ export function settingsMarkup(icon) {
             <button type="button" role="tab" data-provider-option="external" aria-selected="false">
               <span class="h3ps-provider-icon">S</span><span><strong>External llama.cpp</strong><small>Existing local llama-server</small></span>${icon("check", 14)}
             </button>
+            <button type="button" role="tab" data-provider-option="ollama" aria-selected="false">
+              <span class="h3ps-provider-icon">O</span><span><strong>Ollama</strong><small>Simple local model service</small></span>${icon("check", 14)}
+            </button>
           </div>
         </section>
 
@@ -61,6 +64,10 @@ export function settingsMarkup(icon) {
           <div class="h3ps-provider-panel" data-provider-panel="external" hidden>
             <header class="h3ps-settings-section-heading"><span><small>Connection</small><strong>External llama.cpp server</strong></span></header>
             <div data-external-provider-control></div>
+          </div>
+
+          <div class="h3ps-provider-panel" data-provider-panel="ollama" hidden>
+            <div data-ollama-provider-control></div>
           </div>
 
         </section>

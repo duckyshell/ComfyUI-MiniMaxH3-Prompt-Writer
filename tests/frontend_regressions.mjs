@@ -9,6 +9,7 @@ const stateSource = await readFile(new URL("../web/studio_state.js", import.meta
 const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
   EXTERNAL_SERVER_STORAGE_KEY,
+  OLLAMA_MODEL_STORAGE_KEY,
   SYSTEM_PROMPT_STORAGE_KEY,
   buildGeneratePayload,
   buildRefinePayload,
@@ -16,8 +17,10 @@ const {
   currentSystemPromptOverride,
   loadCustomSystemPrompts,
   loadExternalServerConfig,
+  loadOllamaModel,
   saveCustomSystemPrompts,
   saveExternalServerConfig,
+  saveOllamaModel,
   selectModelState,
   systemPromptProfile,
 } = await import(`data:text/javascript;base64,${stateEncoded}`);
@@ -94,16 +97,20 @@ test("settings storage preserves the existing keys and schemas", () => {
   const storage = memoryStorage({
     [EXTERNAL_SERVER_STORAGE_KEY]: JSON.stringify({ url: "http://127.0.0.1:8080", model: "gemma.gguf" }),
     [SYSTEM_PROMPT_STORAGE_KEY]: JSON.stringify({ standard: "Standard custom", reference: "Reference custom" }),
+    [OLLAMA_MODEL_STORAGE_KEY]: "gemma4:12b",
   });
 
   assert.deepEqual(loadExternalServerConfig(storage), { url: "http://127.0.0.1:8080", model: "gemma.gguf" });
   assert.deepEqual(loadCustomSystemPrompts(storage), { standard: "Standard custom", reference: "Reference custom" });
+  assert.equal(loadOllamaModel(storage), "gemma4:12b");
   saveExternalServerConfig(storage, { url: "http://localhost:8081", model: "other.gguf" });
   saveCustomSystemPrompts(storage, { standard: "Updated" });
+  saveOllamaModel(storage, "gemma4:27b");
 
   assert.deepEqual(storage.entries(), {
     [EXTERNAL_SERVER_STORAGE_KEY]: JSON.stringify({ url: "http://localhost:8081", model: "other.gguf" }),
     [SYSTEM_PROMPT_STORAGE_KEY]: JSON.stringify({ standard: "Updated" }),
+    [OLLAMA_MODEL_STORAGE_KEY]: "gemma4:27b",
   });
 });
 
@@ -130,6 +137,10 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   selectModelState(state, { id: "direct-model", family: "gguf", capabilities: { audio: true } });
   assert.equal(state.settingsProvider, "direct");
   assert.equal(state.audioSupported, true);
+
+  selectModelState(state, { id: "ollama::gemma4:12b", family: "ollama", remote_model: "gemma4:12b", capabilities: { audio: false } });
+  assert.equal(state.settingsProvider, "ollama");
+  assert.equal(state.keepModelLoaded, false);
 });
 
 test("Generate and Refine payloads are built from state rather than Settings DOM", () => {
@@ -153,6 +164,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     creative_brief: "A quiet shot.",
     model_id: "external-model",
     external_server: state.externalServerConfig,
+    ollama_model: null,
     thinking: true,
     context_profile: "standard",
     kv_cache: "q8",
@@ -167,6 +179,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     instruction: "Slower",
     model_id: "external-model",
     external_server: state.externalServerConfig,
+    ollama_model: null,
     thinking: true,
     context_profile: "standard",
     kv_cache: "q8",
@@ -174,14 +187,26 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     seed: 99,
     unload_after: true,
   });
+
+  selectModelState(state, {
+    id: "ollama::gemma4:12b",
+    family: "ollama",
+    remote_model: "gemma4:12b",
+    capabilities: { audio: false },
+  });
+  const ollamaPayload = buildGeneratePayload(state, { creativeBrief: "A quiet shot.", seed: 3407 });
+  assert.equal(ollamaPayload.ollama_model, "gemma4:12b");
+  assert.equal(ollamaPayload.external_server, null);
 });
 
 test("Settings separates providers, installed models, diagnostics, and verified models", () => {
   const markup = settingsMarkup(() => "<svg></svg>");
   assert.match(markup, /data-provider-option="direct"/);
   assert.match(markup, /data-provider-option="external"/);
+  assert.match(markup, /data-provider-option="ollama"/);
   assert.match(markup, /data-provider-panel="direct"/);
   assert.match(markup, /data-provider-panel="external"/);
+  assert.match(markup, /data-provider-panel="ollama"/);
   assert.match(markup, /data-installed-model/);
   assert.match(markup, /data-model-refresh/);
   assert.match(markup, /data-model-scan-slot/);
@@ -191,6 +216,9 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.doesNotMatch(markup, /Prompt models/);
   assert.doesNotMatch(markup, /data-model-menu/);
   assert.match(markup, /Context and KV cache/);
+  assert.doesNotMatch(mainSource, /\/api\/pull/);
+  assert.match(mainSource, /Compatible · not yet H3-tested/);
+  assert.match(mainSource, /data-copy-ollama-command/);
 });
 
 test("Settings shows one switchable System Prompt editor and Generate keeps lifecycle controls", () => {

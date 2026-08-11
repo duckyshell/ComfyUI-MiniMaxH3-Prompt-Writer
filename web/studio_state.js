@@ -1,5 +1,16 @@
 export const SYSTEM_PROMPT_STORAGE_KEY = "h3ps-system-prompts-v1";
 export const EXTERNAL_SERVER_STORAGE_KEY = "h3ps-external-llama-server-v1";
+export const OLLAMA_MODEL_STORAGE_KEY = "h3ps-ollama-model-v1";
+
+export function loadOllamaModel(storage = globalThis.localStorage) {
+  const value = storage?.getItem(OLLAMA_MODEL_STORAGE_KEY);
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function saveOllamaModel(storage, modelName) {
+  if (modelName) storage?.setItem(OLLAMA_MODEL_STORAGE_KEY, modelName);
+  else storage?.removeItem(OLLAMA_MODEL_STORAGE_KEY);
+}
 
 export function loadExternalServerConfig(storage = globalThis.localStorage) {
   try {
@@ -44,10 +55,15 @@ export function selectedExternalServer(state) {
   return state.selectedModel?.family === "external" ? state.externalServerConfig : null;
 }
 
+export function selectedOllamaModel(state) {
+  return state.selectedModel?.family === "ollama" ? state.selectedModel.remote_model : null;
+}
+
 export function selectModelState(state, model) {
   state.selectedModel = model || null;
   state.audioSupported = model?.capabilities?.audio === true;
   if (model?.family === "external") state.settingsProvider = "external";
+  else if (model?.family === "ollama") state.settingsProvider = "ollama";
   else if (model?.family === "gguf") state.settingsProvider = "direct";
   if (model?.family === "external") {
     state.keepModelLoaded = false;
@@ -62,6 +78,7 @@ function sharedInferencePayload(state) {
     mode: state.mode,
     model_id: state.selectedModel?.id,
     external_server: selectedExternalServer(state),
+    ollama_model: selectedOllamaModel(state),
     thinking: state.thinking,
     context_profile: state.contextProfile,
     kv_cache: state.kvCache,
@@ -79,6 +96,7 @@ export function buildGeneratePayload(state, { creativeBrief, seed }) {
     creative_brief: creativeBrief,
     model_id: state.selectedModel?.id,
     external_server: selectedExternalServer(state),
+    ollama_model: selectedOllamaModel(state),
     thinking: state.thinking,
     context_profile: state.contextProfile,
     kv_cache: state.kvCache,
@@ -128,6 +146,9 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     externalServerConfig: loadExternalServerConfig(storage),
     externalModel: null,
     externalServerError: null,
+    ollamaStatus: null,
+    ollamaModelName: loadOllamaModel(storage),
+    ollamaError: null,
     ggufRuntimeDiagnostics: null,
     runtimeWarningShown: false,
     refineRestore: null,

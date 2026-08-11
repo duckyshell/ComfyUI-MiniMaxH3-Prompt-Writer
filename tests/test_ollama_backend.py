@@ -6,7 +6,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 from backend.models.contract import ModelError
-from backend.models.ollama_backend import OllamaBackend, _ollama_messages
+from backend.models.ollama_backend import (
+    RECOMMENDED_OLLAMA_MODEL,
+    TESTED_OLLAMA_TAGS,
+    OllamaBackend,
+    _ollama_messages,
+)
 
 
 class _FakeOllamaHandler(BaseHTTPRequestHandler):
@@ -115,10 +120,15 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
 
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, _request, _client_address):
+        return
+
+
 class OllamaBackendTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeOllamaHandler)
+        cls.server = _QuietThreadingHTTPServer(("127.0.0.1", 0), _FakeOllamaHandler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}"
@@ -145,6 +155,10 @@ class OllamaBackendTests(unittest.TestCase):
             "media_inputs": [],
             "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "A quiet scene."},
         }
+
+    def test_beginner_recommendation_is_limited_to_the_live_tested_exact_tag(self):
+        self.assertEqual(RECOMMENDED_OLLAMA_MODEL, "gemma4:12b")
+        self.assertEqual(TESTED_OLLAMA_TAGS, {"gemma4:12b"})
 
     def test_detects_only_local_compatible_models_and_declared_context(self):
         detected = self.backend.detect()
@@ -256,6 +270,20 @@ class OllamaBackendTests(unittest.TestCase):
                 unload_after=False, runtime_plan=plan,
             )
         self.assertFalse(any(path == "/api/generate" for _, path, _ in _FakeOllamaHandler.requests))
+
+    def test_stop_and_unload_overrides_keep_loaded(self):
+        model = self._model()
+        plan = self.backend.preflight(model, self._assembled(), context_profile="auto", kv_cache="auto", thinking=False)
+        self.backend.prepare_request()
+        self.backend.request_unload()
+        with patch("backend.models.ollama_backend.run_h3_pipeline", side_effect=ModelError("GENERATION_CANCELLED", "Generation was cancelled.")):
+            with self.assertRaises(ModelError) as error:
+                self.backend.generate(
+                    model, self._assembled(), "session", thinking=False, seed=1,
+                    unload_after=False, runtime_plan=plan,
+                )
+        self.assertEqual(error.exception.code, "GENERATION_CANCELLED")
+        self.assertTrue(any(path == "/api/generate" and payload["keep_alive"] == 0 for _, path, payload in _FakeOllamaHandler.requests))
 
     def test_cancel_interrupts_native_stream(self):
         result = {}

@@ -1,5 +1,5 @@
 import { app } from "/scripts/app.js";
-import { cancel, clearMedia, diagnoseGGUFRuntime, freeComfyVram, generate, getGuides, getModels, getStatus, getSystemPrompt, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { cancel, clearMedia, diagnoseGGUFRuntime, freeComfyVram, generate, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { createSessionId, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
@@ -8,6 +8,7 @@ import {
   createStudioState,
   saveCustomSystemPrompts,
   saveExternalServerConfig,
+  saveOllamaModel,
   selectModelState,
 } from "./studio_state.js";
 
@@ -883,17 +884,23 @@ function syncSelectedModelSourceLabel() {
   studio.root.querySelector("[data-model-source-label]").textContent = localModel ? localRuntimeLabel() : "No compatible Direct GGUF model";
   studio.root.querySelector("[data-active-model-source]").textContent = studio.selectedModel?.family === "external"
     ? "External server"
-    : studio.selectedModel
-      ? localRuntimeLabel()
-      : "No prompt model";
+    : studio.selectedModel?.family === "ollama"
+      ? "Ollama · local service"
+      : studio.selectedModel
+        ? localRuntimeLabel()
+        : "No prompt model";
 }
 
 function syncActiveModelSummary(runtimeSummary = null) {
   if (!studio) return;
   const model = studio.selectedModel;
-  studio.root.querySelector("[data-active-model-icon]").textContent = model?.family === "external" ? "S" : "G";
+  studio.root.querySelector("[data-active-model-icon]").textContent = model?.family === "external" ? "S" : model?.family === "ollama" ? "O" : "G";
   studio.root.querySelector("[data-active-model-name]").textContent = model ? model.name.split("/").pop() : "No compatible prompt model";
-  studio.root.querySelector("[data-active-model-source]").textContent = model?.family === "external" ? "External server" : model ? localRuntimeLabel() : "Open Settings to configure";
+  studio.root.querySelector("[data-active-model-source]").textContent = model?.family === "external"
+    ? "External server"
+    : model?.family === "ollama"
+      ? "Ollama · local service"
+      : model ? localRuntimeLabel() : "Open Settings to configure";
   if (runtimeSummary != null) studio.root.querySelector("[data-active-runtime-summary]").textContent = runtimeSummary;
 }
 
@@ -967,6 +974,75 @@ function renderExternalServerControl() {
     </div>`;
 }
 
+function ollamaModels() {
+  return Array.isArray(studio.ollamaStatus?.compatible_models) ? studio.ollamaStatus.compatible_models : [];
+}
+
+function ollamaModelForSettings() {
+  const models = ollamaModels();
+  if (studio.selectedModel?.family === "ollama") {
+    return models.find((model) => model.id === studio.selectedModel.id) || studio.selectedModel;
+  }
+  return models.find((model) => model.remote_model === studio.ollamaModelName) || models[0] || null;
+}
+
+function ollamaJourneyMarkup(step) {
+  const steps = [["service", "Ollama"], ["model", "Prompt model"], ["ready", "Ready"]];
+  const current = steps.findIndex(([name]) => name === step);
+  return `<ol class="h3ps-ollama-journey">${steps.map(([name, label], index) => `
+    <li class="${index < current ? "is-complete" : index === current ? "is-current" : ""}"><span>${index + 1}</span><em>${label}</em></li>`).join("")}</ol>`;
+}
+
+function renderOllamaProviderControl() {
+  const status = studio.ollamaStatus;
+  if (!status) {
+    return `<header class="h3ps-settings-section-heading"><span><small>Local service</small><strong>Ollama</strong></span></header>
+      ${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state"><span class="h3ps-spinner"></span><strong>Checking Ollama…</strong><p>Looking for the local service and installed models.</p></div>`;
+  }
+  const refresh = `<button type="button" data-ollama-refresh>${icon("refresh", 13)} Check again</button>`;
+  const header = `<header class="h3ps-settings-section-heading"><span><small>Local service</small><strong>Ollama</strong></span>${refresh}</header>`;
+  if (status.state === "not_installed") {
+    return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state">
+      <span class="h3ps-ollama-state-icon">1</span><strong>Get Ollama</strong>
+      <p>Install the official Ollama app, open it once, then return here.</p>
+      <a class="h3ps-ollama-primary" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Open official download ↗</a>
+    </div>`;
+  }
+  if (status.state === "not_running") {
+    return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state">
+      <span class="h3ps-ollama-state-icon">1</span><strong>Start Ollama</strong>
+      <p>Ollama is installed, but its local service is not responding. Open the Ollama app, then check again.</p>
+      <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Check connection</button>
+    </div>`;
+  }
+  if (status.state === "error") {
+    return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state is-error">
+      <span class="h3ps-ollama-state-icon">!</span><strong>Ollama could not be inspected</strong>
+      <p>${escapeHtml(status.error?.message || "The service returned an unexpected response.")}</p>
+      <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Try again</button>
+    </div>`;
+  }
+  const models = ollamaModels();
+  if (!models.length) {
+    const suggested = status.recommended_model;
+    const command = suggested ? `ollama pull ${suggested}` : null;
+    return `${header}${ollamaJourneyMarkup("model")}<div class="h3ps-ollama-state">
+      <span class="h3ps-ollama-state-icon">2</span><strong>Add a compatible prompt model</strong>
+      <p>Ollama is running, but no locally installed model reports both vision and text generation support.</p>
+      ${command ? `<div class="h3ps-ollama-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-ollama-command="${escapeHtml(command)}">Copy</button></div><small>Run this command in Terminal or PowerShell, then check again.</small>` : `<small>Install a vision-capable model in Ollama, then check again. Tested tags will appear here only after validation.</small>`}
+    </div>`;
+  }
+  const selected = ollamaModelForSettings();
+  const tested = selected?.tested_for_h3 === true;
+  return `${header}${ollamaJourneyMarkup("ready")}<div class="h3ps-ollama-ready">
+    <div class="h3ps-ollama-ready-heading"><span class="h3ps-provider-icon">O</span><span><strong>Ollama is ready</strong><small>Version ${escapeHtml(status.version || "unknown")} · local service</small></span><em>Running</em></div>
+    <label class="h3ps-ollama-model-select"><span>Prompt model</span><select data-ollama-model>${models.map((model) => `<option value="${escapeHtml(model.remote_model)}" ${model.remote_model === selected?.remote_model ? "selected" : ""}>${escapeHtml(model.name)}${model.parameter_size ? ` · ${escapeHtml(model.parameter_size)}` : ""}${model.quantization_level ? ` · ${escapeHtml(model.quantization_level)}` : ""}</option>`).join("")}</select></label>
+    <div class="h3ps-ollama-badges"><span>Vision</span><span>${selected?.thinking_detected ? "Thinking detected" : "Standard generation"}</span><span class="${tested ? "is-tested" : ""}">${tested ? "Tested for H3" : "Compatible · not yet H3-tested"}</span></div>
+    <p>${tested ? "This exact Ollama tag passed the focused H3 Generate and Refine smoke test." : "Compatibility comes from Ollama model metadata. It is not a quality guarantee for H3 prompts."}</p>
+    <small>Use “Keep model loaded” on the Generate page to control whether Ollama retains this model after each request.</small>
+  </div>`;
+}
+
 function setOtherModelsPopover(open) {
   if (!studio) return;
   const popover = studio.root.querySelector("[data-other-models-popover]");
@@ -1011,7 +1087,7 @@ function directModelForSettings() {
 }
 
 function syncProviderSettings() {
-  const provider = studio.settingsProvider === "external" ? "external" : "direct";
+  const provider = ["direct", "external", "ollama"].includes(studio.settingsProvider) ? studio.settingsProvider : "direct";
   studio.root.querySelectorAll("[data-provider-option]").forEach((button) => {
     const selected = button.dataset.providerOption === provider;
     button.classList.toggle("is-selected", selected);
@@ -1022,13 +1098,17 @@ function syncProviderSettings() {
   });
   const runtimeSettings = studio.root.querySelector(".h3ps-runtime-settings");
   const serverManaged = provider === "external";
-  runtimeSettings.classList.toggle("is-server-managed", serverManaged);
-  runtimeSettings.querySelectorAll("[data-runtime-toggle]").forEach((button) => { button.disabled = serverManaged; });
+  const ollamaManaged = provider === "ollama";
+  runtimeSettings.classList.toggle("is-server-managed", serverManaged || ollamaManaged);
+  runtimeSettings.querySelector('[data-runtime-toggle="context"]').disabled = serverManaged;
+  runtimeSettings.querySelector('[data-runtime-toggle="kv"]').disabled = serverManaged || ollamaManaged;
   runtimeSettings.querySelector("[data-runtime-management]").textContent = serverManaged
     ? studio.externalModel
       ? "Context, KV cache and model loading are managed by the external llama.cpp server."
       : "Connect the external llama.cpp server to inspect its managed context."
-    : "Direct GGUF runtime settings are applied to the next request.";
+    : ollamaManaged
+      ? "Context is sent explicitly with each request. KV cache is managed by Ollama."
+      : "Direct GGUF runtime settings are applied to the next request.";
 }
 
 function renderInferenceSettings() {
@@ -1053,6 +1133,7 @@ function renderInferenceSettings() {
   studio.root.querySelector("[data-model-scan-slot]").innerHTML = renderModelScanDetails();
   studio.root.querySelector("[data-verified-models-slot]").innerHTML = studio.modelSetup.length ? renderOtherModelsTrigger() : "";
   studio.root.querySelector("[data-external-provider-control]").innerHTML = renderExternalServerControl();
+  studio.root.querySelector("[data-ollama-provider-control]").innerHTML = renderOllamaProviderControl();
   const catalog = studio.root.querySelector("[data-other-models-catalog]");
   catalog.innerHTML = `<div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>`;
   syncSelectedModelSourceLabel();
@@ -1061,13 +1142,21 @@ function renderInferenceSettings() {
 
 function selectSettingsProvider(provider) {
   setOtherModelsPopover(false);
-  studio.settingsProvider = provider === "external" ? "external" : "direct";
+  studio.settingsProvider = ["direct", "external", "ollama"].includes(provider) ? provider : "direct";
   if (studio.settingsProvider === "external" && studio.externalModel) {
     selectModel(studio.externalModel);
     return;
   }
   if (studio.settingsProvider === "direct") {
     const model = directModelForSettings();
+    if (model && studio.selectedModel?.id !== model.id) {
+      selectModel(model);
+      return;
+    }
+  }
+  if (studio.settingsProvider === "ollama") {
+    studio.kvCache = "auto";
+    const model = ollamaModelForSettings();
     if (model && studio.selectedModel?.id !== model.id) {
       selectModel(model);
       return;
@@ -1080,6 +1169,11 @@ function selectSettingsProvider(provider) {
 function selectModel(model) {
   selectModelState(studio, model);
   const external = model?.family === "external";
+  if (model?.family === "ollama") {
+    studio.kvCache = "auto";
+    studio.ollamaModelName = model.remote_model;
+    saveOllamaModel(localStorage, model.remote_model);
+  }
   const keepLoaded = studio.root.querySelector("[data-keep-loaded]");
   const keepLoadedControl = studio.root.querySelector("[data-keep-loaded-control]");
   keepLoadedControl.hidden = external;
@@ -1098,13 +1192,16 @@ function syncThinkingAvailability() {
   const resolved = context === "auto" ? (studio.selectedModel?.recommended_context || "standard") : context;
   const input = studio.root.querySelector("[data-thinking]");
   const label = input.closest("label");
-  const disabled = !external && context !== "auto" && resolved === "low";
+  const unsupported = studio.selectedModel?.family === "ollama" && studio.selectedModel.thinking !== true;
+  const disabled = unsupported || (!external && context !== "auto" && resolved === "low");
   if (disabled) input.checked = false;
   if (disabled) studio.thinking = false;
   input.checked = studio.thinking;
   input.disabled = disabled;
   label.classList.toggle("is-disabled", disabled);
-  label.title = disabled ? "Thinking needs Standard 16K or Extended 24K context." : "";
+  label.title = unsupported
+    ? "This Ollama model does not report thinking support."
+    : disabled ? "Thinking needs Standard 16K or Extended 24K context." : "";
 }
 
 const CONTEXT_LABELS = { auto: "Auto", low: "8K", standard: "16K", extended: "24K" };
@@ -1119,6 +1216,9 @@ function syncRuntimeSummary(result = null) {
   if (studio.selectedModel?.family === "external") {
     const tokens = result?.context_tokens || studio.selectedModel.server_context_tokens;
     activeSummary = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Server managed";
+  } else if (studio.selectedModel?.family === "ollama") {
+    const tokens = result?.context_tokens || (studio.contextProfile === "auto" ? null : ({ low: 8192, standard: 16384, extended: 24576 }[studio.contextProfile]));
+    activeSummary = tokens ? `Ollama · ${Math.round(tokens / 1024)}K` : "Ollama · Auto";
   } else if (result && studio.contextProfile === "auto") {
     activeSummary = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
   } else {
@@ -1128,6 +1228,8 @@ function syncRuntimeSummary(result = null) {
     ? studio.externalModel?.server_context_tokens
       ? `Server · ${Math.round(studio.externalModel.server_context_tokens / 1024)}K`
       : "Connect server"
+    : studio.settingsProvider === "ollama"
+      ? studio.contextProfile === "auto" ? "Ollama · Auto" : `Ollama · ${CONTEXT_LABELS[studio.contextProfile]}`
     : studio.contextProfile === "auto"
       ? "Auto"
       : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
@@ -1142,13 +1244,13 @@ function syncRuntimeSummary(result = null) {
 function setSettingsOpen(open) {
   if (!studio) return;
   setOtherModelsPopover(false);
-  if (!open) studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : "direct";
+  if (!open) studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : "direct";
   studio.root.querySelector("[data-settings-view]").hidden = !open;
   studio.root.querySelectorAll("[data-generate-view]").forEach((element) => { element.hidden = open; });
   studio.root.querySelector("[data-open-settings-header]").hidden = open;
   studio.root.classList.toggle("is-settings-open", open);
   if (open) {
-    studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : "direct";
+    studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : "direct";
     renderInferenceSettings();
     syncRuntimeSummary();
     syncSystemPromptEditors();
@@ -1200,9 +1302,16 @@ function disconnectExternalServer() {
 
 async function refreshModels() {
   try {
-    const [result, status] = await Promise.all([getModels(), getStatus()]);
+    const [result, status, ollamaStatus] = await Promise.all([
+      getModels(),
+      getStatus(),
+      getOllamaStatus().catch((error) => ({ state: "error", running: false, compatible_models: [], error: { code: error.code, message: error.message } })),
+    ]);
     const selectedId = studio.selectedModel?.id;
-    studio.models = result.models;
+    const selectedBeforeRefresh = studio.selectedModel;
+    studio.ollamaStatus = ollamaStatus;
+    studio.ollamaError = ollamaStatus.error || null;
+    studio.models = [...result.models, ...(ollamaStatus.compatible_models || [])];
     studio.externalModel = null;
     studio.externalServerError = null;
     if (studio.externalServerConfig) {
@@ -1219,10 +1328,34 @@ async function refreshModels() {
     studio.modelDirectory = result.model_directory || "ComfyUI/models/LLM/";
     studio.gpuMemory = status.gpu_memory;
     studio.modelLoaded = Boolean(status.loaded);
-    selectModel(studio.models.find((model) => model.id === selectedId) || studio.models.find((model) => model.runtime_ready) || studio.models[0] || null);
+    selectModel(
+      studio.models.find((model) => model.id === selectedId)
+      || (selectedBeforeRefresh?.family === "ollama" ? selectedBeforeRefresh : null)
+      || studio.models.find((model) => model.runtime_ready)
+      || studio.models[0]
+      || null,
+    );
     setGenerationState("idle", "", "");
   } catch (error) {
     showToast(error.code || "Model scan failed", error.message, error.details);
+  }
+}
+
+async function refreshOllama() {
+  const control = studio.root.querySelector("[data-ollama-provider-control]");
+  if (control) control.innerHTML = renderOllamaProviderControl();
+  try {
+    const status = await getOllamaStatus();
+    studio.ollamaStatus = status;
+    studio.ollamaError = status.error || null;
+    studio.models = [...studio.models.filter((model) => model.family !== "ollama"), ...(status.compatible_models || [])];
+    const model = ollamaModelForSettings();
+    if (model && studio.settingsProvider === "ollama") selectModel(model);
+    else renderInferenceSettings();
+  } catch (error) {
+    studio.ollamaStatus = { state: "error", running: false, compatible_models: [], error: { code: error.code, message: error.message } };
+    studio.ollamaError = error;
+    renderInferenceSettings();
   }
 }
 
@@ -1573,6 +1706,18 @@ function createStudio() {
     selectModel(localModels().find((model) => model.id === event.target.value));
   });
   root.querySelector("[data-provider-detail]").addEventListener("click", (event) => {
+    const ollamaRefresh = event.target.closest("[data-ollama-refresh]");
+    if (ollamaRefresh) {
+      refreshOllama();
+      return;
+    }
+    const copyOllamaCommand = event.target.closest("[data-copy-ollama-command]");
+    if (copyOllamaCommand) {
+      const command = copyOllamaCommand.dataset.copyOllamaCommand;
+      navigator.clipboard.writeText(command);
+      showToast("Command copied", `${command} · paste it into Terminal or PowerShell.`);
+      return;
+    }
     const externalDisconnect = event.target.closest("[data-external-server-disconnect]");
     if (externalDisconnect) {
       disconnectExternalServer();
@@ -1597,6 +1742,12 @@ function createStudio() {
       showToast("Model path copied", studio.modelDirectory || "ComfyUI/models/LLM/");
       return;
     }
+  });
+  root.querySelector("[data-provider-detail]").addEventListener("change", (event) => {
+    const select = event.target.closest("[data-ollama-model]");
+    if (!select) return;
+    const model = ollamaModels().find((item) => item.remote_model === select.value);
+    if (model) selectModel(model);
   });
   root.querySelector("[data-provider-detail]").addEventListener("submit", (event) => {
     const form = event.target.closest("[data-external-server-form]");

@@ -18,6 +18,8 @@ from .contract import ModelError
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 CONNECT_TIMEOUT_SECONDS = 3
 REQUEST_TIMEOUT_SECONDS = 900
+TESTED_OLLAMA_TAGS = {"gemma4:12b"}
+RECOMMENDED_OLLAMA_MODEL = "gemma4:12b"
 
 
 def _ollama_cli_installed() -> bool:
@@ -246,7 +248,7 @@ class OllamaBackend:
                 "size": entry.get("size"),
                 "digest": digest,
                 "available": True,
-                "tested_for_h3": False,
+                "tested_for_h3": name in TESTED_OLLAMA_TAGS,
                 "source_label": "Ollama · installed locally",
             })
         compatible_models = [model for model in models if model["runtime_ready"]]
@@ -258,6 +260,7 @@ class OllamaBackend:
             "version": version,
             "models": models,
             "compatible_models": compatible_models,
+            "recommended_model": RECOMMENDED_OLLAMA_MODEL,
             "error": None,
         }
 

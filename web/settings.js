@@ -8,10 +8,14 @@ export function generateModelSummaryMarkup(icon) {
     </button>`;
 }
 
-function systemPromptPanel(profile, description, icon, hidden = false) {
+function systemPromptPanel(profile, label, description, icon, hidden = false) {
   return `
     <div class="h3ps-system-prompt-panel" data-system-prompt-panel="${profile}" ${hidden ? "hidden" : ""}>
-      <span class="h3ps-system-prompt-panel-status"><em data-system-prompt-status="${profile}">Default</em>${icon("check", 13)}</span>
+      <header class="h3ps-system-prompt-editor-heading">
+        <button type="button" data-system-prompt-back>${icon("chevron", 12)} Back</button>
+        <span><small>System Prompt</small><strong>${label}</strong></span>
+        <span class="h3ps-system-prompt-panel-status"><em data-system-prompt-status="${profile}">Default</em>${icon("check", 13)}</span>
+      </header>
       <p>${description} Official MiniMax guides are applied separately and are not modified.</p>
       <textarea data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
       <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden>Reset to default</button></footer>
@@ -89,13 +93,21 @@ export function settingsMarkup(icon) {
         </section>
 
         <section class="h3ps-settings-card h3ps-system-prompt-card">
-          <header><span><small>Generation behavior</small><strong>System Prompt</strong></span></header>
-          <div class="h3ps-system-prompt-profiles" role="tablist" aria-label="System Prompt profile">
-            <button type="button" role="tab" data-system-prompt-profile="standard" aria-selected="true">Standard<small>T2VA · I2VA · FL2VA · L2VA</small></button>
-            <button type="button" role="tab" data-system-prompt-profile="reference" aria-selected="false">Reference<small>Reference mode</small></button>
+          <header><span><small>Prompt behavior</small><strong>System Prompt</strong></span></header>
+          <div class="h3ps-system-prompt-overview" data-system-prompt-overview>
+            <button type="button" data-system-prompt-profile="standard">
+              <span><strong>Standard</strong><small>T2VA · I2VA · FL2VA · L2VA</small></span>
+              <span><em data-system-prompt-summary-status="standard">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
+            <button type="button" data-system-prompt-profile="reference">
+              <span><strong>Reference</strong><small>Reference mode</small></span>
+              <span><em data-system-prompt-summary-status="reference">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
           </div>
-          ${systemPromptPanel("standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
-          ${systemPromptPanel("reference", "Instructions used by Reference mode.", icon, true)}
+          <div class="h3ps-system-prompt-editor" data-system-prompt-editor hidden>
+            ${systemPromptPanel("standard", "Standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
+            ${systemPromptPanel("reference", "Reference", "Instructions used by Reference mode.", icon, true)}
+          </div>
         </section>
       </div>
     </section>`;

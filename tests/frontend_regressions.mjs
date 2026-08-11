@@ -158,7 +158,6 @@ test("user preferences persist only stable non-secret settings", () => {
     preferredDirectModelId: "direct-model.gguf",
     directContextProfile: "extended",
     directKvCache: "q8",
-    ollamaContextProfile: "standard",
     selectedModel: { id: "api::secret-connection::model", api_connection_id: "secret-connection" },
     apiProviderConfig: { api_key: "must-not-be-stored" },
     creativeBrief: "must-not-be-stored",
@@ -177,7 +176,6 @@ test("user preferences persist only stable non-secret settings", () => {
     direct_model_id: "direct-model.gguf",
     direct_context_profile: "extended",
     direct_kv_cache: "q8",
-    ollama_context_profile: "standard",
   });
 });
 
@@ -195,7 +193,6 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
       direct_model_id: 123,
       direct_context_profile: "invalid",
       direct_kv_cache: "invalid",
-      ollama_context_profile: "invalid",
     }),
   });
   assert.deepEqual(loadUserPreferences(storage), {
@@ -207,7 +204,6 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     direct_model_id: null,
     direct_context_profile: "auto",
     direct_kv_cache: "auto",
-    ollama_context_profile: "auto",
   });
 });
 
@@ -233,7 +229,7 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
   assert.equal(state.preferredDirectModelId, "direct-model.gguf");
   assert.equal(state.directContextProfile, "extended");
   assert.equal(state.directKvCache, "q8");
-  assert.equal(state.ollamaContextProfile, "standard");
+  assert.equal(state.ollamaContextProfile, undefined);
   assert.equal(state.keepModelLoaded, false);
   assert.equal(state.thinking, false);
   assert.equal(state.selectedModel, null);
@@ -313,8 +309,8 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     ollama_model: null,
     api_provider: null,
     thinking: true,
-    context_profile: "standard",
-    kv_cache: "q8",
+    context_profile: "auto",
+    kv_cache: "auto",
     system_prompt_override: "Custom reference",
     seed: 3407,
     unload_after: true,
@@ -329,8 +325,8 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     ollama_model: null,
     api_provider: null,
     thinking: true,
-    context_profile: "standard",
-    kv_cache: "q8",
+    context_profile: "auto",
+    kv_cache: "auto",
     system_prompt_override: "Custom reference",
     seed: 99,
     unload_after: true,
@@ -346,6 +342,8 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   assert.equal(ollamaPayload.ollama_model, "gemma4:12b");
   assert.equal(ollamaPayload.external_server, null);
   assert.equal(ollamaPayload.api_provider, null);
+  assert.equal(ollamaPayload.context_profile, "auto");
+  assert.equal(ollamaPayload.kv_cache, "auto");
 
   const apiModel = {
     id: "api::connection-id::provider/model",
@@ -388,6 +386,8 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.doesNotMatch(markup, /Prompt models/);
   assert.doesNotMatch(markup, /data-model-menu/);
   assert.match(markup, /Context and KV cache/);
+  assert.match(mainSource, /runtimeSettings\.hidden = provider !== "direct"/);
+  assert.doesNotMatch(mainSource, /Context is sent explicitly with each request/);
   assert.doesNotMatch(mainSource, /\/api\/pull/);
   assert.doesNotMatch(mainSource, /Install .*Gemma|Cancel download|Downloading model/i);
   assert.match(mainSource, /Compatible · not yet H3-tested/);
@@ -404,9 +404,15 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(mainSource, /label\.hidden = apiManaged/);
 });
 
-test("Settings shows one switchable System Prompt editor and Generate keeps lifecycle controls", () => {
+test("Settings shows compact global System Prompt summaries and an on-demand editor", () => {
   const markup = settingsMarkup(() => "<svg></svg>");
   assert.equal((markup.match(/h3ps-system-prompt-card/g) || []).length, 1);
+  assert.match(markup, /Prompt behavior/);
+  assert.match(markup, /data-system-prompt-overview/);
+  assert.match(markup, /data-system-prompt-summary-status="standard"/);
+  assert.match(markup, /data-system-prompt-summary-status="reference"/);
+  assert.match(markup, /data-system-prompt-editor hidden/);
+  assert.match(markup, /data-system-prompt-back/);
   assert.match(markup, /data-system-prompt-profile="standard"/);
   assert.match(markup, /data-system-prompt-profile="reference"/);
   assert.match(markup, /data-system-prompt-panel="standard"/);

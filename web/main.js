@@ -144,6 +144,7 @@ async function syncSystemPromptEditor(profile) {
   if (!studio) return;
   const textarea = studio.root.querySelector(`[data-system-prompt="${profile}"]`);
   const status = studio.root.querySelector(`[data-system-prompt-status="${profile}"]`);
+  const summaryStatus = studio.root.querySelector(`[data-system-prompt-summary-status="${profile}"]`);
   const reset = studio.root.querySelector(`[data-system-prompt-reset="${profile}"]`);
   const count = studio.root.querySelector(`[data-system-prompt-count="${profile}"]`);
   const requestMode = profile === "reference" ? "Reference" : "T2VA";
@@ -155,6 +156,7 @@ async function syncSystemPromptEditor(profile) {
     } catch (error) {
       textarea.value = "";
       status.textContent = "Unavailable";
+      summaryStatus.textContent = "Unavailable";
       showToast(error.code || "System Prompt unavailable", error.message, error.details);
       return;
     }
@@ -163,6 +165,7 @@ async function syncSystemPromptEditor(profile) {
   textarea.value = custom ? studio.customSystemPrompts[profile] : studio.systemPromptDefaults[profile];
   textarea.disabled = false;
   status.textContent = custom ? "Custom" : "Default";
+  summaryStatus.textContent = custom ? "Custom" : "Default";
   reset.hidden = !custom;
   count.textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
   resizeSystemPromptEditor(textarea);
@@ -178,12 +181,18 @@ function setSystemPromptProfile(profile) {
   studio.root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => {
     const selected = button.dataset.systemPromptProfile === studio.settingsPromptProfile;
     button.classList.toggle("is-selected", selected);
-    button.setAttribute("aria-selected", String(selected));
+    button.setAttribute("aria-pressed", String(selected));
   });
   studio.root.querySelectorAll("[data-system-prompt-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.systemPromptPanel !== studio.settingsPromptProfile;
   });
   syncSystemPromptEditor(studio.settingsPromptProfile);
+}
+
+function setSystemPromptEditorOpen(open) {
+  if (!studio) return;
+  studio.root.querySelector("[data-system-prompt-overview]").hidden = open;
+  studio.root.querySelector("[data-system-prompt-editor]").hidden = !open;
 }
 
 function renderPromptHighlights() {
@@ -1194,21 +1203,7 @@ function syncProviderSettings() {
     panel.hidden = panel.dataset.providerPanel !== provider;
   });
   const runtimeSettings = studio.root.querySelector(".h3ps-runtime-settings");
-  const serverManaged = provider === "external";
-  const ollamaManaged = provider === "ollama";
-  const apiManaged = provider === "api";
-  runtimeSettings.classList.toggle("is-server-managed", serverManaged || ollamaManaged || apiManaged);
-  runtimeSettings.querySelector('[data-runtime-toggle="context"]').disabled = serverManaged || apiManaged;
-  runtimeSettings.querySelector('[data-runtime-toggle="kv"]').disabled = serverManaged || ollamaManaged || apiManaged;
-  runtimeSettings.querySelector("[data-runtime-management]").textContent = serverManaged
-    ? studio.externalModel
-      ? "Context, KV cache and model loading are managed by the external llama.cpp server."
-      : "Connect the external llama.cpp server to inspect its managed context."
-    : ollamaManaged
-      ? "Context is sent explicitly with each request. KV cache is managed by Ollama."
-      : apiManaged
-        ? "Context, KV cache and model lifecycle are managed by the selected API provider."
-      : "Direct GGUF runtime settings are applied to the next request.";
+  runtimeSettings.hidden = provider !== "direct";
 }
 
 function renderInferenceSettings() {
@@ -1259,6 +1254,7 @@ function selectSettingsProvider(provider) {
     }
   }
   if (studio.settingsProvider === "ollama") {
+    studio.contextProfile = "auto";
     studio.kvCache = "auto";
     const model = ollamaModelForSettings();
     if (model && studio.selectedModel?.id !== model.id) {
@@ -1286,8 +1282,11 @@ function selectModel(model) {
   applyRuntimePreferences(studio.settingsProvider);
   if (model?.family === "gguf") studio.preferredDirectModelId = model.id;
   const remote = ["external", "api"].includes(model?.family);
-  if (model?.family === "ollama") {
+  if (model?.family !== "gguf") {
+    studio.contextProfile = "auto";
     studio.kvCache = "auto";
+  }
+  if (model?.family === "ollama") {
     studio.ollamaModelName = model.remote_model;
     saveOllamaModel(localStorage, model.remote_model);
   }
@@ -1315,8 +1314,6 @@ function rememberRuntimePreferences(provider = studio.settingsProvider) {
   if (provider === "direct") {
     studio.directContextProfile = studio.contextProfile;
     studio.directKvCache = studio.kvCache;
-  } else if (provider === "ollama") {
-    studio.ollamaContextProfile = studio.contextProfile;
   }
 }
 
@@ -1324,10 +1321,7 @@ function applyRuntimePreferences(provider) {
   if (provider === "direct") {
     studio.contextProfile = studio.directContextProfile;
     studio.kvCache = studio.directKvCache;
-  } else if (provider === "ollama") {
-    studio.contextProfile = studio.ollamaContextProfile;
-    studio.kvCache = "auto";
-  } else if (provider === "api") {
+  } else {
     studio.contextProfile = "auto";
     studio.kvCache = "auto";
   }
@@ -1377,17 +1371,9 @@ function syncRuntimeSummary(result = null) {
   } else {
     activeSummary = studio.contextProfile === "auto" ? "Runtime · Auto" : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
   }
-  const settingsSummary = studio.settingsProvider === "external"
-    ? studio.externalModel?.server_context_tokens
-      ? `Server · ${Math.round(studio.externalModel.server_context_tokens / 1024)}K`
-      : "Connect server"
-    : studio.settingsProvider === "ollama"
-      ? studio.contextProfile === "auto" ? "Ollama · Auto" : `Ollama · ${CONTEXT_LABELS[studio.contextProfile]}`
-    : studio.settingsProvider === "api"
-      ? studio.apiProviderConnection ? "API · Connected" : "API · Setup"
-    : studio.contextProfile === "auto"
-      ? "Auto"
-      : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
+  const settingsSummary = studio.contextProfile === "auto"
+    ? "Auto"
+    : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
   summary.textContent = settingsSummary;
   syncActiveModelSummary(activeSummary);
   studio.root.querySelectorAll("[data-runtime-option]").forEach((button) => {
@@ -1410,6 +1396,7 @@ function setSettingsOpen(open) {
     syncRuntimeSummary();
     syncSystemPromptEditors();
     setSystemPromptProfile(studio.settingsPromptProfile);
+    setSystemPromptEditorOpen(false);
   }
   syncOllamaAutoDetection();
 }
@@ -1957,6 +1944,10 @@ function createStudio() {
   syncRuntimeSummary();
   root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => button.addEventListener("click", () => {
     setSystemPromptProfile(button.dataset.systemPromptProfile);
+    setSystemPromptEditorOpen(true);
+  }));
+  root.querySelectorAll("[data-system-prompt-back]").forEach((button) => button.addEventListener("click", () => {
+    setSystemPromptEditorOpen(false);
   }));
   root.querySelectorAll("[data-system-prompt]").forEach((textarea) => textarea.addEventListener("input", () => {
     const profile = textarea.dataset.systemPrompt;
@@ -1966,6 +1957,7 @@ function createStudio() {
     saveCustomSystemPrompts(localStorage, studio.customSystemPrompts);
     const custom = Object.hasOwn(studio.customSystemPrompts, profile);
     root.querySelector(`[data-system-prompt-status="${profile}"]`).textContent = custom ? "Custom" : "Default";
+    root.querySelector(`[data-system-prompt-summary-status="${profile}"]`).textContent = custom ? "Custom" : "Default";
     root.querySelector(`[data-system-prompt-reset="${profile}"]`).hidden = !custom;
     root.querySelector(`[data-system-prompt-count="${profile}"]`).textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
     resizeSystemPromptEditor(textarea);

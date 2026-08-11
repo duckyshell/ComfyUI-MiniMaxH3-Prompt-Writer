@@ -23,7 +23,6 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       direct_model_id: typeof value.direct_model_id === "string" && value.direct_model_id ? value.direct_model_id : null,
       direct_context_profile: CONTEXT_PROFILES.includes(value.direct_context_profile) ? value.direct_context_profile : "auto",
       direct_kv_cache: KV_CACHES.includes(value.direct_kv_cache) ? value.direct_kv_cache : "auto",
-      ollama_context_profile: CONTEXT_PROFILES.includes(value.ollama_context_profile) ? value.ollama_context_profile : "auto",
     };
   } catch {
     return null;
@@ -40,7 +39,6 @@ export function saveUserPreferences(storage, state) {
     direct_model_id: typeof state.preferredDirectModelId === "string" && state.preferredDirectModelId ? state.preferredDirectModelId : null,
     direct_context_profile: CONTEXT_PROFILES.includes(state.directContextProfile) ? state.directContextProfile : "auto",
     direct_kv_cache: KV_CACHES.includes(state.directKvCache) ? state.directKvCache : "auto",
-    ollama_context_profile: CONTEXT_PROFILES.includes(state.ollamaContextProfile) ? state.ollamaContextProfile : "auto",
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -178,6 +176,7 @@ export function restoredModelAfterDiscovery(state) {
 }
 
 function sharedInferencePayload(state) {
+  const directRuntime = state.selectedModel?.family === "gguf";
   return {
     session_id: state.sessionId,
     mode: state.mode,
@@ -186,14 +185,15 @@ function sharedInferencePayload(state) {
     ollama_model: selectedOllamaModel(state),
     api_provider: selectedApiProvider(state),
     thinking: state.thinking,
-    context_profile: state.contextProfile,
-    kv_cache: state.kvCache,
+    context_profile: directRuntime ? state.contextProfile : "auto",
+    kv_cache: directRuntime ? state.kvCache : "auto",
     system_prompt_override: currentSystemPromptOverride(state),
     unload_after: !state.keepModelLoaded,
   };
 }
 
 export function buildGeneratePayload(state, { creativeBrief, seed }) {
+  const directRuntime = state.selectedModel?.family === "gguf";
   return {
     session_id: state.sessionId,
     mode: state.mode,
@@ -205,8 +205,8 @@ export function buildGeneratePayload(state, { creativeBrief, seed }) {
     ollama_model: selectedOllamaModel(state),
     api_provider: selectedApiProvider(state),
     thinking: state.thinking,
-    context_profile: state.contextProfile,
-    kv_cache: state.kvCache,
+    context_profile: directRuntime ? state.contextProfile : "auto",
+    kv_cache: directRuntime ? state.kvCache : "auto",
     system_prompt_override: currentSystemPromptOverride(state),
     seed,
     unload_after: !state.keepModelLoaded,
@@ -239,7 +239,6 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     preferredDirectModelId: preferences?.direct_model_id || null,
     directContextProfile: preferences?.direct_context_profile || "auto",
     directKvCache: preferences?.direct_kv_cache || "auto",
-    ollamaContextProfile: preferences?.ollama_context_profile || "auto",
     settingsPromptProfile: "standard",
     modelLoaded: false,
     requestBusy: false,

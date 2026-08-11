@@ -18,8 +18,21 @@ from .contract import ModelError
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 CONNECT_TIMEOUT_SECONDS = 3
 REQUEST_TIMEOUT_SECONDS = 900
-TESTED_OLLAMA_TAGS = {"gemma4:12b"}
-RECOMMENDED_OLLAMA_MODEL = "gemma4:12b"
+TESTED_OLLAMA_TAGS = {
+    "gemma4:e2b",
+    "gemma4:e4b",
+    "gemma4:12b",
+    "gemma4:26b",
+    "gemma4:31b",
+}
+RECOMMENDED_OLLAMA_MODEL = "gemma4:e4b"
+OLLAMA_MODEL_TIERS = (
+    {"label": "<8 GB", "vram_tiers": [], "model": "gemma4:e2b"},
+    {"label": "8 GB", "vram_tiers": [8], "model": "gemma4:e4b"},
+    {"label": "12–16 GB", "vram_tiers": [12, 16], "model": "gemma4:12b"},
+    {"label": "24 GB", "vram_tiers": [24], "model": "gemma4:26b"},
+    {"label": "32 GB", "vram_tiers": [32], "model": "gemma4:31b"},
+)
 
 
 def _ollama_cli_installed() -> bool:
@@ -262,6 +275,7 @@ class OllamaBackend:
             "models": models,
             "compatible_models": compatible_models,
             "recommended_model": RECOMMENDED_OLLAMA_MODEL,
+            "model_tiers": OLLAMA_MODEL_TIERS,
             "error": None,
         }
 

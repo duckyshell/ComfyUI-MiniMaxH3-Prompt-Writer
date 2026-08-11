@@ -1024,6 +1024,28 @@ function ollamaJourneyMarkup(step) {
     <li class="${index < current ? "is-complete" : index === current ? "is-current" : ""}"><span>${index + 1}</span><em>${label}</em></li>`).join("")}</ol>`;
 }
 
+function ollamaDetectedTier() {
+  const totalMb = studio.gpuMemory?.total_mb;
+  if (!Number.isFinite(totalMb)) return null;
+  return detectedVramTier() || "under-8";
+}
+
+function renderOllamaModelTiers(status) {
+  const tiers = Array.isArray(status.model_tiers) ? status.model_tiers : [];
+  const detected = ollamaDetectedTier();
+  return `<div class="h3ps-ollama-tier-list">${tiers.map((tier) => {
+    const vramTiers = Array.isArray(tier.vram_tiers) ? tier.vram_tiers : [];
+    const isDetected = detected === "under-8" ? vramTiers.length === 0 : vramTiers.includes(detected);
+    const command = `ollama pull ${tier.model}`;
+    return `<div class="h3ps-ollama-tier-row ${isDetected ? "is-detected" : ""}">
+      <span class="h3ps-ollama-tier-vram">${escapeHtml(tier.label)}</span>
+      <code>${escapeHtml(command)}</code>
+      ${isDetected ? "<em>Detected</em>" : "<span></span>"}
+      <button type="button" data-copy-ollama-command="${escapeHtml(command)}" title="Copy ${escapeHtml(command)}" aria-label="Copy ${escapeHtml(command)}">${icon("copy", 13)}</button>
+    </div>`;
+  }).join("")}</div>`;
+}
+
 function renderOllamaProviderControl() {
   const status = studio.ollamaStatus;
   if (!status) {
@@ -1056,14 +1078,13 @@ function renderOllamaProviderControl() {
   }
   const models = ollamaModels();
   if (!models.length) {
-    const suggested = status.recommended_model;
-    const command = suggested ? `ollama pull ${suggested}` : null;
-    return `${header}${ollamaJourneyMarkup("model")}<div class="h3ps-ollama-state">
-      <span class="h3ps-ollama-state-icon">2</span><span class="h3ps-ollama-state-copy"><strong>Add a compatible prompt model</strong>
+    return `${header}${ollamaJourneyMarkup("model")}<div class="h3ps-ollama-state h3ps-ollama-model-state">
+      <span class="h3ps-ollama-state-copy"><strong>Add a compatible prompt model</strong>
       <p>Ollama is running, but no installed model reports both vision and text generation support.</p>
-      ${command ? `<div class="h3ps-ollama-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-ollama-command="${escapeHtml(command)}">Copy command</button></div><small>Run this in Terminal or PowerShell. This page detects the model automatically.</small>` : `<small>Install a vision-capable model in Ollama. Tested tags appear here only after validation.</small>`}
+      <div class="h3ps-ollama-tier-heading">Choose a model for your GPU</div>
+      ${renderOllamaModelTiers(status)}
+      <small>Copy a command and run it in Terminal or PowerShell. This page detects the model automatically.</small>
       <details class="h3ps-ollama-storage-help"><summary>Need models on another drive?</summary><p>Ollama manages one global model store. Set <code>OLLAMA_MODELS</code> before pulling a model, then restart Ollama. <a href="https://docs.ollama.com/windows#changing-model-location" target="_blank" rel="noopener noreferrer">Official instructions ↗</a></p></details></span>
-      <button class="h3ps-ollama-secondary" type="button" data-ollama-refresh>Check again</button>
     </div>`;
   }
   const selected = ollamaModelForSettings();

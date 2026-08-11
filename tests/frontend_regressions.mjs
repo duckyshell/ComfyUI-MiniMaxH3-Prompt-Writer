@@ -393,7 +393,12 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.doesNotMatch(mainSource, /Install .*Gemma|Cancel download|Downloading model/i);
   assert.match(mainSource, /Compatible · not yet H3-tested/);
   assert.match(mainSource, /data-copy-ollama-command/);
-  assert.match(mainSource, /Copy command/);
+  assert.match(mainSource, /Choose a model for your GPU/);
+  assert.match(mainSource, /<code>\$\{escapeHtml\(command\)\}<\/code>/);
+  assert.match(mainSource, /h3ps-ollama-model-state/);
+  assert.match(mainSource, /is-detected/);
+  assert.match(mainSource, /Detected/);
+  assert.doesNotMatch(mainSource, /Recommended for your GPU|Lighter model|Larger model/);
   assert.match(mainSource, /data-ollama-model/);
   assert.match(mainSource, /Need models on another drive\?/);
   assert.match(mainSource, /OLLAMA_MODELS/);

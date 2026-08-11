@@ -656,6 +656,7 @@
 }
 .h3ps-ollama-state-copy > small { display: block; margin-top: 8px; color: var(--h3ps-dim); font-size: 9.5px; }
 .h3ps-ollama-state.is-error .h3ps-ollama-state-icon { color: #ef8b76; }
+.h3ps-ollama-model-state { grid-template-columns: minmax(0, 1fr); }
 .h3ps-ollama-primary {
   display: inline-flex;
   align-items: center;
@@ -692,6 +693,16 @@
 }
 .h3ps-ollama-command code { align-self: center; padding: 0 12px; color: #d8d8dc; font-size: 10.5px; }
 .h3ps-ollama-command button { padding: 0 13px; border: 0; border-left: 1px solid #2a2a30; border-radius: 0; background: #161619; color: var(--h3ps-muted); font-size: 10px; }
+.h3ps-ollama-tier-heading { margin-top: 14px; color: #d8d8dc; font-size: 10px; font-weight: 600; }
+.h3ps-ollama-tier-list { width: min(100%, 520px); margin-top: 7px; border: 1px solid #29292e; border-radius: 8px; background: #0c0c0e; overflow: hidden; }
+.h3ps-ollama-tier-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) 58px 32px; align-items: center; min-height: 34px; padding-left: 11px; border-bottom: 1px solid #202025; color: var(--h3ps-muted); }
+.h3ps-ollama-tier-row:last-child { border-bottom: 0; }
+.h3ps-ollama-tier-row.is-detected { background: rgba(232, 97, 60, .07); color: var(--h3ps-text); }
+.h3ps-ollama-tier-vram { font-size: 10px; font-weight: 600; }
+.h3ps-ollama-tier-row code { color: #d8d8dc; font-size: 10.5px; }
+.h3ps-ollama-tier-row em { color: var(--h3ps-accent-strong); font-size: 8px; font-style: normal; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+.h3ps-ollama-tier-row button { align-self: stretch; display: grid; place-items: center; width: 32px; padding: 0; border: 0; border-left: 1px solid #29292e; border-radius: 0; background: transparent; color: var(--h3ps-dim); }
+.h3ps-ollama-tier-row button:hover { background: #19191d; color: var(--h3ps-text); }
 .h3ps-ollama-storage-help { margin-top: 11px; color: var(--h3ps-dim); font-size: 9.5px; }
 .h3ps-ollama-storage-help summary { cursor: pointer; width: fit-content; color: var(--h3ps-dim); }
 .h3ps-ollama-storage-help p { max-width: 620px; margin: 7px 0 0; line-height: 1.55; }

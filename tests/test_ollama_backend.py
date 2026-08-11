@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from backend.models.contract import ModelError
 from backend.models.ollama_backend import (
+    OLLAMA_MODEL_TIERS,
     RECOMMENDED_OLLAMA_MODEL,
     TESTED_OLLAMA_TAGS,
     OllamaBackend,
@@ -156,14 +157,27 @@ class OllamaBackendTests(unittest.TestCase):
             "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "A quiet scene."},
         }
 
-    def test_beginner_recommendation_is_limited_to_the_live_tested_exact_tag(self):
-        self.assertEqual(RECOMMENDED_OLLAMA_MODEL, "gemma4:12b")
-        self.assertEqual(TESTED_OLLAMA_TAGS, {"gemma4:12b"})
+    def test_beginner_recommendations_match_the_live_tested_gpu_tiers(self):
+        self.assertEqual(RECOMMENDED_OLLAMA_MODEL, "gemma4:e4b")
+        self.assertEqual(TESTED_OLLAMA_TAGS, {
+            "gemma4:e2b", "gemma4:e4b", "gemma4:12b", "gemma4:26b", "gemma4:31b",
+        })
+        self.assertEqual(
+            [(tier["label"], tier["model"]) for tier in OLLAMA_MODEL_TIERS],
+            [
+                ("<8 GB", "gemma4:e2b"),
+                ("8 GB", "gemma4:e4b"),
+                ("12–16 GB", "gemma4:12b"),
+                ("24 GB", "gemma4:26b"),
+                ("32 GB", "gemma4:31b"),
+            ],
+        )
 
     def test_detects_only_local_compatible_models_and_declared_context(self):
         detected = self.backend.detect()
 
         self.assertEqual(detected["state"], "ready")
+        self.assertEqual(detected["model_tiers"], OLLAMA_MODEL_TIERS)
         self.assertEqual([model["remote_model"] for model in detected["models"]], ["gemma4:test", "text:test"])
         self.assertEqual([model["remote_model"] for model in detected["compatible_models"]], ["gemma4:test"])
         model = detected["compatible_models"][0]

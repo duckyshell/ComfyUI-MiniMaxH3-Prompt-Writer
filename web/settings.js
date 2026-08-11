@@ -51,12 +51,13 @@ export function settingsMarkup(icon) {
 
         <section class="h3ps-settings-card h3ps-provider-detail" data-provider-detail>
           <div class="h3ps-provider-panel" data-provider-panel="direct">
+            <div data-direct-runtime-status></div>
             <header class="h3ps-settings-section-heading">
               <span><small>Model</small><strong>Installed model</strong></span>
               <button type="button" data-model-refresh>${icon("refresh", 13)} Refresh</button>
             </header>
             <div class="h3ps-installed-model-control">
-              <span class="h3ps-model-icon">G</span>
+              <span class="h3ps-model-icon h3ps-provider-icon" data-provider-icon="direct" aria-hidden="true"></span>
               <label><span>Model used for Direct GGUF</span><select data-installed-model aria-label="Installed model"><option>Scanning models…</option></select></label>
               <span class="h3ps-model-lifecycle" data-model-lifecycle hidden><em data-model-lifecycle-label>Model loaded</em></span>
             </div>

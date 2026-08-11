@@ -13,6 +13,11 @@ from typing import Any
 
 PROBE_MARKER = "__H3PS_RUNTIME_DIAGNOSTICS__="
 PROBE_TIMEOUT_SECONDS = 12
+TESTED_WINDOWS_CUDA13_INSTALL_COMMAND = (
+    '.\\python_embeded\\python.exe -m pip install --only-binary=:all: '
+    '--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 '
+    '"llama-cpp-python>=0.3.34,<0.4"'
+)
 _CACHE: dict[str, Any] | None = None
 _CACHE_LOCK = threading.Lock()
 
@@ -100,6 +105,32 @@ def _environment_warnings(paths: dict[str, dict[str, Any]], accelerator: dict[st
             message = f"{name} points to an incomplete or missing runtime directory."
         warnings.append({"code": f"INVALID_{name}", "message": message})
     return warnings
+
+
+def _is_tested_windows_cuda13_environment(accelerator: dict[str, Any] | None) -> bool:
+    executable_parent = Path(sys.executable).parent.name.lower()
+    cuda_version = str((accelerator or {}).get("cuda_version") or "")
+    return sys.platform == "win32" and executable_parent == "python_embeded" and cuda_version.startswith("13.")
+
+
+def _runtime_onboarding(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    error_type = str(diagnostics.get("error_type") or "")
+    error_text = str(diagnostics.get("error") or "")
+    package_missing = (
+        diagnostics.get("status") == "unavailable"
+        and diagnostics.get("package_version") is None
+        and (error_type == "PackageNotFoundError" or "No package metadata was found" in error_text)
+    )
+    if package_missing:
+        tested_environment = _is_tested_windows_cuda13_environment(diagnostics.get("accelerator"))
+        return {
+            "state": "missing",
+            "tested_environment": tested_environment,
+            "install_command": TESTED_WINDOWS_CUDA13_INSTALL_COMMAND if tested_environment else None,
+        }
+    if diagnostics.get("status") == "ok" and diagnostics.get("gpu_offload") is True:
+        return {"state": "ready", "tested_environment": False, "install_command": None}
+    return {"state": "broken", "tested_environment": False, "install_command": None}
 
 
 def _child_payload(stdout: str) -> dict[str, Any] | None:
@@ -199,6 +230,7 @@ def get_gguf_runtime_diagnostics(*, force: bool = False) -> dict[str, Any]:
     with _CACHE_LOCK:
         if _CACHE is None or force:
             _CACHE = _run_probe()
+            _CACHE["onboarding"] = _runtime_onboarding(_CACHE)
         return copy.deepcopy(_CACHE)
 
 

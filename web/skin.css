@@ -460,6 +460,24 @@
 }
 .h3ps-settings-section-heading > button:hover,
 .h3ps-settings-card > header > button:hover { border-color: #3a3a41; color: var(--h3ps-text); }
+.h3ps-direct-runtime-state { margin-bottom: 22px; padding: 14px; border: 1px solid rgba(232, 97, 60, .24); border-radius: 9px; background: rgba(232, 97, 60, .045); }
+.h3ps-direct-runtime-state header { display: flex; align-items: center; min-height: 32px; }
+.h3ps-direct-runtime-state header span { display: flex; flex-direction: column; }
+.h3ps-direct-runtime-state header small { color: var(--h3ps-accent-strong); font-size: 8.5px; font-weight: 680; letter-spacing: .075em; text-transform: uppercase; }
+.h3ps-direct-runtime-state header strong { margin-top: 2px; font-size: 12px; font-weight: 620; }
+.h3ps-direct-runtime-state > p { max-width: 650px; margin: 8px 0 0; color: var(--h3ps-muted); font-size: 10.5px; line-height: 1.55; }
+.h3ps-direct-runtime-state > small { display: block; margin-top: 8px; color: var(--h3ps-dim); font-size: 9.5px; }
+.h3ps-direct-runtime-state > small code { color: var(--h3ps-muted); }
+.h3ps-direct-runtime-links { display: flex; gap: 16px; margin-top: 10px; }
+.h3ps-direct-runtime-links a,
+.h3ps-direct-runtime-state > a { color: #bbbcc3; font-size: 10px; text-decoration: none; }
+.h3ps-direct-runtime-links a:hover,
+.h3ps-direct-runtime-state > a:hover { color: var(--h3ps-text); }
+.h3ps-direct-runtime-state.is-checking { border-color: var(--h3ps-border); background: var(--h3ps-surface-2); }
+.h3ps-direct-runtime-command { display: grid; grid-template-columns: minmax(0, 1fr) 34px; width: min(100%, 700px); min-height: 48px; margin-top: 12px; border: 1px solid #2a2a30; border-radius: 8px; background: #0c0c0e; overflow: hidden; }
+.h3ps-direct-runtime-command code { align-self: center; padding: 8px 12px; color: #d8d8dc; font-size: 9.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.h3ps-direct-runtime-command button { align-self: stretch; display: grid; place-items: center; width: 34px; padding: 0; border: 0; border-left: 1px solid #2a2a30; border-radius: 0; background: #161619; color: var(--h3ps-muted); }
+.h3ps-direct-runtime-command button:hover { background: #1d1d21; color: var(--h3ps-text); }
 .h3ps-installed-model-control,
 .h3ps-external-connection-status {
   min-height: 52px;

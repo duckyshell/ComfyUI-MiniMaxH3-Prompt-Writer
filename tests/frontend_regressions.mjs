@@ -373,6 +373,7 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(markup, /data-provider-icon="external"/);
   assert.match(markup, /data-provider-icon="api"/);
   assert.match(markup, /data-provider-panel="direct"/);
+  assert.match(markup, /data-direct-runtime-status/);
   assert.match(markup, /data-provider-panel="external"/);
   assert.match(markup, /data-provider-panel="ollama"/);
   assert.match(markup, /data-provider-panel="api"/);
@@ -386,6 +387,15 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.doesNotMatch(markup, /Prompt models/);
   assert.doesNotMatch(markup, /data-model-menu/);
   assert.match(markup, /Context and KV cache/);
+  assert.match(mainSource, /llama-cpp-python is not installed/);
+  assert.match(mainSource, /data-copy-direct-runtime-command/);
+  assert.match(mainSource, /Run this from your ComfyUI Portable folder/);
+  assert.match(mainSource, /Installation guide ↗/);
+  assert.match(mainSource, /Troubleshooting guide ↗/);
+  assert.match(mainSource, /llama-cpp-python is installed, but the runtime is not usable/);
+  assert.match(mainSource, /Troubleshooting ↗/);
+  assert.match(mainSource, /refreshGGUFRuntimeDiagnostics\(\)/);
+  assert.match(markup, /h3ps-model-icon h3ps-provider-icon[^>]+data-provider-icon="direct"/);
   assert.match(mainSource, /runtimeSettings\.hidden = provider !== "direct"/);
   assert.doesNotMatch(mainSource, /Context is sent explicitly with each request/);
   assert.match(mainSource, /studio\.selectedModel\?\.family === "gguf"/);

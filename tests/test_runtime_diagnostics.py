@@ -93,7 +93,68 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
             second = runtime_diagnostics.get_gguf_runtime_diagnostics()
 
         self.assertEqual(first, second)
+        self.assertEqual(first["onboarding"]["state"], "broken")
         run.assert_called_once()
+
+    def test_missing_runtime_exposes_tested_cuda13_install_command(self):
+        payload = {
+            "status": "unavailable",
+            "package_version": None,
+            "gpu_offload": None,
+            "system_info": None,
+            "error_type": "PackageNotFoundError",
+            "error": "No package metadata was found for llama-cpp-python",
+        }
+        with (
+            patch.object(runtime_diagnostics.subprocess, "run", return_value=completed(payload)),
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value={"name": "NVIDIA Test", "cuda_version": "13.0"}),
+            patch.object(runtime_diagnostics, "_is_tested_windows_cuda13_environment", return_value=True),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertEqual(result["onboarding"]["state"], "missing")
+        self.assertTrue(result["onboarding"]["install_command"].startswith(".\\python_embeded\\python.exe"))
+        self.assertIn("llama-cpp-python>=0.3.34,<0.4", result["onboarding"]["install_command"])
+
+    def test_missing_runtime_does_not_invent_a_command_for_other_environments(self):
+        payload = {
+            "status": "unavailable",
+            "package_version": None,
+            "gpu_offload": None,
+            "system_info": None,
+            "error_type": "PackageNotFoundError",
+            "error": "No package metadata was found for llama-cpp-python",
+        }
+        with (
+            patch.object(runtime_diagnostics.subprocess, "run", return_value=completed(payload)),
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value=None),
+            patch.object(runtime_diagnostics, "_is_tested_windows_cuda13_environment", return_value=False),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertEqual(result["onboarding"]["state"], "missing")
+        self.assertIsNone(result["onboarding"]["install_command"])
+
+    def test_installed_but_unusable_runtime_is_a_troubleshooting_state(self):
+        payload = {
+            "status": "unavailable",
+            "package_version": "0.3.46",
+            "gpu_offload": None,
+            "system_info": None,
+            "error_type": "ImportError",
+            "error": "cannot import name GGML_TYPE_F16",
+        }
+        with (
+            patch.object(runtime_diagnostics.subprocess, "run", return_value=completed(payload)),
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value={"name": "NVIDIA Test", "cuda_version": "13.0"}),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertEqual(result["onboarding"]["state"], "broken")
+        self.assertIsNone(result["onboarding"]["install_command"])
 
     def test_timeout_is_nonfatal(self):
         timeout = subprocess.TimeoutExpired(["python"], 12, output=b"partial", stderr=b"waiting")

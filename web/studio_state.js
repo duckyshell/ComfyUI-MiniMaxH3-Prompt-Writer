@@ -279,6 +279,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     apiProviderPresets: [],
     apiProviderError: null,
     ggufRuntimeDiagnostics: null,
+    ggufRuntimeDiagnosticsLoading: false,
     runtimeWarningShown: false,
     refineRestore: null,
     lastModelPrompt: null,

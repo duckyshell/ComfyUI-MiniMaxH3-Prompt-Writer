@@ -16,6 +16,8 @@ import {
 } from "./studio_state.js";
 
 const EXTENSION_NAME = "minimax.h3.prompt.studio";
+const INSTALLATION_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/blob/main/docs/INSTALLATION.md";
+const TROUBLESHOOTING_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/blob/main/docs/TROUBLESHOOTING.md";
 const ASPECT_RATIOS = [
   ["1:1", "Square"], ["2:3", "Portrait"], ["3:2", "Landscape"], ["3:4", "Portrait"],
   ["4:3", "Landscape"], ["9:16", "Vertical"], ["16:9", "Widescreen"], ["21:9", "Ultrawide"],
@@ -82,6 +84,7 @@ non_diegetic_music:
 N/A`;
 
 let studio;
+let ggufRuntimeDiagnosticsPromise = null;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({
@@ -895,6 +898,32 @@ function renderModelSetup() {
     </div>`;
 }
 
+function renderDirectRuntimeStatus() {
+  const diagnostics = studio.ggufRuntimeDiagnostics;
+  if (!diagnostics) {
+    return studio.ggufRuntimeDiagnosticsLoading
+      ? `<section class="h3ps-direct-runtime-state is-checking"><header><span><small>Runtime</small><strong>Checking llama-cpp-python…</strong></span></header></section>`
+      : "";
+  }
+  const onboarding = diagnostics.onboarding || {};
+  if (onboarding.state === "ready") return "";
+  if (onboarding.state === "missing") {
+    const command = typeof onboarding.install_command === "string" ? onboarding.install_command : "";
+    return `<section class="h3ps-direct-runtime-state is-missing">
+      <header><span><small>Runtime</small><strong>llama-cpp-python is not installed.</strong></span></header>
+      <p>Direct GGUF needs an additional native runtime. Ollama and API providers work without it.</p>
+      ${command ? `<div class="h3ps-direct-runtime-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-direct-runtime-command="${escapeHtml(command)}" title="Copy install command" aria-label="Copy install command">${icon("copy", 13)}</button></div><small>Run this from your ComfyUI Portable folder containing <code>python_embeded</code>. Restart ComfyUI after installation.</small>` : ""}
+      <div class="h3ps-direct-runtime-links"><a href="${INSTALLATION_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Installation guide ↗</a><a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Troubleshooting guide ↗</a></div>
+    </section>`;
+  }
+  const version = diagnostics.package_version ? ` Version ${escapeHtml(diagnostics.package_version)} was detected.` : "";
+  return `<section class="h3ps-direct-runtime-state is-broken">
+    <header><span><small>Runtime</small><strong>llama-cpp-python is installed, but the runtime is not usable.</strong></span></header>
+    <p>The native compatibility check did not find a working GPU runtime.${version}</p>
+    <a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Troubleshooting ↗</a>
+  </section>`;
+}
+
 function localRuntimeLabel() {
   const diagnostics = studio?.ggufRuntimeDiagnostics;
   if (!diagnostics) return "Local GGUF · llama-cpp-python";
@@ -939,18 +968,16 @@ async function inspectDirectRuntime() {
   if (studio.selectedModel?.family !== "gguf") return true;
   if (!studio.ggufRuntimeDiagnostics) {
     try {
-      const result = await diagnoseGGUFRuntime();
-      studio.ggufRuntimeDiagnostics = result.diagnostics;
+      await loadGGUFRuntimeDiagnostics();
     } catch (error) {
       showToast("Runtime could not be inspected", "The isolated compatibility check was unavailable. Generation will continue with the existing runtime behavior.", error.details || error.message);
       return true;
     }
-    renderInferenceSettings();
     syncSelectedModelSourceLabel();
   }
 
   const diagnostics = studio.ggufRuntimeDiagnostics;
-  const blocking = diagnostics.status === "crashed" || diagnostics.status === "unavailable";
+  const blocking = diagnostics.onboarding?.state === "broken" || diagnostics.status === "crashed" || diagnostics.status === "unavailable";
   if (blocking) {
     const warning = diagnostics.warnings?.[0];
     showToast(
@@ -1234,15 +1261,20 @@ function renderInferenceSettings() {
   select.disabled = !models.length;
   select.innerHTML = models.length
     ? models.map((model) => {
-      const suffix = [modelVramLabel(model), model.format, model.runtime_ready ? "" : "Needs setup"].filter(Boolean).join(" · ");
+      const modelFileNeedsSetup = (model.missing_dependencies || []).some((dependency) => dependency !== "llama-cpp-python");
+      const suffix = [modelVramLabel(model), model.format, modelFileNeedsSetup ? "Needs setup" : ""].filter(Boolean).join(" · ");
       return `<option value="${escapeHtml(model.id)}" ${model.id === directModel?.id ? "selected" : ""}>${escapeHtml(model.name.split("/").pop())}${suffix ? ` — ${escapeHtml(suffix)}` : ""}</option>`;
     }).join("")
     : "<option>No compatible model found</option>";
+  studio.root.querySelector("[data-direct-runtime-status]").innerHTML = renderDirectRuntimeStatus();
   const directStatus = studio.root.querySelector("[data-direct-model-status]");
   if (!models.length) {
     directStatus.innerHTML = renderModelSetup();
-  } else if (directModel && !directModel.runtime_ready) {
-    directStatus.innerHTML = `<div class="h3ps-direct-model-warning"><strong>Model needs attention</strong><span>${escapeHtml(directModel.setup_message || `Missing ${directModel.missing_dependencies?.join(", ") || "required files"}`)}</span></div>`;
+  } else if (directModel) {
+    const missingModelFiles = (directModel.missing_dependencies || []).filter((dependency) => dependency !== "llama-cpp-python");
+    directStatus.innerHTML = missingModelFiles.length
+      ? `<div class="h3ps-direct-model-warning"><strong>Model needs attention</strong><span>${escapeHtml(directModel.setup_message || `Missing ${missingModelFiles.join(", ")}`)}</span></div>`
+      : "";
   } else {
     directStatus.innerHTML = "";
   }
@@ -1255,6 +1287,37 @@ function renderInferenceSettings() {
   catalog.innerHTML = `<div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>`;
   syncSelectedModelSourceLabel();
   syncProviderSettings();
+}
+
+async function loadGGUFRuntimeDiagnostics(force = false) {
+  if (studio.ggufRuntimeDiagnostics && !force) return studio.ggufRuntimeDiagnostics;
+  if (ggufRuntimeDiagnosticsPromise) return ggufRuntimeDiagnosticsPromise;
+  studio.ggufRuntimeDiagnosticsLoading = true;
+  if (studio.root) renderInferenceSettings();
+  ggufRuntimeDiagnosticsPromise = diagnoseGGUFRuntime(force)
+    .then((result) => {
+      studio.ggufRuntimeDiagnostics = result.diagnostics;
+      return result.diagnostics;
+    })
+    .finally(() => {
+      studio.ggufRuntimeDiagnosticsLoading = false;
+      ggufRuntimeDiagnosticsPromise = null;
+      if (studio.root) renderInferenceSettings();
+    });
+  return ggufRuntimeDiagnosticsPromise;
+}
+
+async function refreshGGUFRuntimeDiagnostics(force = false) {
+  try {
+    await loadGGUFRuntimeDiagnostics(force);
+  } catch (error) {
+    studio.ggufRuntimeDiagnostics = {
+      status: "unavailable",
+      message: error.message || "The native runtime could not be inspected.",
+      onboarding: { state: "broken", install_command: null },
+    };
+    renderInferenceSettings();
+  }
 }
 
 function selectSettingsProvider(provider) {
@@ -1635,6 +1698,7 @@ async function refreshModels() {
     );
     studio.preferencesRestoring = false;
     setGenerationState("idle", "", "");
+    refreshGGUFRuntimeDiagnostics();
   } catch (error) {
     studio.preferencesRestoring = false;
     showToast(error.code || "Model scan failed", error.message, error.details);
@@ -2055,6 +2119,13 @@ function createStudio() {
       const command = copyOllamaCommand.dataset.copyOllamaCommand;
       navigator.clipboard.writeText(command);
       showToast("Command copied", `${command} · paste it into Terminal or PowerShell.`);
+      return;
+    }
+    const copyDirectRuntimeCommand = event.target.closest("[data-copy-direct-runtime-command]");
+    if (copyDirectRuntimeCommand) {
+      const command = copyDirectRuntimeCommand.dataset.copyDirectRuntimeCommand;
+      navigator.clipboard.writeText(command);
+      showToast("Command copied", "Paste it into PowerShell or CMD from the ComfyUI portable folder.");
       return;
     }
     const externalDisconnect = event.target.closest("[data-external-server-disconnect]");

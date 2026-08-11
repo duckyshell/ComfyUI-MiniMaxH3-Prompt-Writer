@@ -36,3 +36,15 @@ export function moveOntoTarget(items, sourceId, targetId, getId = (item) => item
   reordered.splice(targetIndex, 0, moved);
   return reordered;
 }
+
+export function isRuntimeMenuInteraction(target) {
+  return Boolean(target?.closest?.("[data-runtime-toggle], [data-runtime-menu]"));
+}
+
+export function isChoiceMenuInteraction(target) {
+  return Boolean(target?.closest?.("[data-choice-toggle], [data-choice-menu]"));
+}
+
+export function isGuideMenuInteraction(target) {
+  return Boolean(target?.closest?.("[data-guide-toggle], [data-guide-menu]"));
+}

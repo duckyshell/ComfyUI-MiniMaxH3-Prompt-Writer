@@ -1,6 +1,6 @@
 import { app } from "/scripts/app.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, freeComfyVram, generate, getGuides, getModels, getStatus, getSystemPrompt, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
-import { createSessionId, moveOntoTarget, replaceEventListener } from "./compat.js";
+import { createSessionId, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
@@ -208,12 +208,20 @@ function syncModifiedState() {
 }
 
 function injectStyles() {
-  if (document.querySelector("link[data-h3ps-styles]")) return;
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = new URL("./styles.css", import.meta.url).href;
-  link.dataset.h3psStyles = "true";
-  document.head.appendChild(link);
+  if (!document.querySelector("link[data-h3ps-styles]")) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = new URL("./styles.css", import.meta.url).href;
+    link.dataset.h3psStyles = "true";
+    document.head.appendChild(link);
+  }
+  if (!document.querySelector("link[data-h3ps-skin]")) {
+    const skin = document.createElement("link");
+    skin.rel = "stylesheet";
+    skin.href = new URL("./skin.css", import.meta.url).href;
+    skin.dataset.h3psSkin = "true";
+    document.head.appendChild(skin);
+  }
 }
 
 function icon(name, size = 16) {
@@ -1002,15 +1010,6 @@ function directModelForSettings() {
   return models.find((model) => model.runtime_ready) || models[0] || null;
 }
 
-function updateCapabilityBadges(model) {
-  for (const capability of ["images", "video_frames", "audio"]) {
-    const value = model?.capabilities?.[capability] === true;
-    const target = studio.root.querySelector(`[data-model-capability="${capability}"]`);
-    target.textContent = capability === "audio" ? "Not analyzed" : value ? "Yes" : "No";
-    target.classList.toggle("is-off", capability !== "audio" && !value);
-  }
-}
-
 function syncProviderSettings() {
   const provider = studio.settingsProvider === "external" ? "external" : "direct";
   studio.root.querySelectorAll("[data-provider-option]").forEach((button) => {
@@ -1021,8 +1020,6 @@ function syncProviderSettings() {
   studio.root.querySelectorAll("[data-provider-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.providerPanel !== provider;
   });
-  const capabilityModel = provider === "external" ? studio.externalModel : directModelForSettings();
-  updateCapabilityBadges(capabilityModel);
   const runtimeSettings = studio.root.querySelector(".h3ps-runtime-settings");
   const serverManaged = provider === "external";
   runtimeSettings.classList.toggle("is-server-managed", serverManaged);
@@ -1222,8 +1219,6 @@ async function refreshModels() {
     studio.modelDirectory = result.model_directory || "ComfyUI/models/LLM/";
     studio.gpuMemory = status.gpu_memory;
     studio.modelLoaded = Boolean(status.loaded);
-    const developerMode = studio.root.querySelector("[data-developer-mode]");
-    developerMode.hidden = !status.developer_mode;
     selectModel(studio.models.find((model) => model.id === selectedId) || studio.models.find((model) => model.runtime_ready) || studio.models[0] || null);
     setGenerationState("idle", "", "");
   } catch (error) {
@@ -1444,8 +1439,14 @@ function createStudio() {
       root.querySelectorAll("[data-asset-menu]").forEach((menu) => { menu.hidden = true; });
     }
     if (!event.target.closest("[data-other-models-toggle], [data-other-models-popover]")) setOtherModelsPopover(false);
-    if (!event.target.closest(".h3ps-runtime-settings")) {
+    if (!isRuntimeMenuInteraction(event.target)) {
       root.querySelectorAll("[data-runtime-menu]").forEach((menu) => { menu.hidden = true; });
+    }
+    if (!isChoiceMenuInteraction(event.target)) {
+      root.querySelectorAll("[data-choice-menu]").forEach((menu) => { menu.hidden = true; });
+    }
+    if (!isGuideMenuInteraction(event.target)) {
+      root.querySelectorAll("[data-guide-menu]").forEach((menu) => { menu.hidden = true; });
     }
     if (!event.target.closest("[data-model-files-toggle], [data-model-files-menu]")) {
       root.querySelectorAll("[data-model-files-menu]").forEach((menu) => { menu.hidden = true; });

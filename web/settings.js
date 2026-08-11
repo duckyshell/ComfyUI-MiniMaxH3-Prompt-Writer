@@ -63,13 +63,6 @@ export function settingsMarkup(icon) {
             <div data-external-provider-control></div>
           </div>
 
-          <div class="h3ps-model-capabilities" data-model-capabilities>
-            <small>Capabilities</small>
-            <span>${icon("image", 12)} Images <b data-model-capability="images">No</b></span>
-            <span>${icon("video", 12)} Video frames <b data-model-capability="video_frames">No</b></span>
-            <span>${icon("audio", 12)} Audio <b data-model-capability="audio">Not analyzed</b></span>
-            <span data-developer-mode hidden>Dev log <b>On</b></span>
-          </div>
         </section>
 
         <section class="h3ps-settings-card h3ps-runtime-settings">

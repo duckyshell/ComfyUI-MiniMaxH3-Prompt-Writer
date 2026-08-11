@@ -4,7 +4,7 @@ import test from "node:test";
 
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");
-const { createSessionId, moveOntoTarget, replaceEventListener } = await import(`data:text/javascript;base64,${encoded}`);
+const { createSessionId, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } = await import(`data:text/javascript;base64,${encoded}`);
 const stateSource = await readFile(new URL("../web/studio_state.js", import.meta.url), "utf8");
 const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
@@ -67,6 +67,27 @@ test("dropping on another media card moves in either direction without an edge h
   const assets = [{ id: "picture" }, { id: "video" }, { id: "audio" }];
   assert.deepEqual(moveOntoTarget(assets, "picture", "video").map((asset) => asset.id), ["video", "picture", "audio"]);
   assert.deepEqual(moveOntoTarget(assets, "audio", "video").map((asset) => asset.id), ["picture", "audio", "video"]);
+});
+
+test("the first click outside a runtime control closes its menu", () => {
+  const runtimeTarget = { closest: (selector) => selector.includes("data-runtime-menu") ? {} : null };
+  const outsideTarget = { closest: () => null };
+  assert.equal(isRuntimeMenuInteraction(runtimeTarget), true);
+  assert.equal(isRuntimeMenuInteraction(outsideTarget), false);
+});
+
+test("the first click outside a choice control closes its menu", () => {
+  const choiceTarget = { closest: (selector) => selector.includes("data-choice-menu") ? {} : null };
+  const outsideTarget = { closest: () => null };
+  assert.equal(isChoiceMenuInteraction(choiceTarget), true);
+  assert.equal(isChoiceMenuInteraction(outsideTarget), false);
+});
+
+test("the first click outside the guides control closes its menu", () => {
+  const guideTarget = { closest: (selector) => selector.includes("data-guide-menu") ? {} : null };
+  const outsideTarget = { closest: () => null };
+  assert.equal(isGuideMenuInteraction(guideTarget), true);
+  assert.equal(isGuideMenuInteraction(outsideTarget), false);
 });
 
 test("settings storage preserves the existing keys and schemas", () => {
@@ -165,7 +186,8 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(markup, /data-model-refresh/);
   assert.match(markup, /data-model-scan-slot/);
   assert.match(markup, /data-verified-models-slot/);
-  assert.match(markup, /data-model-capabilities/);
+  assert.doesNotMatch(markup, /data-model-capabilities/);
+  assert.doesNotMatch(mainSource, /data-developer-mode/);
   assert.doesNotMatch(markup, /Prompt models/);
   assert.doesNotMatch(markup, /data-model-menu/);
   assert.match(markup, /Context and KV cache/);

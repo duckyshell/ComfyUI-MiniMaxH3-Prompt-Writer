@@ -30,17 +30,17 @@ export function settingsMarkup(icon) {
         <section class="h3ps-settings-card h3ps-provider-settings">
           <header><span><small>Inference</small><strong>Provider</strong></span></header>
           <div class="h3ps-provider-selector" role="tablist" aria-label="Inference provider">
+            <button type="button" role="tab" data-provider-option="ollama" aria-selected="false">
+              <span class="h3ps-provider-icon" data-provider-icon="ollama" aria-hidden="true"></span><span><strong>Ollama</strong><small>Simple local model service</small></span>${icon("check", 14)}
+            </button>
             <button type="button" role="tab" data-provider-option="direct" aria-selected="true">
-              <span class="h3ps-provider-icon">G</span><span><strong>Direct GGUF</strong><small>Models installed in ComfyUI</small></span>${icon("check", 14)}
+              <span class="h3ps-provider-icon" data-provider-icon="direct" aria-hidden="true"></span><span><strong>Direct GGUF</strong><small>Models installed in ComfyUI</small></span>${icon("check", 14)}
             </button>
             <button type="button" role="tab" data-provider-option="external" aria-selected="false">
-              <span class="h3ps-provider-icon">S</span><span><strong>External llama.cpp</strong><small>Existing local llama-server</small></span>${icon("check", 14)}
-            </button>
-            <button type="button" role="tab" data-provider-option="ollama" aria-selected="false">
-              <span class="h3ps-provider-icon">O</span><span><strong>Ollama</strong><small>Simple local model service</small></span>${icon("check", 14)}
+              <span class="h3ps-provider-icon" data-provider-icon="external" aria-hidden="true"></span><span><strong>External llama.cpp</strong><small>Existing local llama-server</small></span>${icon("check", 14)}
             </button>
             <button type="button" role="tab" data-provider-option="api" aria-selected="false">
-              <span class="h3ps-provider-icon">A</span><span><strong>API providers</strong><small>OpenAI-compatible local or remote API</small></span>${icon("check", 14)}
+              <span class="h3ps-provider-icon" data-provider-icon="api" aria-hidden="true"></span><span><strong>API providers</strong><small>OpenAI-compatible local or remote API</small></span>${icon("check", 14)}
             </button>
           </div>
         </section>

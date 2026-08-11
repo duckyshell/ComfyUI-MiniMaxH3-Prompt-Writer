@@ -367,6 +367,13 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(markup, /data-provider-option="external"/);
   assert.match(markup, /data-provider-option="ollama"/);
   assert.match(markup, /data-provider-option="api"/);
+  assert.ok(markup.indexOf('data-provider-option="ollama"') < markup.indexOf('data-provider-option="direct"'));
+  assert.ok(markup.indexOf('data-provider-option="direct"') < markup.indexOf('data-provider-option="external"'));
+  assert.ok(markup.indexOf('data-provider-option="external"') < markup.indexOf('data-provider-option="api"'));
+  assert.match(markup, /data-provider-icon="ollama"/);
+  assert.match(markup, /data-provider-icon="direct"/);
+  assert.match(markup, /data-provider-icon="external"/);
+  assert.match(markup, /data-provider-icon="api"/);
   assert.match(markup, /data-provider-panel="direct"/);
   assert.match(markup, /data-provider-panel="external"/);
   assert.match(markup, /data-provider-panel="ollama"/);

@@ -422,8 +422,10 @@
   font-size: 9.5px;
 }
 .h3ps-provider-icon {
+  display: grid;
   width: 30px;
   height: 30px;
+  place-items: center;
   border: 0;
   border-radius: 7px;
   background: #1a1a1e;
@@ -431,6 +433,18 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 600;
 }
+.h3ps-provider-icon[data-provider-icon]::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: var(--h3ps-provider-icon) center / contain no-repeat;
+  -webkit-mask: var(--h3ps-provider-icon) center / contain no-repeat;
+}
+.h3ps-provider-icon[data-provider-icon="ollama"] { --h3ps-provider-icon: url("./assets/icons/ollama.svg"); }
+.h3ps-provider-icon[data-provider-icon="direct"] { --h3ps-provider-icon: url("./assets/icons/direct-gguf.svg"); }
+.h3ps-provider-icon[data-provider-icon="external"] { --h3ps-provider-icon: url("./assets/icons/external-llama-server.svg"); }
+.h3ps-provider-icon[data-provider-icon="api"] { --h3ps-provider-icon: url("./assets/icons/api-providers.svg"); }
 .h3ps-provider-selector > button.is-selected .h3ps-provider-icon { color: var(--h3ps-text); }
 
 /* Model and utility rows */

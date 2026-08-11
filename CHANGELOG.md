@@ -18,6 +18,13 @@
 - Added actionable details for native probe crashes, invalid CUDA/HIP runtime
   paths, and unavailable GPU offload without assuming a specific backend.
 
+## 0.2.0 - 2026-08-10
+
+- Added optional support for an existing local OpenAI-compatible `llama.cpp`
+  server with a loaded Gemma 4 model and matching vision projector.
+- Added connection, health, vision-capability, cancellation, and external model
+  lifecycle handling while leaving model and runtime configuration to the server.
+
 ## 0.1.0 - 2026-08-09
 
 - First public release of the ComfyUI UI extension.

@@ -94,6 +94,33 @@ def model_info():
 
 
 class GenerationCharacterizationTests(unittest.TestCase):
+    def test_non_thinking_length_response_is_rejected_instead_of_returned_truncated(self):
+        backend = _CharacterizedBackend([
+            response("subject_definitions:\n<Subject 1> is", prompt_tokens=10, completion_tokens=1, finish_reason="length"),
+        ])
+        assembled = {
+            "messages": [{"role": "user", "content": "Create a static scene."}],
+            "media_inputs": [],
+            "input": {
+                "mode": "T2VA",
+                "duration_seconds": 5,
+                "creative_brief": "Create a static scene.",
+            },
+        }
+
+        with self.assertRaises(ModelError) as raised:
+            backend.generate(
+                model_info(),
+                assembled,
+                "characterization-session",
+                thinking=False,
+                seed=None,
+                unload_after=False,
+                runtime_plan=runtime_plan(),
+            )
+
+        self.assertEqual(raised.exception.code, "GENERATION_TRUNCATED")
+
     def test_thinking_fallback_preserves_calls_metrics_and_result_schema(self):
         backend = _CharacterizedBackend([
             response("", prompt_tokens=10, completion_tokens=5, finish_reason="length"),

@@ -784,7 +784,8 @@ async function startGenerationPreview() {
     } else if (result.format_repair_failure) {
       showToast("Prompt generated with a format warning", `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`);
     } else {
-      showToast("Prompt generated", `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · Thinking ${result.thinking ? "on" : "off"}`);
+      const reasoning = result.api_provider ? "Reasoning provider managed" : `Thinking ${result.thinking ? "on" : "off"}`;
+      showToast("Prompt generated", `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · ${reasoning}`);
     }
   } catch (error) {
     if (error.code === "GENERATION_CANCELLED") {
@@ -1097,11 +1098,11 @@ function renderApiProviderControl() {
       <div class="h3ps-api-setup">
         <div class="h3ps-api-connected">
           <span class="h3ps-provider-icon">${selectedPreset.icon}</span>
-          <span><strong>${escapeHtml(connection.provider_name)}</strong><small>${escapeHtml(connection.base_url)} · ${escapeHtml(connection.key_hint || connection.environment_name || "no key")}</small></span>
+          <span><strong>${escapeHtml(connection.provider_name)}</strong><small>${escapeHtml(connection.base_url)} · ${escapeHtml(connection.key_hint || connection.environment_name || "no key")}${connection.compatibility_profile === "lm_studio" ? " · LM Studio detected" : ""}</small></span>
           <em>${connection.connection_verified ? "Connected" : "Configured"}</em>
         </div>
         <label class="h3ps-api-model-select"><span>Model</span><select data-api-model>${models.map((item) => `<option value="${escapeHtml(item.remote_model)}" ${item.remote_model === model?.remote_model ? "selected" : ""}>${escapeHtml(item.name)}${item.model_context_limit ? ` · ${Math.round(item.model_context_limit / 1024)}K` : ""}</option>`).join("")}</select></label>
-        <div class="h3ps-api-badges"><span class="${model?.capabilities?.images ? "is-ready" : ""}">${model?.capabilities?.images ? "Vision" : "Text only / unknown"}</span><span>${model?.thinking ? "Reasoning control" : "Standard generation"}</span><span>Provider managed</span></div>
+        <div class="h3ps-api-badges"><span class="${model?.capabilities?.images ? "is-ready" : ""}">${model?.capabilities?.images ? "Vision" : "Text only / unknown"}</span><span>${config.preset === "gemini" ? `Thinking ${escapeHtml(connection.reasoning_effort || "minimal")}` : "Reasoning provider managed"}</span><span>Provider managed</span></div>
         <div class="h3ps-api-actions"><span>${policyLinks}</span><button type="button" data-api-model-refresh>${icon("refresh", 13)} Refresh models</button><button type="button" data-api-disconnect>Disconnect</button></div>
         ${disclosure}
         <p class="h3ps-api-cancel-note">Stop aborts H3's connection. The remote provider may continue processing or billing.</p>
@@ -1119,6 +1120,7 @@ function renderApiProviderControl() {
         ? `<label><span>Environment variable</span><input name="environment_name" type="text" value="${escapeHtml(environment)}" pattern="[A-Z_][A-Z0-9_]*" required><small>The secret stays in the ComfyUI process environment.</small></label>`
         : `<label><span>API key ${config.preset === "custom" ? "<em>optional</em>" : ""}</span><input name="api_key" type="password" value="" placeholder="Paste key for this session" autocomplete="off" spellcheck="false" ${config.preset === "custom" ? "" : "required"}><small>The key is sent once to the local H3 backend, kept only in memory, and never saved in localStorage.</small></label>`}
       <label><span>Model ID <em>optional before connect</em></span><input name="model_id" type="text" value="${escapeHtml(config.model_id)}" placeholder="Choose from provider list or enter an exact ID" spellcheck="false"></label>
+      ${config.preset === "gemini" ? `<label><span>Thinking level</span><select name="gemini_reasoning_effort"><option value="minimal" ${config.gemini_reasoning_effort === "minimal" ? "selected" : ""}>Minimal</option><option value="low" ${config.gemini_reasoning_effort === "low" ? "selected" : ""}>Low</option><option value="medium" ${config.gemini_reasoning_effort === "medium" ? "selected" : ""}>Medium</option><option value="high" ${config.gemini_reasoning_effort === "high" ? "selected" : ""}>High</option></select><small>Gemini manages the reasoning and output budget. Higher levels can use more tokens and take longer.</small></label>` : ""}
       ${config.preset === "custom" ? `<div class="h3ps-api-custom-options"><label><input name="custom_images" type="checkbox" ${config.custom_images ? "checked" : ""}><span>Endpoint accepts image_url inputs</span></label><label><span>Known context <em>optional</em></span><input name="custom_context_tokens" type="number" min="4096" step="1024" value="${config.custom_context_tokens || ""}" placeholder="32768"></label></div>` : ""}
       ${studio.apiProviderError ? `<div class="h3ps-api-error"><strong>${escapeHtml(studio.apiProviderError.code || "Connection failed")}</strong><span>${escapeHtml(studio.apiProviderError.message)}</span></div>` : ""}
       ${disclosure}
@@ -1274,6 +1276,7 @@ function selectModel(model) {
   if (model?.family === "api") {
     studio.contextProfile = "auto";
     studio.kvCache = "auto";
+    studio.thinking = false;
     studio.apiProviderConfig.model_id = model.remote_model;
     saveApiProviderConfig(localStorage, studio.apiProviderConfig);
   }
@@ -1290,17 +1293,19 @@ function selectModel(model) {
 
 function syncThinkingAvailability() {
   if (!studio) return;
+  const apiManaged = studio.selectedModel?.family === "api";
   const external = studio.selectedModel?.family === "external";
   const context = studio.contextProfile;
   const resolved = context === "auto" ? (studio.selectedModel?.recommended_context || "standard") : context;
   const input = studio.root.querySelector("[data-thinking]");
   const label = input.closest("label");
-  const unsupported = ["ollama", "api"].includes(studio.selectedModel?.family) && studio.selectedModel.thinking !== true;
-  const disabled = unsupported || (!external && context !== "auto" && resolved === "low");
+  const unsupported = studio.selectedModel?.family === "ollama" && studio.selectedModel.thinking !== true;
+  const disabled = apiManaged || unsupported || (!external && context !== "auto" && resolved === "low");
   if (disabled) input.checked = false;
   if (disabled) studio.thinking = false;
   input.checked = studio.thinking;
   input.disabled = disabled;
+  label.hidden = apiManaged;
   label.classList.toggle("is-disabled", disabled);
   label.title = unsupported
     ? "This provider model does not report thinking controls."
@@ -1418,6 +1423,7 @@ async function connectConfiguredApiProvider(form) {
     model_id: form.elements.model_id.value.trim(),
     credential_source: source,
     environment_name: form.elements.environment_name?.value.trim() || "",
+    gemini_reasoning_effort: form.elements.gemini_reasoning_effort?.value || studio.apiProviderConfig.gemini_reasoning_effort || "minimal",
     custom_images: Boolean(form.elements.custom_images?.checked),
     custom_context_tokens: Number.isInteger(contextValue) && contextValue >= 4096 ? contextValue : null,
   };
@@ -1436,6 +1442,9 @@ async function connectConfiguredApiProvider(form) {
       custom_capabilities: {
         images: config.custom_images,
         context_tokens: config.custom_context_tokens,
+      },
+      provider_options: {
+        reasoning_effort: config.gemini_reasoning_effort,
       },
     });
     if (studio.apiProviderConnection?.id && studio.apiProviderConnection.id !== result.connection.id) {
@@ -1495,6 +1504,7 @@ async function chooseApiProviderPreset(preset) {
     base_url: "",
     model_id: "",
     environment_name: API_PROVIDER_UI[preset].env,
+    gemini_reasoning_effort: "minimal",
     custom_images: false,
     custom_context_tokens: null,
   };

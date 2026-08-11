@@ -57,8 +57,23 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
                         "context_length": 8192,
                         "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
                     },
+                    {"id": "lm-studio-vision-model"},
+                    {"id": "embedding-model"},
                 ],
             }, headers={"X-Request-ID": "models-request"})
+        elif self.path == "/api/v1/models":
+            self._json({
+                "models": [
+                    {
+                        "type": "llm",
+                        "key": "lm-studio-vision-model",
+                        "max_context_length": 131072,
+                        "loaded_instances": [{"config": {"context_length": 8192}}],
+                        "capabilities": {"vision": True},
+                    },
+                    {"type": "embedding", "key": "embedding-model", "max_context_length": 2048},
+                ],
+            })
         elif self.path == "/missing/v1/models":
             self._json({"error": {"message": "not found"}}, 404)
         else:
@@ -150,6 +165,8 @@ class ApiProviderBackendTests(unittest.TestCase):
             environment_name=None,
             custom_images=kwargs.get("custom_images", True),
             custom_context_tokens=kwargs.get("custom_context_tokens", 32768),
+            reasoning_effort=kwargs.get("reasoning_effort", "minimal"),
+            compatibility_profile=kwargs.get("compatibility_profile", "generic"),
         )
 
     def test_custom_url_accepts_loopback_http_and_rejects_remote_http_or_metadata(self):
@@ -198,6 +215,34 @@ class ApiProviderBackendTests(unittest.TestCase):
         self.assertEqual(result["model"]["remote_model"], "manual-vision-model")
         self.assertEqual(result["model"]["capability_source"], "user_declared")
         self.assertTrue(result["model"]["capabilities"]["images"])
+
+    def test_loopback_custom_enriches_lm_studio_vision_metadata(self):
+        result = self.backend.probe({
+            "preset": "custom",
+            "base_url": self.base_url,
+            "model_id": "lm-studio-vision-model",
+            "credential": {"source": "session", "value": ""},
+            "custom_capabilities": {"images": False},
+        })
+        model = result["model"]
+        self.assertTrue(model["capabilities"]["images"])
+        self.assertEqual(model["model_context_limit"], 8192)
+        self.assertEqual(model["capability_source"], "official_metadata")
+        self.assertEqual(result["connection"]["compatibility_profile"], "lm_studio")
+        self.assertNotIn("embedding-model", [item["remote_model"] for item in result["models"]])
+
+        connection = self.backend._get_connection(result["connection"]["id"])
+        _ApiChatHandler(self.backend, connection, "lm-studio-vision-model")(
+            messages=[{"role": "user", "content": "brief"}],
+            temperature=1.0,
+            top_p=0.95,
+            top_k=64,
+            max_tokens=1536,
+            seed=None,
+            thinking=False,
+        )
+        payload = _FakeApiHandler.requests[-1][3]
+        self.assertEqual(payload["reasoning_effort"], "none")
 
     def test_environment_credentials_are_resolved_without_returning_the_secret(self):
         with patch.dict(os.environ, {"H3_TEST_API_KEY": "environment-secret"}, clear=False):
@@ -259,6 +304,38 @@ class ApiProviderBackendTests(unittest.TestCase):
         self.assertNotIn("max_tokens", payload)
         self.assertNotIn("temperature", payload)
         self.assertNotIn("top_p", payload)
+
+    def test_gemini_adapter_reserves_reasoning_budget_and_omits_sampling(self):
+        connection = self._connection(preset="gemini")
+        handler = _ApiChatHandler(self.backend, connection, "gemini-3.6-flash")
+        handler(
+            messages=[{"role": "user", "content": "brief"}],
+            temperature=1.0,
+            top_p=0.95,
+            top_k=64,
+            max_tokens=1536,
+            seed=None,
+            thinking=False,
+        )
+        payload = _FakeApiHandler.requests[-1][3]
+        self.assertEqual(payload["reasoning_effort"], "minimal")
+        self.assertNotIn("max_tokens", payload)
+        self.assertNotIn("temperature", payload)
+        self.assertNotIn("top_p", payload)
+
+        connection.reasoning_effort = "medium"
+        handler(
+            messages=[{"role": "user", "content": "brief"}],
+            temperature=1.0,
+            top_p=0.95,
+            top_k=64,
+            max_tokens=1536,
+            seed=None,
+            thinking=False,
+        )
+        payload = _FakeApiHandler.requests[-1][3]
+        self.assertEqual(payload["reasoning_effort"], "medium")
+        self.assertNotIn("max_tokens", payload)
 
     def test_provider_errors_are_normalized_without_echoing_request_content(self):
         connection = self._connection(preset="openrouter")

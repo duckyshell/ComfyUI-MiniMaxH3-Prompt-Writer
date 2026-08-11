@@ -236,6 +236,13 @@ def run_h3_pipeline(
             "prompt_tokens": fallback_usage.get("prompt_tokens", usage.get("prompt_tokens", 0)),
             "completion_tokens": thinking_attempt_tokens + int(fallback_usage.get("completion_tokens", 0)),
         }
+    final_finish_reason = response["choices"][0].get("finish_reason")
+    if final_finish_reason == "length":
+        raise ModelError(
+            "GENERATION_TRUNCATED",
+            "The model reached its output limit before completing the prompt. Try again or choose a model with a larger output budget.",
+            {"max_output_tokens": runtime_plan["max_output_tokens"]},
+        )
     if not text.strip():
         raise ModelError("EMPTY_GENERATION", "The model did not produce a final prompt.")
 

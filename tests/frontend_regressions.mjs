@@ -125,6 +125,7 @@ test("API provider storage persists configuration but never secret values", () =
     model_id: "provider/model",
     credential_source: "session",
     environment_name: "",
+    gemini_reasoning_effort: "minimal",
     custom_images: true,
     custom_context_tokens: 32768,
     api_key: "must-not-be-stored",
@@ -137,6 +138,7 @@ test("API provider storage persists configuration but never secret values", () =
     model_id: "provider/model",
     credential_source: "session",
     environment_name: "",
+    gemini_reasoning_effort: "minimal",
     custom_images: true,
     custom_context_tokens: 32768,
   });
@@ -272,6 +274,8 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(mainSource, /data-copy-ollama-command/);
   assert.match(mainSource, /data-api-provider-form/);
   assert.match(mainSource, /The key is sent once to the local H3 backend/);
+  assert.match(mainSource, /Reasoning provider managed/);
+  assert.match(mainSource, /label\.hidden = apiManaged/);
 });
 
 test("Settings shows one switchable System Prompt editor and Generate keeps lifecycle controls", () => {

@@ -30,6 +30,7 @@ DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024
 GEMINI_MAX_REQUEST_BYTES = 20 * 1024 * 1024
 MAX_API_CONNECTIONS = 32
 ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
+GEMINI_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
 PRESETS: dict[str, dict[str, Any]] = {
     "openai": {
@@ -139,6 +140,8 @@ class ApiConnection:
     environment_name: str | None
     custom_images: bool
     custom_context_tokens: int | None
+    reasoning_effort: str = "minimal"
+    compatibility_profile: str = "generic"
     models: list[dict[str, Any]] = field(default_factory=list)
     connection_verified: bool = False
 
@@ -175,16 +178,24 @@ class _ApiChatHandler:
             payload["store"] = False
         else:
             payload["max_tokens"] = max_tokens
-        # Some OpenAI reasoning-capable models reject sampling controls even when
-        # the caller did not explicitly enable H3's Thinking option. Keep that
-        # preset on the smallest portable parameter set.
-        if not thinking and preset != "openai":
+        # New OpenAI reasoning models and Gemini 3.6+ reject or deprecate
+        # sampling controls. Keep those presets on the smallest portable set.
+        if not thinking and preset in {"openrouter", "custom"}:
             payload["temperature"] = temperature
             payload["top_p"] = top_p
-        if thinking and preset in {"openai", "gemini"}:
+        if preset == "gemini":
+            # Let Gemini manage the combined hidden reasoning and visible output
+            # budget. Hard-coding per-effort token allowances would duplicate
+            # provider policy and becomes stale as models change.
+            effort = self.connection.reasoning_effort
+            payload["reasoning_effort"] = effort
+            payload.pop("max_tokens", None)
+        elif thinking and preset == "openai":
             payload["reasoning_effort"] = "low"
         elif thinking and preset == "openrouter":
             payload["reasoning"] = {"enabled": True, "exclude": True}
+        elif preset == "custom" and self.connection.compatibility_profile == "lm_studio":
+            payload["reasoning_effort"] = "low" if thinking else "none"
         return self.backend._request_chat_completion_stream(self.connection, payload)
 
 
@@ -475,6 +486,54 @@ class ApiProviderBackend:
             "pricing": pricing,
         }
 
+    def _local_custom_model_metadata(self, connection: ApiConnection) -> dict[str, dict[str, Any]]:
+        if connection.preset != "custom" or not _is_loopback(urlsplit(connection.base_url).hostname or ""):
+            return {}
+        try:
+            data, _headers = self._request_json(connection, "GET", "/api/v1/models")
+        except ModelError:
+            return {}
+        entries = data.get("models")
+        if not isinstance(entries, list):
+            return {}
+        if not any(
+            isinstance(entry, dict)
+            and entry.get("key")
+            and ("loaded_instances" in entry or "max_context_length" in entry)
+            for entry in entries
+        ):
+            return {}
+        connection.compatibility_profile = "lm_studio"
+        return {
+            str(entry.get("key") or entry.get("id")): entry
+            for entry in entries
+            if isinstance(entry, dict) and (entry.get("key") or entry.get("id"))
+        }
+
+    @staticmethod
+    def _enrich_local_custom_model(entry: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not metadata:
+            return entry
+        if metadata.get("type") not in {None, "llm"}:
+            return None
+        enriched = dict(entry)
+        capabilities = metadata.get("capabilities")
+        if isinstance(capabilities, dict) and capabilities.get("vision") is True:
+            enriched["architecture"] = {"input_modalities": ["text", "image"]}
+        loaded_instances = metadata.get("loaded_instances")
+        if isinstance(loaded_instances, list):
+            for instance in loaded_instances:
+                config = instance.get("config") if isinstance(instance, dict) else None
+                context_length = config.get("context_length") if isinstance(config, dict) else None
+                if isinstance(context_length, int) and context_length > 0:
+                    enriched["context_length"] = context_length
+                    break
+        if "context_length" not in enriched:
+            maximum = metadata.get("max_context_length")
+            if isinstance(maximum, int) and maximum > 0:
+                enriched["context_length"] = maximum
+        return enriched
+
     def _fetch_models(self, connection: ApiConnection, *, allow_missing: bool = False) -> list[dict[str, Any]]:
         try:
             data, _headers = self._request_json(connection, "GET", _api_path(connection.base_url, "models"))
@@ -486,9 +545,14 @@ class ApiProviderBackend:
         if not isinstance(entries, list):
             raise ModelError("API_RESPONSE_INVALID", "The provider model list has an unexpected shape.")
         connection.connection_verified = True
+        local_metadata = self._local_custom_model_metadata(connection)
         models: list[dict[str, Any]] = []
         for entry in entries:
             if not isinstance(entry, dict):
+                continue
+            model_id = str(entry.get("id") or entry.get("name") or "").strip()
+            entry = self._enrich_local_custom_model(entry, local_metadata.get(model_id))
+            if entry is None:
                 continue
             try:
                 models.append(self._model_info(connection, entry))
@@ -505,6 +569,14 @@ class ApiProviderBackend:
             custom_capabilities = {}
         context_value = custom_capabilities.get("context_tokens")
         custom_context = context_value if isinstance(context_value, int) and context_value >= 4_096 else None
+        provider_options = config.get("provider_options")
+        if not isinstance(provider_options, dict):
+            provider_options = {}
+        reasoning_effort = str(provider_options.get("reasoning_effort") or "minimal").strip().lower()
+        if preset == "gemini" and reasoning_effort not in GEMINI_REASONING_EFFORTS:
+            raise ModelError("API_REASONING_EFFORT_INVALID", "Choose Minimal, Low, Medium, or High Gemini thinking.")
+        if preset != "gemini":
+            reasoning_effort = "minimal"
         connection = ApiConnection(
             id=str(uuid4()),
             preset=preset,
@@ -514,6 +586,7 @@ class ApiProviderBackend:
             environment_name=environment_name,
             custom_images=bool(custom_capabilities.get("images")),
             custom_context_tokens=custom_context,
+            reasoning_effort=reasoning_effort,
         )
         models = self._fetch_models(connection, allow_missing=preset == "custom")
         requested_model = str(config.get("model_id") or "").strip()
@@ -543,6 +616,8 @@ class ApiProviderBackend:
             "credential_configured": bool(connection.api_key) or connection.preset == "custom",
             "key_hint": f"…{connection.api_key[-4:]}" if connection.api_key else None,
             "environment_name": connection.environment_name,
+            "reasoning_effort": connection.reasoning_effort if connection.preset == "gemini" else None,
+            "compatibility_profile": connection.compatibility_profile,
             "externally_managed": True,
             "connection_verified": connection.connection_verified,
         }

@@ -13,6 +13,7 @@ export function loadApiProviderConfig(storage = globalThis.localStorage) {
       model_id: typeof value.model_id === "string" ? value.model_id : "",
       credential_source: value.credential_source === "environment" ? "environment" : "session",
       environment_name: typeof value.environment_name === "string" ? value.environment_name : "",
+      gemini_reasoning_effort: ["minimal", "low", "medium", "high"].includes(value.gemini_reasoning_effort) ? value.gemini_reasoning_effort : "minimal",
       custom_images: value.custom_images === true,
       custom_context_tokens: Number.isInteger(value.custom_context_tokens) ? value.custom_context_tokens : null,
     };
@@ -32,6 +33,7 @@ export function saveApiProviderConfig(storage, config) {
     model_id: String(config.model_id || ""),
     credential_source: config.credential_source === "environment" ? "environment" : "session",
     environment_name: String(config.environment_name || ""),
+    gemini_reasoning_effort: ["minimal", "low", "medium", "high"].includes(config.gemini_reasoning_effort) ? config.gemini_reasoning_effort : "minimal",
     custom_images: config.custom_images === true,
     custom_context_tokens: Number.isInteger(config.custom_context_tokens) ? config.custom_context_tokens : null,
   };
@@ -202,6 +204,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
       model_id: "",
       credential_source: "session",
       environment_name: "",
+      gemini_reasoning_effort: "minimal",
       custom_images: false,
       custom_context_tokens: null,
     },

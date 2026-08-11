@@ -33,3 +33,11 @@ best-effort cancellation, and normalized errors. Presets only map endpoint,
 output-token, reasoning, model metadata, and disclosure differences; they are
 not separate backends. Custom remains generic OpenAI-compatible and does not use
 llama.cpp `/health`, `/props`, context, KV, or lifecycle semantics.
+
+Gemini exposes its official Minimal/Low/Medium/High reasoning choice in the
+Gemini preset and owns the combined reasoning/output budget. Other API presets
+do not expose the app's local Thinking toggle. A loopback Custom endpoint is
+optionally enriched from LM Studio's `/api/v1/models` metadata when that exact
+shape is available; this enables reported vision/context capabilities and
+suppresses LM Studio's default hidden reasoning without turning Custom into a
+separate backend.

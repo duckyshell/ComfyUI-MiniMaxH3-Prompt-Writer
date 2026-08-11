@@ -10,6 +10,8 @@ import {
   saveCustomSystemPrompts,
   saveExternalServerConfig,
   saveOllamaModel,
+  saveUserPreferences,
+  restoredModelAfterDiscovery,
   selectModelState,
 } from "./studio_state.js";
 
@@ -799,7 +801,13 @@ async function startGenerationPreview() {
         "More context is needed",
         `This request needs at least ${targetLabel} context. ${CONTEXT_LABELS[studio.contextProfile]} cannot fit the current references.`,
         null,
-        { label: `Use ${targetLabel}`, onClick: () => { studio.contextProfile = target; syncRuntimeSummary(); syncThinkingAvailability(); } },
+        { label: `Use ${targetLabel}`, onClick: () => {
+          studio.contextProfile = target;
+          rememberRuntimePreferences();
+          saveUserPreferences(localStorage, studio);
+          syncRuntimeSummary();
+          syncThinkingAvailability();
+        } },
       );
     } else {
       showToast(error.code || "Generation failed", error.message, error.details);
@@ -1232,7 +1240,9 @@ function renderInferenceSettings() {
 
 function selectSettingsProvider(provider) {
   setOtherModelsPopover(false);
+  rememberRuntimePreferences();
   studio.settingsProvider = ["direct", "external", "ollama", "api"].includes(provider) ? provider : "direct";
+  applyRuntimePreferences(studio.settingsProvider);
   if (studio.settingsProvider === "external" && studio.externalModel) {
     selectModel(studio.externalModel);
     return;
@@ -1263,10 +1273,14 @@ function selectSettingsProvider(provider) {
   }
   renderInferenceSettings();
   syncRuntimeSummary();
+  saveUserPreferences(localStorage, studio);
 }
 
 function selectModel(model) {
+  rememberRuntimePreferences();
   selectModelState(studio, model);
+  applyRuntimePreferences(studio.settingsProvider);
+  if (model?.family === "gguf") studio.preferredDirectModelId = model.id;
   const remote = ["external", "api"].includes(model?.family);
   if (model?.family === "ollama") {
     studio.kvCache = "auto";
@@ -1289,6 +1303,30 @@ function selectModel(model) {
   setOtherModelsPopover(false);
   syncRuntimeSummary();
   syncThinkingAvailability();
+  saveUserPreferences(localStorage, studio);
+}
+
+function rememberRuntimePreferences(provider = studio.settingsProvider) {
+  if (studio.preferencesRestoring) return;
+  if (provider === "direct") {
+    studio.directContextProfile = studio.contextProfile;
+    studio.directKvCache = studio.kvCache;
+  } else if (provider === "ollama") {
+    studio.ollamaContextProfile = studio.contextProfile;
+  }
+}
+
+function applyRuntimePreferences(provider) {
+  if (provider === "direct") {
+    studio.contextProfile = studio.directContextProfile;
+    studio.kvCache = studio.directKvCache;
+  } else if (provider === "ollama") {
+    studio.contextProfile = studio.ollamaContextProfile;
+    studio.kvCache = "auto";
+  } else if (provider === "api") {
+    studio.contextProfile = "auto";
+    studio.kvCache = "auto";
+  }
 }
 
 function syncThinkingAvailability() {
@@ -1410,6 +1448,7 @@ function disconnectExternalServer() {
   studio.settingsProvider = "external";
   renderInferenceSettings();
   syncRuntimeSummary();
+  saveUserPreferences(localStorage, studio);
   showToast("External server disconnected", "The llama.cpp process was left running and unchanged.");
 }
 
@@ -1461,6 +1500,7 @@ async function connectConfiguredApiProvider(form) {
     else {
       renderInferenceSettings();
       syncRuntimeSummary();
+      saveUserPreferences(localStorage, studio);
     }
     showToast(
       `${result.connection.provider_name} connected`,
@@ -1492,6 +1532,7 @@ async function disconnectConfiguredApiProvider({ announce = true } = {}) {
   studio.settingsProvider = "api";
   renderInferenceSettings();
   syncRuntimeSummary();
+  saveUserPreferences(localStorage, studio);
   if (announce) showToast("API provider disconnected", "The session credential was removed from backend memory.");
 }
 
@@ -1561,16 +1602,18 @@ async function refreshModels() {
     studio.modelDirectory = result.model_directory || "ComfyUI/models/LLM/";
     studio.gpuMemory = status.gpu_memory;
     studio.modelLoaded = Boolean(status.loaded);
+    const restoredModel = !selectedBeforeRefresh ? restoredModelAfterDiscovery(studio) : null;
     selectModel(
-      studio.models.find((model) => model.id === selectedId)
+      restoredModel
+      || studio.models.find((model) => model.id === selectedId)
       || (selectedBeforeRefresh?.family === "ollama" ? selectedBeforeRefresh : null)
       || (selectedBeforeRefresh?.family === "api" ? selectedBeforeRefresh : null)
-      || studio.models.find((model) => model.runtime_ready)
-      || studio.models[0]
-      || null,
+      || restoredModelAfterDiscovery(studio),
     );
+    studio.preferencesRestoring = false;
     setGenerationState("idle", "", "");
   } catch (error) {
+    studio.preferencesRestoring = false;
     showToast(error.code || "Model scan failed", error.message, error.details);
   }
 }
@@ -1800,6 +1843,13 @@ function createStudio() {
   document.body.appendChild(root);
 
   studio = { root, ...createStudioState({ sessionId: createSessionId(), storage: localStorage }) };
+  const durationSlider = root.querySelector("[data-duration-slider]");
+  durationSlider.value = String(studio.durationSeconds);
+  durationSlider.style.setProperty("--h3ps-range", `${(studio.durationSeconds - 1) / 19 * 100}%`);
+  root.querySelector("[data-duration-label]").textContent = `${studio.durationSeconds} seconds`;
+  const restoredAspect = ASPECT_RATIOS.find(([value]) => value === studio.aspectRatio) || ASPECT_RATIOS.find(([value]) => value === "16:9");
+  root.querySelector("[data-aspect-label]").textContent = restoredAspect[0];
+  root.querySelector("[data-aspect-description]").textContent = restoredAspect[1];
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
   root.addEventListener("click", (event) => {
     if (!event.target.closest("[data-asset-menu], [data-asset-menu-toggle]")) {
@@ -1825,6 +1875,7 @@ function createStudio() {
     studio.mode = button.dataset.mode;
     renderMedia(studio.mode);
     syncRuntimeSummary();
+    saveUserPreferences(localStorage, studio);
   }));
   root.querySelector("[data-open-settings-header]").addEventListener("click", () => setSettingsOpen(true));
   root.querySelector("[data-open-settings]").addEventListener("click", () => setSettingsOpen(true));
@@ -1863,6 +1914,7 @@ function createStudio() {
     studio.durationSeconds = Number(event.target.value);
     root.querySelector("[data-duration-label]").textContent = `${studio.durationSeconds} seconds`;
     event.target.style.setProperty("--h3ps-range", `${(studio.durationSeconds - 1) / 19 * 100}%`);
+    saveUserPreferences(localStorage, studio);
   });
   root.querySelectorAll("[data-runtime-toggle]").forEach((button) => button.addEventListener("click", (event) => {
     event.preventDefault();
@@ -1877,6 +1929,8 @@ function createStudio() {
     button.closest("[data-runtime-menu]").hidden = true;
     syncRuntimeSummary();
     syncThinkingAvailability();
+    rememberRuntimePreferences();
+    saveUserPreferences(localStorage, studio);
   }));
   syncRuntimeSummary();
   root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => button.addEventListener("click", () => {
@@ -1927,6 +1981,7 @@ function createStudio() {
     root.querySelector("[data-aspect-label]").textContent = option[0];
     root.querySelector("[data-aspect-description]").textContent = option[1];
     root.querySelector('[data-choice-menu="aspect"]').hidden = true;
+    saveUserPreferences(localStorage, studio);
   }));
   root.querySelectorAll("[data-provider-option]").forEach((button) => button.addEventListener("click", () => {
     selectSettingsProvider(button.dataset.providerOption);

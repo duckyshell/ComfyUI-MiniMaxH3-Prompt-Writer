@@ -12,6 +12,7 @@ const {
   API_PROVIDER_STORAGE_KEY,
   OLLAMA_MODEL_STORAGE_KEY,
   SYSTEM_PROMPT_STORAGE_KEY,
+  USER_PREFERENCES_STORAGE_KEY,
   buildGeneratePayload,
   buildRefinePayload,
   createStudioState,
@@ -20,10 +21,13 @@ const {
   loadApiProviderConfig,
   loadExternalServerConfig,
   loadOllamaModel,
+  loadUserPreferences,
   saveCustomSystemPrompts,
   saveApiProviderConfig,
   saveExternalServerConfig,
   saveOllamaModel,
+  saveUserPreferences,
+  restoredModelAfterDiscovery,
   selectModelState,
   systemPromptProfile,
 } = await import(`data:text/javascript;base64,${stateEncoded}`);
@@ -142,6 +146,114 @@ test("API provider storage persists configuration but never secret values", () =
     custom_images: true,
     custom_context_tokens: 32768,
   });
+});
+
+test("user preferences persist only stable non-secret settings", () => {
+  const storage = memoryStorage();
+  saveUserPreferences(storage, {
+    mode: "Reference",
+    durationSeconds: 14,
+    aspectRatio: "9:16",
+    settingsProvider: "api",
+    preferredDirectModelId: "direct-model.gguf",
+    directContextProfile: "extended",
+    directKvCache: "q8",
+    ollamaContextProfile: "standard",
+    selectedModel: { id: "api::secret-connection::model", api_connection_id: "secret-connection" },
+    apiProviderConfig: { api_key: "must-not-be-stored" },
+    creativeBrief: "must-not-be-stored",
+    keepModelLoaded: true,
+    thinking: true,
+  });
+
+  const serialized = storage.entries()[USER_PREFERENCES_STORAGE_KEY];
+  assert.doesNotMatch(serialized, /secret|creativeBrief|keepModelLoaded|thinking|connection/);
+  assert.deepEqual(loadUserPreferences(storage), {
+    version: 1,
+    mode: "Reference",
+    duration_seconds: 14,
+    aspect_ratio: "9:16",
+    active_provider: "api",
+    direct_model_id: "direct-model.gguf",
+    direct_context_profile: "extended",
+    direct_kv_cache: "q8",
+    ollama_context_profile: "standard",
+  });
+});
+
+test("user preferences ignore corrupt or unknown versions and sanitize fields", () => {
+  assert.equal(loadUserPreferences(memoryStorage({ [USER_PREFERENCES_STORAGE_KEY]: "{" })), null);
+  assert.equal(loadUserPreferences(memoryStorage({ [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({ version: 2 }) })), null);
+
+  const storage = memoryStorage({
+    [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      mode: "unknown",
+      duration_seconds: 999,
+      aspect_ratio: "invalid",
+      active_provider: "invalid",
+      direct_model_id: 123,
+      direct_context_profile: "invalid",
+      direct_kv_cache: "invalid",
+      ollama_context_profile: "invalid",
+    }),
+  });
+  assert.deepEqual(loadUserPreferences(storage), {
+    version: 1,
+    mode: "Reference",
+    duration_seconds: 10,
+    aspect_ratio: "16:9",
+    active_provider: "direct",
+    direct_model_id: null,
+    direct_context_profile: "auto",
+    direct_kv_cache: "auto",
+    ollama_context_profile: "auto",
+  });
+});
+
+test("studio restores safe preferences but not transient lifecycle state", () => {
+  const storage = memoryStorage({
+    [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      mode: "FL2VA",
+      duration_seconds: 7,
+      aspect_ratio: "3:2",
+      active_provider: "ollama",
+      direct_model_id: "direct-model.gguf",
+      direct_context_profile: "extended",
+      direct_kv_cache: "q8",
+      ollama_context_profile: "standard",
+    }),
+  });
+  const state = createStudioState({ sessionId: "11111111-2222-4333-8444-555555555555", storage });
+  assert.equal(state.mode, "FL2VA");
+  assert.equal(state.durationSeconds, 7);
+  assert.equal(state.aspectRatio, "3:2");
+  assert.equal(state.preferredProvider, "ollama");
+  assert.equal(state.preferredDirectModelId, "direct-model.gguf");
+  assert.equal(state.directContextProfile, "extended");
+  assert.equal(state.directKvCache, "q8");
+  assert.equal(state.ollamaContextProfile, "standard");
+  assert.equal(state.keepModelLoaded, false);
+  assert.equal(state.thinking, false);
+  assert.equal(state.selectedModel, null);
+  assert.deepEqual(state.assets, []);
+});
+
+test("disconnected API preference falls back to the saved Direct model after discovery", () => {
+  const preferred = { id: "preferred.gguf", family: "gguf", runtime_ready: true };
+  const first = { id: "first.gguf", family: "gguf", runtime_ready: true };
+  const state = {
+    models: [first, preferred],
+    preferredProvider: "api",
+    preferredDirectModelId: preferred.id,
+    ollamaModelName: null,
+    externalModel: null,
+  };
+  assert.equal(restoredModelAfterDiscovery(state), preferred);
+
+  state.preferredDirectModelId = "missing.gguf";
+  assert.equal(restoredModelAfterDiscovery(state), first);
 });
 
 test("studio state owns model, runtime, lifecycle, and System Prompt settings", () => {

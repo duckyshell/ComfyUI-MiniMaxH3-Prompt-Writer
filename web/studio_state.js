@@ -2,6 +2,48 @@ export const SYSTEM_PROMPT_STORAGE_KEY = "h3ps-system-prompts-v1";
 export const EXTERNAL_SERVER_STORAGE_KEY = "h3ps-external-llama-server-v1";
 export const OLLAMA_MODEL_STORAGE_KEY = "h3ps-ollama-model-v1";
 export const API_PROVIDER_STORAGE_KEY = "h3ps-api-provider-v1";
+export const USER_PREFERENCES_STORAGE_KEY = "h3ps-preferences-v1";
+
+const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference"];
+const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
+const PROVIDERS = ["direct", "external", "ollama", "api"];
+const CONTEXT_PROFILES = ["auto", "low", "standard", "extended"];
+const KV_CACHES = ["auto", "f16", "q8"];
+
+export function loadUserPreferences(storage = globalThis.localStorage) {
+  try {
+    const value = JSON.parse(storage?.getItem(USER_PREFERENCES_STORAGE_KEY) || "null");
+    if (!value || value.version !== 1) return null;
+    return {
+      version: 1,
+      mode: MODES.includes(value.mode) ? value.mode : "Reference",
+      duration_seconds: Number.isInteger(value.duration_seconds) && value.duration_seconds >= 1 && value.duration_seconds <= 20 ? value.duration_seconds : 10,
+      aspect_ratio: ASPECT_RATIOS.includes(value.aspect_ratio) ? value.aspect_ratio : "16:9",
+      active_provider: PROVIDERS.includes(value.active_provider) ? value.active_provider : "direct",
+      direct_model_id: typeof value.direct_model_id === "string" && value.direct_model_id ? value.direct_model_id : null,
+      direct_context_profile: CONTEXT_PROFILES.includes(value.direct_context_profile) ? value.direct_context_profile : "auto",
+      direct_kv_cache: KV_CACHES.includes(value.direct_kv_cache) ? value.direct_kv_cache : "auto",
+      ollama_context_profile: CONTEXT_PROFILES.includes(value.ollama_context_profile) ? value.ollama_context_profile : "auto",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveUserPreferences(storage, state) {
+  const safe = {
+    version: 1,
+    mode: MODES.includes(state.mode) ? state.mode : "Reference",
+    duration_seconds: Number.isInteger(state.durationSeconds) && state.durationSeconds >= 1 && state.durationSeconds <= 20 ? state.durationSeconds : 10,
+    aspect_ratio: ASPECT_RATIOS.includes(state.aspectRatio) ? state.aspectRatio : "16:9",
+    active_provider: PROVIDERS.includes(state.settingsProvider) ? state.settingsProvider : "direct",
+    direct_model_id: typeof state.preferredDirectModelId === "string" && state.preferredDirectModelId ? state.preferredDirectModelId : null,
+    direct_context_profile: CONTEXT_PROFILES.includes(state.directContextProfile) ? state.directContextProfile : "auto",
+    direct_kv_cache: KV_CACHES.includes(state.directKvCache) ? state.directKvCache : "auto",
+    ollama_context_profile: CONTEXT_PROFILES.includes(state.ollamaContextProfile) ? state.ollamaContextProfile : "auto",
+  };
+  storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
+}
 
 export function loadApiProviderConfig(storage = globalThis.localStorage) {
   try {
@@ -119,6 +161,22 @@ export function selectModelState(state, model) {
   return state;
 }
 
+export function restoredModelAfterDiscovery(state) {
+  const preferredDirect = state.models.find((model) => model.family === "gguf" && model.id === state.preferredDirectModelId && model.runtime_ready);
+  const preferredProviderModel = state.preferredProvider === "direct"
+    ? preferredDirect
+    : state.preferredProvider === "external"
+      ? state.externalModel
+      : state.preferredProvider === "ollama"
+        ? state.models.find((model) => model.family === "ollama" && model.remote_model === state.ollamaModelName && model.runtime_ready)
+        : null;
+  return preferredProviderModel
+    || preferredDirect
+    || state.models.find((model) => model.runtime_ready)
+    || state.models[0]
+    || null;
+}
+
 function sharedInferencePayload(state) {
   return {
     session_id: state.sessionId,
@@ -165,16 +223,23 @@ export function buildRefinePayload(state, { currentPrompt, instruction, seed }) 
 }
 
 export function createStudioState({ sessionId, storage = globalThis.localStorage }) {
+  const preferences = loadUserPreferences(storage);
   return {
-    mode: "Reference",
+    mode: preferences?.mode || "Reference",
     mediaFilter: "all",
-    durationSeconds: 10,
-    aspectRatio: "16:9",
+    durationSeconds: preferences?.duration_seconds || 10,
+    aspectRatio: preferences?.aspect_ratio || "16:9",
     contextProfile: "auto",
     kvCache: "auto",
     thinking: false,
     keepModelLoaded: false,
     settingsProvider: "direct",
+    preferencesRestoring: true,
+    preferredProvider: preferences?.active_provider || "direct",
+    preferredDirectModelId: preferences?.direct_model_id || null,
+    directContextProfile: preferences?.direct_context_profile || "auto",
+    directKvCache: preferences?.direct_kv_cache || "auto",
+    ollamaContextProfile: preferences?.ollama_context_profile || "auto",
     settingsPromptProfile: "standard",
     modelLoaded: false,
     requestBusy: false,

@@ -6,9 +6,7 @@ import {
   buildGeneratePayload,
   buildRefinePayload,
   createStudioState,
-  isModeDraftDirty,
   isPersistedDraftMode,
-  resetModeDraft,
   saveApiProviderConfig,
   saveCustomSystemPrompts,
   saveExternalServerConfig,
@@ -271,7 +269,7 @@ function syncModifiedState() {
   const output = studio.root.querySelector("[data-output]");
   const hasBaseline = typeof studio.lastModelPrompt === "string";
   const modified = hasBaseline ? output.value !== studio.lastModelPrompt : true;
-  studio.root.querySelector("[data-modified-badge]").hidden = !modified;
+  studio.outputModified = modified;
   studio.root.querySelector("[data-undo-edits]").hidden = !modified || !hasBaseline;
 }
 
@@ -640,6 +638,7 @@ async function resampleCurrentVideo(options = null) {
 function showToast(title, message, details = null, action = null, options = {}) {
   const toast = studio.root.querySelector("[data-h3ps-toast]");
   const dismissOnWorkspaceClick = options.dismissOnWorkspaceClick === true;
+  const durationMs = Number.isFinite(options.durationMs) ? options.durationMs : null;
   toast.querySelector("[data-toast-title]").textContent = title;
   toast.querySelector("[data-toast-message]").textContent = message;
   const technical = toast.querySelector("[data-toast-details]");
@@ -656,8 +655,11 @@ function showToast(title, message, details = null, action = null, options = {}) 
   toast.classList.add("is-visible");
   studio.toastDismissOnWorkspaceClick = dismissOnWorkspaceClick;
   clearTimeout(studio.toastTimer);
-  if (!dismissOnWorkspaceClick) {
-    studio.toastTimer = setTimeout(() => toast.classList.remove("is-visible"), action ? 12000 : details == null ? 2800 : 7000);
+  if (durationMs != null || !dismissOnWorkspaceClick) {
+    studio.toastTimer = setTimeout(
+      hideToast,
+      durationMs ?? (action ? 12000 : details == null ? 2800 : 7000),
+    );
   }
 }
 
@@ -701,14 +703,6 @@ function updateBriefLayout() {
   brief.style.overflowY = brief.scrollHeight > maximumHeight ? "auto" : "hidden";
 }
 
-function syncDraftResetVisibility() {
-  if (!studio) return;
-  const button = studio.root.querySelector("[data-draft-reset]");
-  if (!isPersistedDraftMode(studio.mode)) return void (button.hidden = true);
-  const defaults = defaultModeDraft(studio.mode);
-  button.hidden = !isModeDraftDirty(studio.mode, currentDraftFields(), defaults);
-}
-
 function restoreModeDraft(mode) {
   if (!studio) return;
   const draft = isPersistedDraftMode(mode)
@@ -730,26 +724,48 @@ function restoreModeDraft(mode) {
   updateBriefLayout();
   renderPromptHighlights();
   syncModifiedState();
-  syncDraftResetVisibility();
 }
 
-function resetCurrentModeDraft() {
-  if (!isPersistedDraftMode(studio.mode)) return;
-  const defaults = defaultModeDraft(studio.mode);
-  const current = currentDraftFields();
-  if (current.brief !== defaults.brief && current.prompt !== defaults.prompt
-      && !window.confirm(`Reset the ${studio.mode} brief and prompt to their built-in defaults?`)) return;
-  studio.modeDrafts = resetModeDraft(studio.modeDrafts, studio.mode);
+function disarmDraftDefaults() {
+  if (!studio) return;
+  clearTimeout(studio.draftDefaultsTimer);
+  studio.draftDefaultsArmed = false;
+  const label = studio.root.querySelector("[data-restore-default-drafts-label]");
+  if (label) label.textContent = "Restore default drafts";
+}
+
+function restoreDefaultDrafts(event) {
+  event.stopPropagation();
+  if (!studio.draftDefaultsArmed) {
+    studio.draftDefaultsArmed = true;
+    studio.root.querySelector("[data-restore-default-drafts-label]").textContent = "Click again to confirm";
+    clearTimeout(studio.draftDefaultsTimer);
+    studio.draftDefaultsTimer = setTimeout(disarmDraftDefaults, 5000);
+    return;
+  }
+  disarmDraftDefaults();
+  studio.modeDrafts = {};
   saveModeDrafts(localStorage, studio.modeDrafts);
+  studio.referenceDraft = {
+    brief: REFERENCE_DEFAULT_BRIEF,
+    prompt: SAMPLE_PROMPT,
+    lastModelPrompt: SAMPLE_PROMPT,
+    lastModelMeta: promptLengthMeta(SAMPLE_PROMPT),
+  };
   restoreModeDraft(studio.mode);
-  showToast("Draft reset to defaults", `${studio.mode} is using the current built-in H3 draft.`);
+  showToast("Default drafts restored", "Saved mode drafts were removed.");
 }
 
 function hideToast() {
   if (!studio) return;
   clearTimeout(studio.toastTimer);
   studio.toastDismissOnWorkspaceClick = false;
-  studio.root.querySelector("[data-h3ps-toast]").classList.remove("is-visible", "is-persistent");
+  const toast = studio.root.querySelector("[data-h3ps-toast]");
+  const actionButton = toast.querySelector("[data-toast-action]");
+  actionButton.onclick = null;
+  actionButton.textContent = "";
+  actionButton.hidden = true;
+  toast.classList.remove("is-visible", "is-persistent", "has-action");
 }
 
 function thinkingFallbackMessage(result, outputLabel) {
@@ -908,7 +924,6 @@ async function startGenerationPreview() {
     return;
   }
   if (!await inspectDirectRuntime()) return;
-  if (!studio.root.querySelector("[data-modified-badge]").hidden && !window.confirm("Replace the modified prompt with a new generation?")) return;
   const modelName = studio.selectedModel.name.split("/").pop();
   const external = studio.selectedModel.family === "external";
   const apiProvider = studio.selectedModel.family === "api";
@@ -943,7 +958,6 @@ async function startGenerationPreview() {
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
     saveCurrentModeDraft();
-    syncDraftResetVisibility();
     studio.refineRestore = null;
     studio.root.querySelector("[data-refine-restore]").hidden = true;
     if (result.thinking_fallback) {
@@ -1963,7 +1977,6 @@ async function submitRefinement() {
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
     saveCurrentModeDraft();
-    syncDraftResetVisibility();
     showToast(
       result.thinking_fallback ? "Rewrite completed" : "Prompt rewritten",
       result.thinking_fallback
@@ -2022,8 +2035,8 @@ function createStudio() {
           ${Object.keys(MODES).map((mode) => `<button type="button" role="tab" data-mode="${mode}">${mode}</button>`).join("")}
         </nav>
         <div class="h3ps-output-toolbar">
-          <span class="h3ps-output-title"><button class="h3ps-small-refresh h3ps-draft-reset" type="button" title="Restore this mode's draft defaults" aria-label="Restore draft defaults" data-draft-reset hidden>${icon("refresh", 13)}</button><span>Generated prompt</span></span>
-          <div class="h3ps-output-badges"><span data-modified-badge hidden>Modified</span><button type="button" data-undo-edits hidden>Undo</button></div>
+          <span>Generated prompt</span>
+          <div class="h3ps-output-badges"><button type="button" data-undo-edits hidden>Undo</button></div>
         </div>
       </div>
 
@@ -2127,6 +2140,7 @@ function createStudio() {
   root.querySelector("[data-aspect-description]").textContent = restoredAspect[1];
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
   root.addEventListener("click", (event) => {
+    if (studio.draftDefaultsArmed && !event.target.closest("[data-restore-default-drafts]")) disarmDraftDefaults();
     if (studio.toastDismissOnWorkspaceClick && !event.target.closest("[data-h3ps-toast]")) hideToast();
     if (!event.target.closest("[data-asset-menu], [data-asset-menu-toggle]")) {
       root.querySelectorAll("[data-asset-menu]").forEach((menu) => { menu.hidden = true; });
@@ -2171,7 +2185,7 @@ function createStudio() {
     }
   });
   root.querySelector("[data-generate]").addEventListener("click", startGenerationPreview);
-  root.querySelector("[data-draft-reset]").addEventListener("click", resetCurrentModeDraft);
+  root.querySelector("[data-restore-default-drafts]").addEventListener("click", restoreDefaultDrafts);
   root.querySelector("[data-memory-action]").addEventListener("click", runMemoryAction);
   root.querySelector("[data-guide-toggle]").addEventListener("click", async () => {
     const menu = root.querySelector("[data-guide-menu]");
@@ -2250,7 +2264,6 @@ function createStudio() {
   const updateBriefCount = () => {
     updateBriefLayout();
     saveCurrentModeDraft();
-    syncDraftResetVisibility();
   };
   brief.addEventListener("input", updateBriefCount);
   updateBriefLayout();
@@ -2403,7 +2416,6 @@ function createStudio() {
     root.querySelector("[data-refine-restore]").hidden = true;
     syncModifiedState();
     saveCurrentModeDraft();
-    syncDraftResetVisibility();
     showToast("Previous prompt restored", "The AI rewrite was discarded.");
   });
   root.querySelector("[data-undo-edits]").addEventListener("click", () => {
@@ -2414,7 +2426,6 @@ function createStudio() {
     renderPromptHighlights();
     syncModifiedState();
     saveCurrentModeDraft();
-    syncDraftResetVisibility();
     showToast("Edits undone", "Restored the latest AI-generated prompt.");
   });
   root.querySelector("[data-copy]").addEventListener("click", async () => {
@@ -2430,7 +2441,6 @@ function createStudio() {
     renderPromptHighlights();
     syncOutputLengthMeta();
     saveCurrentModeDraft();
-    syncDraftResetVisibility();
   });
   root.querySelector("[data-output]").addEventListener("scroll", renderPromptHighlights);
   const editor = root.querySelector("[data-output]");

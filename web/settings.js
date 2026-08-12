@@ -106,6 +106,9 @@ export function settingsMarkup(icon) {
               <span><em data-system-prompt-summary-status="reference">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
             </button>
           </div>
+          <div class="h3ps-draft-defaults-action" data-draft-defaults-action>
+            <button type="button" data-restore-default-drafts>${icon("refresh", 13)}<span data-restore-default-drafts-label>Restore default drafts</span></button>
+          </div>
           <div class="h3ps-system-prompt-editor" data-system-prompt-editor hidden>
             ${systemPromptPanel("standard", "Standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
             ${systemPromptPanel("reference", "Reference", "Instructions used by Reference mode.", icon, true)}

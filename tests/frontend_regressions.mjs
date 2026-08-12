@@ -42,6 +42,7 @@ const settingsEncoded = Buffer.from(settingsSource).toString("base64");
 const { settingsMarkup } = await import(`data:text/javascript;base64,${settingsEncoded}`);
 const mainSource = await readFile(new URL("../web/main.js", import.meta.url), "utf8");
 const skinSource = await readFile(new URL("../web/skin.css", import.meta.url), "utf8");
+const stylesSource = await readFile(new URL("../web/styles.css", import.meta.url), "utf8");
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -535,18 +536,25 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.match(mainSource, /refine\(buildRefinePayload\(studio/);
 });
 
-test("Generate owns a compact standard-mode draft reset and leaves Reference out", () => {
-  assert.match(mainSource, /data-draft-reset hidden/);
+test("Settings owns a two-click restore for all mode draft defaults", () => {
+  const markup = settingsMarkup(() => "<svg></svg>");
+  assert.match(markup, /data-restore-default-drafts/);
+  assert.match(markup, /Restore default drafts/);
+  assert.doesNotMatch(mainSource, /data-draft-reset/);
   assert.match(mainSource, /MODE_DEFAULT_DRAFTS/);
   assert.match(mainSource, /T2VA:[\s\S]{0,900}rooftop greenhouse/);
   assert.match(mainSource, /I2VA:[\s\S]{0,1200}<Picture 1>/);
   assert.match(mainSource, /FL2VA:[\s\S]{0,1400}<Picture 2>/);
   assert.match(mainSource, /L2VA:[\s\S]{0,1200}final composition established by <Picture 1>/);
   assert.match(mainSource, /saveCurrentModeDraft\(\)/);
-  assert.match(mainSource, /resetCurrentModeDraft/);
-  assert.match(mainSource, /Draft reset to defaults/);
-  assert.match(mainSource, /isPersistedDraftMode\(studio\.mode\)/);
+  assert.match(mainSource, /Click again to confirm/);
+  assert.match(mainSource, /setTimeout\(disarmDraftDefaults, 5000\)/);
+  assert.match(mainSource, /studio\.modeDrafts = \{\}/);
+  assert.match(mainSource, /studio\.referenceDraft = \{[\s\S]{0,180}REFERENCE_DEFAULT_BRIEF[\s\S]{0,180}SAMPLE_PROMPT/);
+  assert.match(mainSource, /draftDefaultsArmed && !event\.target\.closest\("\[data-restore-default-drafts\]"\)/);
+  assert.doesNotMatch(mainSource, /data-modified-badge/);
+  assert.doesNotMatch(mainSource, /Replace the modified prompt with a new generation/);
   assert.match(mainSource, /studio\.referenceDraft = \{[\s\S]{0,240}lastModelPrompt/);
   assert.match(mainSource, /lastModelPrompt: SAMPLE_PROMPT/);
-  assert.match(skinSource, /h3ps-draft-reset/);
+  assert.match(stylesSource, /h3ps-draft-defaults-action/);
 });

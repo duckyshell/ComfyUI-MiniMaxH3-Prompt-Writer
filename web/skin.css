@@ -211,15 +211,10 @@
 .h3ps-active-model > em { background: #1b1b1f; }
 
 /* Generated prompt */
-.h3ps-output-badges span,
 .h3ps-output-badges button {
   border-color: #29292e;
   background: #111113;
   color: #777780;
-}
-.h3ps-output-badges [data-modified-badge] {
-  border-color: rgba(217, 161, 60, .26);
-  color: #c79a4d;
 }
 .h3ps-editor-wrap {
   border-color: #26262b;
@@ -433,12 +428,6 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 600;
 }
-.h3ps-draft-reset {
-  border-color: #2a2a2f;
-  background: #141416;
-  color: var(--h3ps-muted);
-}
-.h3ps-draft-reset:hover { border-color: #38383f; background: #17171a; color: var(--h3ps-text); }
 .h3ps-provider-icon[data-provider-icon]::before {
   content: "";
   width: 16px;

@@ -110,3 +110,30 @@ def narrow_repair_messages(
             "content": f"ORIGINAL REQUEST:\n{original_request}\n\nDRAFT TO CORRECT:\n{draft}",
         },
     ]
+
+
+def multimodal_repair_messages(
+    original_messages: list[dict[str, Any]],
+    draft: str,
+    violations: list[str],
+    expected_tags: set[str],
+    duration_seconds: float | int | None,
+) -> list[dict[str, Any]]:
+    """Continue the original multimodal conversation for one constrained repair pass."""
+    allowed_tags = ", ".join(sorted(expected_tags)) or "none"
+    correction = (
+        "CORRECTION PASS: The draft above failed only the objective checks listed below. "
+        "Re-read the same uploaded reference media and original request, then return the complete corrected prompt "
+        "with no commentary. Every active uploaded reference must be accounted for with its exact numbered media "
+        "tag, but it does not need to become a primary scene element. Preserve every supported fact, reference role, "
+        "action, dialogue line, shot, and creative choice that does not conflict with the listed checks. The exact "
+        f"allowed numbered media tags are: {allowed_tags}. Do not add any other media tag. Requested music without "
+        "an uploaded audio asset belongs only in non_diegetic_music and is not audio reference or reuse. Target "
+        f"timestamps must use MM:SS.mmm and remain within {duration_seconds} seconds. Objective failures: "
+        + "; ".join(violations)
+    )
+    return [
+        *original_messages,
+        {"role": "assistant", "content": draft},
+        {"role": "user", "content": correction},
+    ]

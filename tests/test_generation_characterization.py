@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from backend.models.contract import ModelError
 from backend.models.gguf_backend import GGUFBackend
@@ -39,6 +40,18 @@ class _ChatHandler:
     def __call__(self, **kwargs):
         self.calls.append(kwargs)
         return self.responses.pop(0)
+
+
+class _CancelAfterFirstHandler(_ChatHandler):
+    def __init__(self, responses, backend):
+        super().__init__(responses)
+        self.backend = backend
+
+    def __call__(self, **kwargs):
+        response_value = super().__call__(**kwargs)
+        if len(self.calls) == 1:
+            self.backend.cancel_event.set()
+        return response_value
 
 
 class _CharacterizedBackend(GGUFBackend):
@@ -185,7 +198,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "primary_finish_reason", "format_repair_attempted",
                 "format_repair_applied", "format_repair_reason",
                 "format_repair_failure", "format_repair_method",
-                "format_repair_tokens", "seed", "cold_start",
+                "format_repair_multimodal", "format_repair_tokens", "seed", "cold_start",
                 "model_load_seconds", "tokens_per_second", "context_profile",
                 "context_tokens", "kv_cache", "max_output_tokens",
                 "thinking_budget_reduced",
@@ -227,6 +240,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertTrue(result["format_repair_applied"])
         self.assertEqual(result["format_repair_method"], "narrow text correction")
         self.assertEqual(result["format_repair_tokens"], 7)
+        self.assertEqual(result["input_tokens"], 41)
         self.assertEqual(result["output_tokens"], 37)
         self.assertFalse(result["prompt_audit"]["repair_required"])
         self.assertEqual(len(backend.chat_handler.calls), 2)
@@ -238,6 +252,197 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertEqual(repair_call["max_tokens"], 1_536)
         self.assertFalse(repair_call["enable_thinking"])
         self.assertTrue(all(isinstance(message["content"], str) for message in repair_call["messages"]))
+
+    def test_valid_reference_prompt_is_returned_unchanged_without_repair(self):
+        original = reference_prompt(340)
+        backend = _CharacterizedBackend([
+            response(original, prompt_tokens=20, completion_tokens=30),
+        ])
+        assembled = {
+            "messages": [
+                {"role": "system", "content": "reference guide"},
+                {"role": "user", "content": "Use <Picture 1> as <Subject 1>."},
+            ],
+            "media_inputs": [],
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "Use Picture 1 as Subject 1.",
+            },
+        }
+
+        result = backend.generate(
+            model_info(), assembled, "characterization-session",
+            thinking=False, seed=7, unload_after=False, runtime_plan=runtime_plan(),
+        )
+
+        self.assertEqual(result["prompt"], original)
+        self.assertFalse(result["format_repair_attempted"])
+        self.assertFalse(result["format_repair_multimodal"])
+        self.assertEqual(len(backend.chat_handler.calls), 1)
+
+    def test_missing_active_reference_uses_one_multimodal_continuation_repair(self):
+        initial = reference_prompt(340)
+        repaired = initial.replace(
+            "<Subject 1> comes from <Picture 1>.",
+            "<Subject 1> comes from <Picture 1>, with background detail from <Picture 2>.",
+        )
+        backend = _CharacterizedBackend([
+            response(initial, prompt_tokens=20, completion_tokens=30),
+            response(repaired, prompt_tokens=35, completion_tokens=9),
+        ])
+        assembled = {
+            "messages": [
+                {"role": "system", "content": "reference guide"},
+                {"role": "user", "content": "Use active <Picture 1> and <Picture 2>."},
+            ],
+            "media_inputs": [
+                {"type": "image", "asset_id": "one", "reference": "<Picture 1>", "requires_capability": "images"},
+                {"type": "image", "asset_id": "two", "reference": "<Picture 2>", "requires_capability": "images"},
+            ],
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "Create a story from all active references.",
+            },
+        }
+        original_multimodal_messages = [
+            {"role": "system", "content": "reference guide"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "<Picture 1>: image reference."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,one"}},
+                {"type": "text", "text": "<Picture 2>: image reference."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,two"}},
+                {"type": "text", "text": "Use active <Picture 1> and <Picture 2>."},
+            ]},
+        ]
+        media_metrics = {
+            "visual_input_count": 2, "video_frame_count": 0, "video_sheet_count": 0,
+            "vision_budget_applied": False, "estimated_input_tokens": 700,
+            "reserved_output_tokens": 2048, "debug_input_sequence": [],
+        }
+
+        with patch("backend.h3_pipeline._messages", return_value=(original_multimodal_messages, media_metrics)):
+            result = backend.generate(
+                model_info(), assembled, "characterization-session",
+                thinking=False, seed=8, unload_after=False, runtime_plan=runtime_plan(),
+            )
+
+        self.assertEqual(result["prompt"], repaired)
+        self.assertTrue(result["format_repair_applied"])
+        self.assertTrue(result["format_repair_multimodal"])
+        self.assertEqual(result["format_repair_method"], "multimodal reference correction")
+        self.assertEqual(result["input_tokens"], 55)
+        self.assertEqual(result["output_tokens"], 39)
+        self.assertEqual(len(backend.chat_handler.calls), 2)
+        repair_messages = backend.chat_handler.calls[1]["messages"]
+        self.assertEqual(repair_messages[:2], original_multimodal_messages)
+        self.assertEqual(repair_messages[2], {"role": "assistant", "content": initial})
+        self.assertIn("missing reference tags: <Picture 2>", repair_messages[3]["content"])
+        self.assertEqual(
+            sum(part.get("type") == "image_url" for part in repair_messages[1]["content"]),
+            2,
+        )
+
+    def test_failed_multimodal_repair_keeps_original_prompt(self):
+        initial = reference_prompt(340)
+        backend = _CharacterizedBackend([
+            response(initial, prompt_tokens=20, completion_tokens=30),
+            response(initial, prompt_tokens=35, completion_tokens=9),
+        ])
+        assembled = {
+            "messages": [
+                {"role": "system", "content": "reference guide"},
+                {"role": "user", "content": "Use <Picture 1> and <Picture 2>."},
+            ],
+            "media_inputs": [
+                {"type": "image", "asset_id": "one", "reference": "<Picture 1>", "requires_capability": "images"},
+            ],
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both."},
+        }
+        fake_messages = [
+            {"role": "system", "content": "reference guide"},
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,one"}}]},
+        ]
+        metrics = {
+            "visual_input_count": 1, "video_frame_count": 0, "video_sheet_count": 0,
+            "vision_budget_applied": False, "estimated_input_tokens": 400,
+            "reserved_output_tokens": 2048, "debug_input_sequence": [],
+        }
+
+        with patch("backend.h3_pipeline._messages", return_value=(fake_messages, metrics)):
+            result = backend.generate(
+                model_info(), assembled, "characterization-session",
+                thinking=False, seed=9, unload_after=False, runtime_plan=runtime_plan(),
+            )
+
+        self.assertEqual(result["prompt"], initial)
+        self.assertFalse(result["format_repair_applied"])
+        self.assertTrue(result["format_repair_multimodal"])
+        self.assertIn("still failed", result["format_repair_failure"])
+
+    def test_truncated_repair_is_rejected_even_if_partial_text_passes_audit(self):
+        initial = reference_prompt(340, include_soundscape=False)
+        seemingly_valid = reference_prompt(340)
+        backend = _CharacterizedBackend([
+            response(initial, prompt_tokens=20, completion_tokens=30),
+            response(seemingly_valid, prompt_tokens=25, completion_tokens=1536, finish_reason="length"),
+        ])
+        assembled = {
+            "messages": [
+                {"role": "system", "content": "reference guide"},
+                {"role": "user", "content": "Use <Picture 1> as <Subject 1>."},
+            ],
+            "media_inputs": [],
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use Picture 1."},
+        }
+
+        result = backend.generate(
+            model_info(), assembled, "characterization-session",
+            thinking=False, seed=11, unload_after=False, runtime_plan=runtime_plan(),
+        )
+
+        self.assertEqual(result["prompt"], initial)
+        self.assertFalse(result["format_repair_applied"])
+        self.assertEqual(result["format_repair_failure"], "repair reached its output limit")
+
+    def test_cancel_between_draft_and_repair_prevents_second_completion(self):
+        initial = reference_prompt(340)
+        backend = _CharacterizedBackend([])
+        backend.load(model_info(), runtime_plan())
+        backend.chat_handler = _CancelAfterFirstHandler(
+            [response(initial, prompt_tokens=20, completion_tokens=30)],
+            backend,
+        )
+        assembled = {
+            "messages": [
+                {"role": "system", "content": "reference guide"},
+                {"role": "user", "content": "Use <Picture 1> and <Picture 2>."},
+            ],
+            "media_inputs": [
+                {"type": "image", "asset_id": "one", "reference": "<Picture 1>", "requires_capability": "images"},
+            ],
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both."},
+        }
+        fake_messages = [
+            {"role": "system", "content": "reference guide"},
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,one"}}]},
+        ]
+        metrics = {
+            "visual_input_count": 1, "video_frame_count": 0, "video_sheet_count": 0,
+            "vision_budget_applied": False, "estimated_input_tokens": 400,
+            "reserved_output_tokens": 2048, "debug_input_sequence": [],
+        }
+
+        with patch("backend.h3_pipeline._messages", return_value=(fake_messages, metrics)):
+            with self.assertRaises(ModelError) as raised:
+                backend.generate(
+                    model_info(), assembled, "characterization-session",
+                    thinking=False, seed=10, unload_after=False, runtime_plan=runtime_plan(),
+                )
+
+        self.assertEqual(raised.exception.code, "GENERATION_CANCELLED")
+        self.assertEqual(len(backend.chat_handler.calls), 1)
 
     def test_media_capability_rejection_happens_before_model_load(self):
         backend = _CharacterizedBackend([])

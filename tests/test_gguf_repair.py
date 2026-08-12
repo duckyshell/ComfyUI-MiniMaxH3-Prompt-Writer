@@ -3,6 +3,7 @@ import unittest
 from backend.prompt_repair import (
     audit_failures,
     explicit_constraint_violations,
+    multimodal_repair_messages,
     narrow_repair_messages,
     reference_tags,
     unexpected_audio_task,
@@ -61,6 +62,26 @@ class GGUFRepairTests(unittest.TestCase):
         self.assertIn("missing summary task label", failures)
         self.assertIn("unexpected reference tags: <Audio 1>", failures)
         self.assertFalse(any("word" in failure for failure in failures))
+
+    def test_multimodal_repair_continues_original_conversation(self):
+        original = [
+            {"role": "system", "content": "guide"},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                {"type": "text", "text": "Brief in any language"},
+            ]},
+        ]
+        messages = multimodal_repair_messages(
+            original,
+            "draft with <Picture 1>",
+            ["missing reference tags: <Picture 2>"],
+            {"<Picture 1>", "<Picture 2>"},
+            10,
+        )
+        self.assertEqual(messages[:2], original)
+        self.assertEqual(messages[2]["role"], "assistant")
+        self.assertIn("missing reference tags: <Picture 2>", messages[3]["content"])
+        self.assertIn("does not need to become a primary scene element", messages[3]["content"])
 
 
 if __name__ == "__main__":

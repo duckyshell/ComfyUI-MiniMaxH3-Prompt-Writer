@@ -811,7 +811,10 @@ async function startGenerationPreview() {
     if (result.thinking_fallback) {
       showToast("Prompt completed", thinkingFallbackMessage(result, "final prompt"), null, null, { dismissOnWorkspaceClick: true });
     } else if (result.format_repair_applied) {
-      showToast("Prompt generated", `The first draft failed ${result.format_repair_reason}; ${result.format_repair_method} corrected it without re-uploading media.`, null, null, { dismissOnWorkspaceClick: true });
+      const repairDetail = result.format_repair_multimodal
+        ? "the existing uploaded references were checked again and the prompt was corrected"
+        : `${result.format_repair_method} corrected it without re-uploading media`;
+      showToast("Prompt generated", `The first draft failed ${result.format_repair_reason}; ${repairDetail}.`, null, null, { dismissOnWorkspaceClick: true });
     } else if (result.format_repair_failure) {
       showToast("Prompt generated with a format warning", `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`, null, null, { dismissOnWorkspaceClick: true });
     } else {
@@ -1807,7 +1810,9 @@ async function submitRefinement() {
       result.thinking_fallback
         ? thinkingFallbackMessage(result, "rewrite")
         : result.format_repair_applied
-          ? `The first draft failed ${result.format_repair_reason}; its format was repaired once without media.`
+          ? result.format_repair_multimodal
+            ? `The first draft failed ${result.format_repair_reason}; the existing references were checked again and repaired once.`
+            : `The first draft failed ${result.format_repair_reason}; its format was repaired once without media.`
         : result.format_repair_failure
           ? `Format warning: ${result.format_repair_reason}; safe repair rejected because ${result.format_repair_failure}.`
         : `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · no media re-upload`,

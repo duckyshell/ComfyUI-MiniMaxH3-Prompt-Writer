@@ -285,6 +285,38 @@ class ApiProviderBackendTests(unittest.TestCase):
         self.assertEqual(self.backend._provider_cost_usd, 0.0123)
         self.assertEqual(self.backend._upstream_providers, {"fake-upstream"})
 
+    def test_multimodal_repair_continuation_replays_media_and_counts_both_requests(self):
+        connection = self._connection(preset="custom")
+        handler = _ApiChatHandler(self.backend, connection, "vision-reasoning-model")
+        original = [
+            {"role": "system", "content": "guide"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "<Picture 1>: image reference."},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
+                {"type": "text", "text": "Use every active reference."},
+            ]},
+        ]
+        continuation = [
+            *original,
+            {"role": "assistant", "content": "draft missing <Picture 1>"},
+            {"role": "user", "content": "Correct only the missing reference tag."},
+        ]
+
+        self.backend.prepare_request()
+        for messages in (original, continuation):
+            handler(
+                messages=messages, temperature=0.3, top_p=0.9, top_k=40,
+                max_tokens=1536, seed=7, thinking=False,
+            )
+
+        posts = [request for request in _FakeApiHandler.requests if request[0] == "POST"]
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(posts[0][3]["messages"], original)
+        self.assertEqual(posts[1][3]["messages"], continuation)
+        self.assertEqual(self.backend._request_count, 2)
+        self.assertEqual(self.backend._usage_sources, ["reported", "reported"])
+        self.assertNotIn("secret-test-key", json.dumps(posts[1][3]))
+
     def test_openai_adapter_uses_max_completion_tokens_and_store_false(self):
         connection = self._connection(preset="openai")
         handler = _ApiChatHandler(self.backend, connection, "plain-model")

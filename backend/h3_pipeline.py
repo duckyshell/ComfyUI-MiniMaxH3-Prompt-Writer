@@ -19,6 +19,7 @@ from .prompt_repair import (
     audit_failures,
     dialogue_lines,
     explicit_constraint_violations,
+    multimodal_repair_messages,
     narrow_repair_messages,
     reference_tags,
     unexpected_audio_task,
@@ -261,14 +262,30 @@ def run_h3_pipeline(
         format_repair_attempted = True
         failed_checks = audit_failures(initial_audit)
         format_repair_reason = ", ".join(failed_checks) or "official format audit"
-        format_repair_method = "narrow text correction"
-        repair_messages = narrow_repair_messages(
-            assembled,
-            prompt,
-            failed_checks,
-            expected_reference_tags,
-            duration_seconds,
+        missing_active_references = bool(initial_audit.get("missing_reference_tags"))
+        has_prepared_visual_media = any(
+            item.get("type") in {"image", "video"} for item in assembled.get("media_inputs", [])
         )
+        if missing_active_references and has_prepared_visual_media:
+            format_repair_method = "multimodal reference correction"
+            repair_messages = multimodal_repair_messages(
+                messages,
+                prompt,
+                failed_checks,
+                expected_reference_tags,
+                duration_seconds,
+            )
+        else:
+            format_repair_method = "narrow text correction"
+            repair_messages = narrow_repair_messages(
+                assembled,
+                prompt,
+                failed_checks,
+                expected_reference_tags,
+                duration_seconds,
+            )
+        if is_cancelled():
+            raise ModelError("GENERATION_CANCELLED", "Generation was cancelled before prompt correction.")
         repair_response = complete(
             messages=repair_messages,
             temperature=0.3,
@@ -280,6 +297,7 @@ def run_h3_pipeline(
         )
         repair_usage = repair_response.get("usage", {})
         format_repair_tokens = int(repair_usage.get("completion_tokens", 0))
+        repair_finish_reason = repair_response["choices"][0].get("finish_reason")
         repaired = final_text(repair_response["choices"][0]["message"].get("content") or "")
         repaired_audit = audit_prompt(
             repaired,
@@ -305,6 +323,7 @@ def run_h3_pipeline(
         dialogue_preserved = dialogue_lines(repaired) == dialogue_lines(prompt)
         if (
             repaired
+            and repair_finish_reason != "length"
             and repaired_audit.get("repair_required") is False
             and repair_tags_match
             and dialogue_preserved
@@ -314,11 +333,14 @@ def run_h3_pipeline(
             initial_audit = repaired_audit
         elif not repaired:
             format_repair_failure = "empty repair"
+        elif repair_finish_reason == "length":
+            format_repair_failure = "repair reached its output limit"
         elif repaired_audit.get("repair_required") is True:
             remaining = audit_failures(repaired_audit)
             format_repair_failure = "repaired draft still failed: " + ", ".join(remaining)
         else:
             format_repair_failure = "correction changed the reference inventory or user dialogue"
+        usage["prompt_tokens"] = int(usage.get("prompt_tokens", 0)) + int(repair_usage.get("prompt_tokens", 0))
         usage["completion_tokens"] = int(usage.get("completion_tokens", 0)) + format_repair_tokens
 
     generation_seconds = time.perf_counter() - generation_started
@@ -339,6 +361,7 @@ def run_h3_pipeline(
         "format_repair_reason": format_repair_reason,
         "format_repair_failure": format_repair_failure,
         "format_repair_method": format_repair_method,
+        "format_repair_multimodal": format_repair_method == "multimodal reference correction",
         "format_repair_tokens": format_repair_tokens,
         "seed": seed,
         "tokens_per_second": round(output_tokens / generation_seconds, 2) if generation_seconds > 0 else 0,

@@ -4,99 +4,92 @@
   <img src="web/assets/h3-prompt-writer-launcher.svg" width="96" alt="H3 Prompt Writer">
 </p>
 
-A local multimodal prompt writer for MiniMax H3, hosted inside ComfyUI and powered
-by Gemma 4 GGUF models.
+H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. Start with a plain-language Creative Brief, add optional image, video, or audio references, and generate an editable prompt in the format expected by H3.
 
-Current release: **0.2.1** | [MIT License](LICENSE)
+It is a ComfyUI UI extension, not a workflow node. It writes prompt text for your existing H3 workflow. It does not run MiniMax H3, change the graph, or queue a video.
 
-H3 Prompt Writer turns a creative brief plus image, video, and declared audio
-references into an editable H3 prompt using the official MiniMax prompt-writing
-guides. Media stays on the local machine.
+## What's new in v0.3
 
-> H3 Prompt Writer is a ComfyUI UI extension, not a workflow node. It creates prompts;
-> it does not run MiniMax H3 or queue a workflow.
+- Redesigned Writer and Settings interface.
+- Ollama as a simpler local setup.
+- Optional API providers.
+- External llama.cpp now has its own dedicated provider setup.
+- Saved drafts for every mode.
+- Better automatic model and context handling.
+- More reliable Reference prompts.
 
-![H3 Prompt Writer UI](docs/assets/UI.png)
+![Reference mode in H3 Prompt Writer](docs/assets/v0.3/reference-workspace.png)
 
-## Features
+## What it does
 
-- T2VA, I2VA, FL2VA, L2VA, and Reference modes.
-- Up to 9 pictures, 3 videos, and 3 audio references in Reference mode.
-- Ordered video contact sheets with Auto, 6-frame, and 8-frame sampling.
-- Local Gemma 4 multimodal inference through `llama-cpp-python`.
-- Optional connection to an existing local OpenAI-compatible `llama.cpp` server.
-- Automatic 8K/16K context selection with manual 8K/16K/24K controls.
-- Editable output, copy, text-only Refine, Cancel, and contextual GPU-memory control.
-- Official MiniMax guide selection and a user-editable Advanced System Prompt.
-
-## Choose a model
-
-| GPU VRAM | Tested model tier | Starting context | Notes |
-| --- | --- | --- | --- |
-| 8 GB | Gemma 4 E4B Q3_K_M | 8K | Compatibility tier; reduced visual detail |
-| 12 GB | Gemma 4 12B Q4_K_S | 8K | Compact option; 16K has little headroom |
-| 16 GB | Gemma 4 12B Q5_K_M | 16K | Full general-purpose tier |
-| 24 GB | Gemma 4 26B-A4B Q4_K_M | 16K | Best overall balance observed in local QA |
-| 32 GB | Gemma 4 31B Q4_K_XL | 16K | Strong visual detail; slower and not always a better H3 prompt |
-
-These are measured local QA starting points, not hard guarantees. Other ComfyUI
-models and desktop applications also consume VRAM. See [Model setup](docs/MODELS.md)
-for exact GGUF and projector pairs.
-
-## Quick installation
-
-1. Place this repository at
-   `ComfyUI/custom_nodes/ComfyUI-MiniMaxH3-Prompt-Writer`.
-2. Install the dependencies with the Python environment used by ComfyUI.
-3. Put one model GGUF listed in the model guide and its matching `mmproj` in
-   `ComfyUI/models/LLM/`.
-   For multiple models, keep each model and its matching projector together in
-   a separate subfolder.
-4. Restart ComfyUI and open the floating **H3 Prompt Writer** launcher. If it is
-   not visible, use **Extensions > H3 Prompt Writer** from the ComfyUI menu.
-
-Windows Portable commands and CUDA runtime notes are in the
-[installation guide](docs/INSTALLATION.md).
-
-## How it works
+You do not need to write MiniMax section headings, timestamps, or reference syntax by hand. Describe the video and tell Writer what each reference should contribute:
 
 ```text
-Creative brief + local references
-                ↓
-Official MiniMax guide + local Gemma 4 vision model
-                ↓
-Editable MiniMax H3 prompt
-                ↓
-Copy into your H3 workflow
+Use <Picture 1> for character appearance, <Picture 2> for clothes, and only the movement from <Video 1>. The character walks through a rainy Tokyo street at night.
 ```
 
-## Current limitations
+Writer sends your brief, selected mode, prepared references, and the official MiniMax prompt-writing guide to the chosen multimodal prompt model. The result is an editable H3 prompt. You can change it directly, use **Refine** for a revision, or select **Copy prompt** and paste it into your H3 workflow.
 
-- Audio files are preserved as declared `<Audio N>` references, but the local
-  GGUF model does not listen to their signal. Their role must be stated in the brief.
-- Video understanding uses the exact ordered contact sheet shown in the preview,
-  not the complete encoded video stream.
-- H3 Prompt Writer generates text only and does not modify the workflow graph.
-- The v1 interface and documentation are in English. Creative briefs may use
-  other languages, and H3 Prompt Writer preserves user-supplied dialogue and visible text.
+## Key features
+
+- T2VA, I2VA, FL2VA, L2VA, and Reference modes.
+- Up to 9 images, 3 videos, and 3 audio references in Reference mode.
+- Clear `<Picture N>`, `<Video N>`, and `<Audio N>` labels for assigning identity, wardrobe, setting, motion, camera, sound, or other roles.
+- Ordered video contact sheets with visible frame-sampling controls, so you can inspect what the prompt model sees.
+- Official MiniMax base and Reference guides included for all five modes.
+- Editable prompts, **Refine**, **Copy prompt**, and a separate saved draft for every mode.
+- Automatic context planning and clear controls for releasing local prompt models and ComfyUI VRAM.
+
+See [Writing a useful Creative Brief](docs/USAGE.md#writing-a-useful-creative-brief) for practical examples.
+
+## Choose a provider
+
+| Provider | Choose it when | Setup |
+| --- | --- | --- |
+| [Ollama](docs/OLLAMA.md) | You want the simplest local setup | Install Ollama and pull a vision model |
+| [Direct GGUF](docs/DIRECT_GGUF.md) | You want Writer to load a verified GGUF inside ComfyUI | Install the optional native runtime and add a matching GGUF + `mmproj` pair |
+| [External llama.cpp](docs/EXTERNAL_LLAMA_SERVER.md) | You already run llama.cpp or want full control over its runtime | Start a multimodal `llama-server` and connect its root URL |
+| [API providers](docs/API_PROVIDERS.md) | You want Gemini, OpenAI, OpenRouter, or a Custom OpenAI-compatible endpoint | Connect a key or an existing endpoint such as LM Studio |
+
+Not sure? Start with [Ollama](docs/OLLAMA.md). The [provider guide](docs/PROVIDERS.md) explains the differences. The Ollama and Direct GGUF guides contain the tested local model choices.
+
+## Quick start
+
+1. Install **MiniMax H3 Prompt Writer** from ComfyUI Manager and restart ComfyUI.
+2. Open the floating **H3 Prompt Writer** button or use **Extensions > H3 Prompt Writer**. No graph node will appear.
+3. Open **Settings** and choose a provider. For the recommended local setup and an 8 GB starting tier, install [Ollama](https://ollama.com/download), open the app, and run:
+
+   ```text
+   ollama pull gemma4:e4b
+   ```
+
+4. Choose a mode, add its media, and write a Creative Brief.
+5. Select **Generate prompt**, review the editable result, then copy it into your H3 workflow.
+
+For Git, ZIP, Windows Portable, update, and provider-specific steps, see [Installation](docs/INSTALLATION.md).
+
+## Privacy and limitations
+
+- With Ollama, Direct GGUF, External llama.cpp, or a local Custom endpoint, the prompt request and prepared media stay on the local machine.
+- With a remote API provider, the required brief, instructions, prepared images, and video contact sheets are sent to the selected provider. Original video and audio bytes are not uploaded by Writer. Read [What leaves this computer](docs/API_PROVIDERS.md#what-leaves-this-computer) before using private media.
+- Video understanding uses the ordered contact sheet shown in the preview, not every frame of the encoded video.
+- Prompt models do not listen to uploaded audio. Describe the soundtrack, voice, rhythm, or other audio role in the Creative Brief.
+- The interface and documentation are in English. Briefs can use other languages, and Writer preserves supplied dialogue and visible text.
+- Gemma 4 is the recommended local model family and has received the most testing. Qwen 3.6 also completed all five H3 modes through Ollama without special changes to Writer.
+- Ollama, External llama.cpp, and compatible API endpoints let you try other multimodal models that accept images. Compatibility does not guarantee a good H3 prompt.
+- Direct GGUF is the exception. It currently supports only the verified Gemma 4 pairs because its model loader and vision-projector integration are built for Gemma 4.
+- Gemini and a Custom OpenAI-compatible endpoint were tested live. OpenAI and OpenRouter have automated contract coverage but were not tested live with commercial credentials. Comfy Cloud has not been validated for v0.3.
 
 ## Documentation
 
 - [Installation](docs/INSTALLATION.md)
-- [Models](docs/MODELS.md)
-- [Usage](docs/USAGE.md)
+- [Using Prompt Writer](docs/USAGE.md)
+- [Choose a provider](docs/PROVIDERS.md)
+- [Ollama](docs/OLLAMA.md)
+- [Direct GGUF](docs/DIRECT_GGUF.md)
+- [External llama.cpp](docs/EXTERNAL_LLAMA_SERVER.md)
+- [API providers](docs/API_PROVIDERS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Changelog](CHANGELOG.md)
 
-## Local validation
-
-Tested locally with Gemma 4 E4B, 12B, 26B-A4B, and 31B GGUF models across all
-five modes. The external-server path was tested with Gemma 4 26B-A4B and its
-matching vision projector on `llama-server`.
-
-External `llama-server` support is currently validated only with Gemma 4
-multimodal GGUF models and matching vision projectors. Other models are not
-tested or supported in v0.2.0.
-
-MiniMax H3 prompt guides are vendored from the official MiniMax H3 repository;
-model files are provided by their respective Hugging Face repositories and are
-not bundled with this extension.
+The project is released under the [MIT License](LICENSE). MiniMax H3 guides and model files keep their upstream terms. Model weights are not bundled with this extension.

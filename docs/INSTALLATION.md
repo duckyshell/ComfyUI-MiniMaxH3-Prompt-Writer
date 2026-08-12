@@ -1,106 +1,64 @@
 # Installation
 
-## Get the extension
+H3 Prompt Writer is a ComfyUI UI extension. It does not add a node to the workflow graph.
 
-With Git, open a terminal in `ComfyUI/custom_nodes`, copy the repository URL from
-GitHub's **Code** menu, and run:
+## Install the extension
+
+### ComfyUI Manager
+
+Find **MiniMax H3 Prompt Writer** in ComfyUI Manager, install it, and restart ComfyUI.
+
+### Git
+
+Open a terminal in `ComfyUI/custom_nodes` and run:
 
 ```powershell
 git clone https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer.git
 ```
 
-Without Git, choose **Code > Download ZIP** on GitHub. Extract the archive into
-`ComfyUI/custom_nodes` and rename the extracted folder to
-`ComfyUI-MiniMaxH3-Prompt-Writer` if needed.
+### ZIP
 
-Whichever method you use, the final path must be:
+Use **Code > Download ZIP** on GitHub. Extract the archive under `ComfyUI/custom_nodes` and, if needed, rename the folder to:
+
+```text
+ComfyUI-MiniMaxH3-Prompt-Writer
+```
+
+The final path should be:
 
 ```text
 ComfyUI/custom_nodes/ComfyUI-MiniMaxH3-Prompt-Writer/
 ```
 
-## Windows Portable ComfyUI
+The base extension has no additional Python dependencies. Provider-specific software is installed separately.
 
-The full Portable layout should look like this:
+## Open Prompt Writer
 
-```text
-ComfyUI_Portable/
-└── ComfyUI/
-    └── custom_nodes/
-        └── ComfyUI-MiniMaxH3-Prompt-Writer/
-```
+Restart ComfyUI after installation. Open the floating **H3 Prompt Writer** button or use **Extensions > H3 Prompt Writer** in the ComfyUI menu.
 
-From the Portable root, use the embedded Python rather than the system Python:
+No node will appear in the graph. Prompt Writer creates text for your H3 workflow; it does not queue or modify the workflow itself.
 
-```powershell
-python_embeded\python.exe -m pip install -r ComfyUI\custom_nodes\ComfyUI-MiniMaxH3-Prompt-Writer\requirements.txt
-```
+## Choose a provider
 
-The base extension has no additional Python packages. Local GGUF generation needs
-`llama-cpp-python`:
+Open **Settings** and choose how Prompt Writer should run its multimodal prompt model:
 
-```powershell
-python_embeded\python.exe -m pip install --only-binary=:all: `
-  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 `
-  -r ComfyUI\custom_nodes\ComfyUI-MiniMaxH3-Prompt-Writer\requirements-gguf.txt
-```
+- [Ollama](OLLAMA.md): recommended local setup.
+- [Direct GGUF](DIRECT_GGUF.md): advanced local setup inside ComfyUI.
+- [External llama.cpp](EXTERNAL_LLAMA_SERVER.md): connect your own local `llama-server`.
+- [API providers](API_PROVIDERS.md): Gemini, OpenAI, OpenRouter, or a Custom OpenAI-compatible endpoint.
 
-This CUDA 13.0 command was tested for the v0.2.0 release with
-`llama-cpp-python` 0.3.34. The requirement accepts 0.3.x releases starting at
-0.3.34, so it does not force a working newer 0.3.x installation to
-downgrade. For another CUDA/Python combination, use a compatible pre-built wheel
-published by
-[`llama-cpp-python`](https://github.com/abetlen/llama-cpp-python). Keep
-`--only-binary=:all:` so a missing wheel fails clearly instead of starting a long
-local C++ build.
+Not sure which one to use? Start with [Ollama](OLLAMA.md).
 
-Restart ComfyUI, then click the floating **H3 Prompt Writer** button. If the button
-is not visible, open **Extensions > H3 Prompt Writer** from the ComfyUI menu.
+The model selected here is the prompt model that reads the brief and references. It is separate from the MiniMax H3 model in your video workflow. The [Ollama](OLLAMA.md) and [Direct GGUF](DIRECT_GGUF.md) guides contain the tested local model choices.
 
-## Models
+## Update
 
-Download one model GGUF and the matching `mmproj` listed in
-[MODELS.md](MODELS.md). Put both files in the same folder:
+Update the extension through ComfyUI Manager or pull the latest repository changes, then restart ComfyUI and hard-refresh the page with `Ctrl+F5` if the interface still looks old.
 
-```text
-ComfyUI/models/LLM/
-├── gemma-4-...gguf
-└── mmproj-BF16.gguf
-```
+An ordinary official `update_comfyui.bat` update was tested with Direct GGUF and preserved its optional runtime. An update that replaces the embedded Python environment can require reinstalling that runtime. See [Direct GGUF after a ComfyUI update](DIRECT_GGUF.md#after-a-comfyui-update).
 
-Subfolders are supported. Use each model listed in [MODELS.md](MODELS.md) with
-the projector linked in the same table. Do not share one projector between
-different Gemma model classes merely because the filename is identical.
+Your saved provider preferences and per-mode drafts remain in the browser where ComfyUI is opened. API keys, uploaded media, active requests, and loaded-model state are not restored as saved session content.
 
-Open H3 Prompt Writer and press **Refresh** in the model menu after adding files.
-If no model is present, it shows exact verified Hugging Face pages for each model/projector
-pair. It marks which tier fits the detected total VRAM for ComfyUI's active CUDA
-device; this is a capacity hint, not a quality recommendation, and selection remains manual.
+Local providers keep the prompt request and prepared media on the local machine. A remote API provider receives the request data and prepared media needed to generate the prompt. See [What leaves this computer](API_PROVIDERS.md#what-leaves-this-computer).
 
-## Standard Python environments
-
-Windows Portable with CUDA 13.0 is the setup tested for the v0.2.0 release. Other
-ComfyUI Python environments may work, but they were not part of that release
-test.
-
-Install both requirement files using the Python interpreter that launches ComfyUI:
-
-```bash
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-gguf.txt
-```
-
-GPU acceleration depends on how `llama-cpp-python` was built. A CPU-only wheel can
-load successfully but will not provide the intended performance.
-
-## Verify the installation
-
-After ComfyUI starts:
-
-1. Confirm the floating **H3 Prompt Writer** launcher is visible.
-2. Open H3 Prompt Writer and check the local model row.
-3. If no model is installed, confirm the setup list and model path are visible.
-4. After adding a complete model/projector pair, press **Refresh** and confirm the
-   model reports `GGUF` without a missing-dependency message.
-
-See [Troubleshooting](TROUBLESHOOTING.md) if the extension or model is not ready.
+See [Troubleshooting](TROUBLESHOOTING.md) if the launcher or selected provider is not ready.

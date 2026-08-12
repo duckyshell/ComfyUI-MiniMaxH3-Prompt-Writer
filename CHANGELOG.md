@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.3.0 - 2026-08-12
+
+### New interface
+
+- Redesigned the Writer and Settings interface.
+- Added clear setup pages for Ollama, Direct GGUF, External llama.cpp, and API
+  providers.
+- Separated provider settings from shared prompt behavior.
+- Added clearer model status, setup guidance, capability labels, and unload
+  controls.
+
+### New providers
+
+- Added Ollama as the recommended local setup.
+- Added automatic Ollama detection, installed-model discovery, tested Gemma 4
+  recommendations, copyable pull commands, and request-aware context selection.
+- Added optional API providers for Gemini, OpenAI, OpenRouter, and Custom
+  OpenAI-compatible endpoints.
+- Added Gemini Thinking levels and session-only API key handling.
+- Added support for local OpenAI-compatible endpoints such as LM Studio.
+- Gave the existing External llama.cpp integration its own dedicated provider
+  setup.
+- Validated Qwen 3.6 through Ollama in all five H3 modes without model-specific
+  changes to Writer.
+
+### Drafts and prompt behavior
+
+- Added a separate saved Creative Brief and editable prompt draft for every mode,
+  including Reference.
+- Added saved provider preferences without storing API keys or active session
+  state.
+- Added shared Standard and Reference system-prompt profiles.
+- Added a two-click option to restore all saved drafts to the current built-in
+  defaults.
+- Added mode-specific example drafts for T2VA, I2VA, FL2VA, L2VA, and Reference.
+
+### Context and Thinking
+
+- Added automatic context planning for the complete request, including prepared
+  media, reasoning, and final output.
+- Added request-aware Ollama context selection within the model's reported limit.
+- Improved Thinking budgeting so larger Reference requests do not lose the
+  requested reasoning budget to an undersized context.
+- Kept provider-specific reasoning controls separate from the general local
+  Thinking switch.
+
+### Reference generation
+
+- Added stricter checks for active `<Picture N>`, `<Video N>`, and `<Audio N>`
+  references.
+- Added one bounded multimodal correction when a visual reference is missing from
+  the first prompt.
+- Kept the original prompt and showed a persistent warning when a correction could
+  not pass validation.
+- Improved handling of motion-only references so unrelated identity, clothing,
+  setting, lighting, and audio details are less likely to transfer.
+
+### Model and VRAM controls
+
+- Added separate controls for cancelling a request, unloading a Direct model,
+  unloading an Ollama model, and freeing ComfyUI workflow VRAM.
+- Added **Stop & unload** for active Direct and Ollama requests.
+- Improved Ollama ownership tracking so Writer does not offer to unload models
+  started by another application.
+- Kept External llama.cpp and API model lifecycle under server or provider control.
+
+### Fixes
+
+- Fixed delayed first-stream responses from External llama.cpp being treated as a
+  failed request.
+- Fixed important generation warnings disappearing before they could be read.
+- Fixed large Thinking requests falling back because the automatic context was too
+  small.
+- Fixed missing active visual references being repaired without access to the
+  original media.
+- Fixed provider discovery changing the open Settings provider page.
+- Fixed unload controls disappearing after switching to another provider.
+- Improved Direct GGUF guidance when the optional native runtime is missing or
+  incompatible.
+
+### Documentation
+
+- Rewrote the installation, provider, usage, privacy, and troubleshooting guides
+  for v0.3.
+- Added practical Creative Brief and reference-role examples.
+- Added new screenshots for the redesigned interface.
+
 ## 0.2.1 - 2026-08-11
 
 - Added a browser-compatible UUID fallback for ComfyUI opened through non-secure

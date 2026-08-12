@@ -440,6 +440,7 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.doesNotMatch(mainSource, /Recommended for your GPU|Lighter model|Larger model/);
   assert.match(mainSource, /data-ollama-model/);
   assert.match(mainSource, /data-ollama-add-model/);
+  assert.match(mainSource, /Install another model/);
   assert.match(mainSource, /Choose another tested model/);
   assert.match(mainSource, /studio\.ollamaAddModelOpen = !studio\.ollamaAddModelOpen/);
   assert.match(mainSource, /Need models on another drive\?/);

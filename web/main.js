@@ -679,7 +679,12 @@ function restoreModeDraft(mode) {
   if (!studio) return;
   const draft = isPersistedDraftMode(mode)
     ? studio.modeDrafts[mode] || defaultModeDraft(mode)
-    : studio.referenceDraft || { brief: REFERENCE_DEFAULT_BRIEF, prompt: SAMPLE_PROMPT };
+    : studio.referenceDraft || {
+      brief: REFERENCE_DEFAULT_BRIEF,
+      prompt: SAMPLE_PROMPT,
+      lastModelPrompt: SAMPLE_PROMPT,
+      lastModelMeta: promptLengthMeta(SAMPLE_PROMPT),
+    };
   const output = studio.root.querySelector("[data-output]");
   studio.root.querySelector(".h3ps-brief textarea").value = draft.brief;
   output.value = draft.prompt;

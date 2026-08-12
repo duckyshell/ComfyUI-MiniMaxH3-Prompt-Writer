@@ -544,5 +544,6 @@ test("Generate owns a compact standard-mode draft reset and leaves Reference out
   assert.match(mainSource, /Draft reset to defaults/);
   assert.match(mainSource, /isPersistedDraftMode\(studio\.mode\)/);
   assert.match(mainSource, /studio\.referenceDraft = \{[\s\S]{0,240}lastModelPrompt/);
+  assert.match(mainSource, /lastModelPrompt: SAMPLE_PROMPT/);
   assert.match(skinSource, /h3ps-draft-reset/);
 });

@@ -300,6 +300,34 @@ class OllamaBackendTests(unittest.TestCase):
                 unload_after=False, runtime_plan=plan,
             )
         self.assertFalse(any(path == "/api/generate" for _, path, _ in _FakeOllamaHandler.requests))
+        self.assertEqual(self.backend.retained_models, {"gemma4:test"})
+
+    def test_status_reconciles_writer_retained_models_with_ollama(self):
+        self.backend.retained_models.update({"gemma4:test", "gemma4:gone"})
+        self.backend.model_name = "gemma4:test"
+        _FakeOllamaHandler.running_models = [{"model": "gemma4:test", "context_length": 8192}]
+
+        status = self.backend.status()
+
+        self.assertEqual(status["writer_retained_models"], ["gemma4:test"])
+        self.assertEqual(self.backend.retained_models, {"gemma4:test"})
+
+    def test_targeted_unload_forgets_only_requested_model(self):
+        self.backend.retained_models.update({"gemma4:test", "gemma4:other"})
+
+        self.backend.unload("gemma4:test")
+
+        self.assertEqual(self.backend.retained_models, {"gemma4:other"})
+        unloads = [payload for _, path, payload in _FakeOllamaHandler.requests if path == "/api/generate"]
+        self.assertEqual(unloads[-1], {"model": "gemma4:test", "keep_alive": 0, "stream": False})
+
+    def test_empty_retained_status_does_not_contact_ollama(self):
+        _FakeOllamaHandler.requests = []
+
+        status = self.backend.retained_status()
+
+        self.assertEqual(status["writer_retained_models"], [])
+        self.assertEqual(_FakeOllamaHandler.requests, [])
 
     def test_stop_and_unload_overrides_keep_loaded(self):
         model = self._model()
@@ -314,6 +342,7 @@ class OllamaBackendTests(unittest.TestCase):
                 )
         self.assertEqual(error.exception.code, "GENERATION_CANCELLED")
         self.assertTrue(any(path == "/api/generate" and payload["keep_alive"] == 0 for _, path, payload in _FakeOllamaHandler.requests))
+        self.assertNotIn("gemma4:test", self.backend.retained_models)
 
     def test_cancel_interrupts_native_stream(self):
         result = {}

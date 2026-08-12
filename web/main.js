@@ -664,6 +664,9 @@ function showToast(title, message, details = null, action = null, options = {}) 
 }
 
 function defaultModeDraft(mode) {
+  if (mode === "Reference") {
+    return { brief: REFERENCE_DEFAULT_BRIEF, prompt: SAMPLE_PROMPT };
+  }
   return MODE_DEFAULT_DRAFTS[mode] || MODE_DEFAULT_DRAFTS.T2VA;
 }
 
@@ -682,12 +685,7 @@ function saveCurrentModeDraft() {
 
 function stashCurrentModeDraft() {
   if (!studio) return;
-  if (isPersistedDraftMode(studio.mode)) saveCurrentModeDraft();
-  else if (studio.mode === "Reference") studio.referenceDraft = {
-    ...currentDraftFields(),
-    lastModelPrompt: studio.lastModelPrompt,
-    lastModelMeta: studio.lastModelMeta,
-  };
+  saveCurrentModeDraft();
 }
 
 function updateBriefLayout() {
@@ -705,19 +703,12 @@ function updateBriefLayout() {
 
 function restoreModeDraft(mode) {
   if (!studio) return;
-  const draft = isPersistedDraftMode(mode)
-    ? studio.modeDrafts[mode] || defaultModeDraft(mode)
-    : studio.referenceDraft || {
-      brief: REFERENCE_DEFAULT_BRIEF,
-      prompt: SAMPLE_PROMPT,
-      lastModelPrompt: SAMPLE_PROMPT,
-      lastModelMeta: promptLengthMeta(SAMPLE_PROMPT),
-    };
+  const draft = studio.modeDrafts[mode] || defaultModeDraft(mode);
   const output = studio.root.querySelector("[data-output]");
   studio.root.querySelector(".h3ps-brief textarea").value = draft.brief;
   output.value = draft.prompt;
-  studio.lastModelPrompt = isPersistedDraftMode(mode) ? draft.prompt : draft.lastModelPrompt ?? null;
-  studio.lastModelMeta = isPersistedDraftMode(mode) ? promptLengthMeta(draft.prompt) : draft.lastModelMeta ?? null;
+  studio.lastModelPrompt = draft.prompt;
+  studio.lastModelMeta = promptLengthMeta(draft.prompt);
   studio.refineRestore = null;
   studio.root.querySelector("[data-refine-restore]").hidden = true;
   studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = promptLengthMeta(output.value);
@@ -746,12 +737,6 @@ function restoreDefaultDrafts(event) {
   disarmDraftDefaults();
   studio.modeDrafts = {};
   saveModeDrafts(localStorage, studio.modeDrafts);
-  studio.referenceDraft = {
-    brief: REFERENCE_DEFAULT_BRIEF,
-    prompt: SAMPLE_PROMPT,
-    lastModelPrompt: SAMPLE_PROMPT,
-    lastModelMeta: promptLengthMeta(SAMPLE_PROMPT),
-  };
   restoreModeDraft(studio.mode);
   showToast("Default drafts restored", "Saved mode drafts were removed.");
 }
@@ -783,23 +768,16 @@ function setGenerationState(state, label, detail) {
   const button = studio.root.querySelector("[data-generate]");
   const status = studio.root.querySelector("[data-status]");
   const statusDetail = studio.root.querySelector("[data-status-detail]");
-  const lifecycle = studio.root.querySelector("[data-model-lifecycle]");
-  const lifecycleLabel = studio.root.querySelector("[data-model-lifecycle-label]");
   const busy = state === "busy";
   studio.requestBusy = busy;
-  const remote = ["external", "api"].includes(studio.selectedModel?.family);
+  const comfyMemory = studio.root.querySelector("[data-comfy-memory-action]");
+  comfyMemory.disabled = busy;
+  comfyMemory.title = busy
+    ? "Available after the active Writer request finishes"
+    : "Unload models held by ComfyUI without clearing cached workflow results";
   button.classList.toggle("is-cancel", busy);
   button.innerHTML = busy ? `<span class="h3ps-spinner"></span>Cancel` : `${icon("spark", 16)}Generate prompt`;
-  lifecycle.hidden = !busy && !studio.modelLoaded;
-  lifecycle.classList.toggle("is-busy", busy);
-  if (busy) {
-    studio.lifecycleDotCount = ((studio.lifecycleDotCount || 0) % 3) + 1;
-    lifecycleLabel.textContent = `${remote ? "External request active" : "Prompt model active"}${".".repeat(studio.lifecycleDotCount)}`;
-  } else {
-    studio.lifecycleDotCount = 0;
-    lifecycleLabel.textContent = "Model loaded";
-  }
-  syncMemoryAction(busy);
+  syncLifecycleActions();
   status.hidden = !busy;
   status.classList.toggle("is-busy", busy);
   if (busy) {
@@ -816,23 +794,52 @@ function setGenerationState(state, label, detail) {
   }
 }
 
-function syncMemoryAction(busy = studio.requestBusy) {
-  const button = studio.root.querySelector("[data-memory-action]");
-  if (busy) {
-    const remote = ["external", "api"].includes(studio.selectedModel?.family);
-    button.innerHTML = `${icon("memory", 15)}${remote ? "Stop request" : "Stop & unload"}`;
-    button.title = remote ? "Cancel the request. The remote provider may continue processing or billing." : "Stop the current prompt generation and unload its local model";
-  } else if (studio.modelLoaded) {
-    button.innerHTML = `${icon("memory", 15)}Unload prompt model`;
-    button.title = "Unload the local prompt model from GPU memory";
-  } else {
-    button.innerHTML = `${icon("memory", 15)}Free ComfyUI VRAM`;
-    button.title = "Unload models held by ComfyUI without clearing cached workflow results";
-  }
+function updatePromptResidency(status) {
+  const residency = status?.prompt_residency;
+  if (!residency) return;
+  studio.promptResidency = {
+    direct: residency.direct?.loaded ? { modelId: residency.direct.model_id || null } : null,
+    ollama: Array.isArray(residency.ollama?.models) ? residency.ollama.models.filter(Boolean) : [],
+  };
+}
+
+function lifecycleTargets() {
+  const targets = [];
+  if (studio.promptResidency.direct) targets.push({ family: "gguf", modelId: studio.promptResidency.direct.modelId });
+  studio.promptResidency.ollama.forEach((modelId) => targets.push({ family: "ollama", modelId }));
+  return targets;
+}
+
+function lifecycleButtonMarkup(target, { stop = false } = {}) {
+  const provider = target.family === "ollama" ? "ollama" : "direct";
+  const label = stop ? "Stop & unload" : target.family === "ollama" ? "Unload Ollama" : "Unload Direct";
+  const title = stop
+    ? "Cancel the active request and unload its prompt model"
+    : `Unload ${target.modelId || (target.family === "ollama" ? "the Ollama model" : "the Direct model")}`;
+  return `<button class="h3ps-memory-action h3ps-prompt-lifecycle-action" type="button" data-lifecycle-family="${target.family}" ${target.modelId ? `data-lifecycle-model="${escapeHtml(target.modelId)}"` : ""} data-lifecycle-stop="${stop}" title="${escapeHtml(title)}"><span class="h3ps-provider-icon" data-provider-icon="${provider}" aria-hidden="true"></span>${label}</button>`;
+}
+
+function syncLifecycleActions() {
+  const slot = studio.root.querySelector("[data-prompt-lifecycle-actions]");
+  const directStatus = studio.root.querySelector("[data-model-lifecycle]");
+  if (directStatus) directStatus.hidden = !studio.promptResidency.direct;
+  const activeFamily = studio.activeRequestFamily;
+  const activeLocal = studio.requestBusy && ["gguf", "ollama"].includes(activeFamily);
+  const activeTarget = activeLocal ? { family: activeFamily, modelId: studio.activeRequestModelId } : null;
+  const background = lifecycleTargets().filter((target) => {
+    if (!activeTarget) return true;
+    if (activeTarget.family === "gguf" && target.family === "gguf") return false;
+    return target.family !== activeTarget.family || target.modelId !== activeTarget.modelId;
+  });
+  const backgroundMarkup = background.length > 1
+    ? `<details class="h3ps-prompt-models-menu"><summary class="h3ps-memory-action">${icon("memory", 15)}Prompt models · ${background.length}</summary><span>${background.map((target) => lifecycleButtonMarkup(target)).join("")}</span></details>`
+    : background.map((target) => lifecycleButtonMarkup(target)).join("");
+  slot.innerHTML = `${activeTarget ? lifecycleButtonMarkup(activeTarget, { stop: true }) : ""}${backgroundMarkup}`;
+  slot.querySelectorAll("[data-lifecycle-family]").forEach((button) => button.addEventListener("click", runLifecycleAction));
 }
 
 async function releaseComfyVram({ retry = null } = {}) {
-  const button = studio.root.querySelector("[data-memory-action]");
+  const button = studio.root.querySelector("[data-comfy-memory-action]");
   if (button.disabled) return;
   let shouldRetry = false;
   button.disabled = true;
@@ -863,7 +870,7 @@ async function releaseComfyVram({ retry = null } = {}) {
     showToast("VRAM release failed", error.message);
   } finally {
     button.disabled = false;
-    syncMemoryAction(false);
+    syncLifecycleActions();
   }
   if (shouldRetry) await retry();
 }
@@ -882,30 +889,27 @@ function showVramRetry(error, retry) {
   );
 }
 
-async function runMemoryAction() {
-  const button = studio.root.querySelector("[data-memory-action]");
+async function runLifecycleAction(event) {
+  const button = event.currentTarget;
   if (button.disabled) return;
-  const busy = studio.requestBusy;
-  if (!busy && !studio.modelLoaded) {
-    await releaseComfyVram();
-    return;
-  }
-  const remote = ["external", "api"].includes(studio.selectedModel?.family);
-  if (busy) setGenerationState("busy", remote ? "Stopping request" : "Stopping & unloading", remote ? "Remote processing may not stop immediately" : "Cancelling the request and unloading its model");
+  const family = button.dataset.lifecycleFamily;
+  const modelId = button.dataset.lifecycleModel || null;
+  const stop = button.dataset.lifecycleStop === "true";
+  if (stop) setGenerationState("busy", "Stopping & unloading", "Cancelling the request and unloading its prompt model");
   button.disabled = true;
   try {
-    await unloadModel();
-    studio.modelLoaded = false;
+    await unloadModel({ family, model_id: modelId });
+    if (family === "gguf") studio.promptResidency.direct = null;
+    else studio.promptResidency.ollama = studio.promptResidency.ollama.filter((name) => name !== modelId);
     showToast(
-      busy ? (remote ? "Stop requested" : "Stop & unload requested") : "Prompt model unloaded",
-      busy ? (remote ? "The local request will stop. The provider may continue processing or billing." : "The request will stop and release its model at the next safe point.") : "GPU memory used by the local prompt model was released.",
+      stop ? "Stop & unload requested" : family === "ollama" ? "Ollama model unloaded" : "Direct model unloaded",
+      stop ? "The request will stop and release its model at the next safe point." : "GPU memory used by the prompt model was released.",
     );
-    if (!busy) setGenerationState("idle", "", "");
   } catch (error) {
     showToast(error.code || "Unload failed", error.message, error.details);
   } finally {
     button.disabled = false;
-    if (!busy) syncMemoryAction(false);
+    syncLifecycleActions();
   }
 }
 
@@ -928,6 +932,8 @@ async function startGenerationPreview() {
   const external = studio.selectedModel.family === "external";
   const apiProvider = studio.selectedModel.family === "api";
   const remote = external || apiProvider;
+  studio.activeRequestFamily = studio.selectedModel.family;
+  studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
   const generationDetail = external ? `${modelName} · the server may load its model if idle` : apiProvider ? `${modelName} · ${studio.selectedModel.api_preset}` : modelName;
   setGenerationState("busy", remote ? "Contacting provider" : "Loading model", generationDetail);
   studio.statusTimer = setInterval(async () => {
@@ -945,15 +951,8 @@ async function startGenerationPreview() {
     const output = studio.root.querySelector("[data-output]");
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
-    if (studio.mode === "Reference") studio.referenceDraft = {
-      brief: studio.root.querySelector(".h3ps-brief textarea").value,
-      prompt: result.prompt,
-      lastModelPrompt: result.prompt,
-      lastModelMeta: formatGenerationMeta(result),
-    };
     renderPromptHighlights();
     studio.lastModelMeta = formatGenerationMeta(result);
-    studio.modelLoaded = remote ? false : studio.keepModelLoaded;
     syncRuntimeSummary(result);
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
@@ -1001,8 +1000,10 @@ async function startGenerationPreview() {
     studio.statusTimer = null;
     try {
       const status = await getStatus();
-      studio.modelLoaded = ["external", "api"].includes(studio.selectedModel?.family) ? false : Boolean(status.loaded);
+      updatePromptResidency(status);
     } catch {}
+    studio.activeRequestFamily = null;
+    studio.activeRequestModelId = null;
     setGenerationState("idle", "", "");
   }
 }
@@ -1871,7 +1872,7 @@ async function refreshModels() {
     studio.modelDiscovery = result.discovery || null;
     studio.modelDirectory = result.model_directory || "ComfyUI/models/LLM/";
     studio.gpuMemory = status.gpu_memory;
-    studio.modelLoaded = Boolean(status.loaded);
+    updatePromptResidency(status);
     const restoredModel = !selectedBeforeRefresh ? restoredModelAfterDiscovery(studio) : null;
     selectModel(
       restoredModel
@@ -1896,7 +1897,11 @@ async function refreshOllama({ automatic = false } = {}) {
   clearTimeout(studio.ollamaPollTimer);
   studio.ollamaPollTimer = null;
   const control = studio.root.querySelector("[data-ollama-provider-control]");
-  if (control && !automatic) control.innerHTML = renderOllamaProviderControl();
+  const refreshButton = control?.querySelector("[data-ollama-refresh]");
+  if (refreshButton && !automatic) {
+    refreshButton.disabled = true;
+    refreshButton.textContent = "Checking…";
+  }
   try {
     const status = await getOllamaStatus();
     studio.ollamaStatus = status;
@@ -1905,10 +1910,19 @@ async function refreshOllama({ automatic = false } = {}) {
     const model = ollamaModelForSettings();
     if (model && studio.settingsProvider === "ollama") selectModel(model);
     else renderInferenceSettings();
+    if (!automatic && status.state !== "ready") {
+      showToast(
+        status.state === "not_installed" ? "Ollama is not installed" : "Ollama is not running",
+        status.state === "not_installed"
+          ? "Install the official Ollama app, then return here."
+          : "Open the Ollama app, wait for its local service to start, then select Check now again.",
+      );
+    }
   } catch (error) {
     studio.ollamaStatus = { state: "error", running: false, compatible_models: [], error: { code: error.code, message: error.message } };
     studio.ollamaError = error;
     renderInferenceSettings();
+    if (!automatic) showToast("Ollama check failed", error.message, error.details);
   } finally {
     studio.ollamaRefreshBusy = false;
     syncOllamaAutoDetection();
@@ -1945,6 +1959,8 @@ async function submitRefinement() {
 
   const previousPrompt = output.value;
   const previousMeta = studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent;
+  studio.activeRequestFamily = studio.selectedModel.family;
+  studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
   submit.disabled = true;
   submit.innerHTML = `<span class="h3ps-spinner"></span>Rewriting…`;
   setGenerationState("busy", "Refining prompt", studio.selectedModel.name.split("/").pop());
@@ -1962,17 +1978,10 @@ async function submitRefinement() {
     };
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
-    if (studio.mode === "Reference") studio.referenceDraft = {
-      brief: studio.root.querySelector(".h3ps-brief textarea").value,
-      prompt: result.prompt,
-      lastModelPrompt: result.prompt,
-      lastModelMeta: formatGenerationMeta(result),
-    };
     renderPromptHighlights();
     panel.querySelector("textarea").value = "";
     panel.querySelector("[data-refine-restore]").hidden = false;
     studio.lastModelMeta = formatGenerationMeta(result);
-    studio.modelLoaded = ["external", "api"].includes(studio.selectedModel.family) ? false : studio.keepModelLoaded;
     syncRuntimeSummary(result);
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
@@ -1997,8 +2006,10 @@ async function submitRefinement() {
     submit.innerHTML = `${icon("spark", 13)} Rewrite`;
     try {
       const status = await getStatus();
-      studio.modelLoaded = ["external", "api"].includes(studio.selectedModel?.family) ? false : Boolean(status.loaded);
+      updatePromptResidency(status);
     } catch {}
+    studio.activeRequestFamily = null;
+    studio.activeRequestModelId = null;
     setGenerationState("idle", "", "");
   }
 }
@@ -2091,7 +2102,10 @@ function createStudio() {
       </div>
 
       <footer class="h3ps-footer" data-generate-view>
-        <button class="h3ps-memory-action" type="button" data-memory-action title="Unload models held by ComfyUI without clearing cached workflow results">${icon("memory", 15)}Free ComfyUI VRAM</button>
+        <div class="h3ps-footer-memory-actions">
+          <button class="h3ps-memory-action" type="button" data-comfy-memory-action title="Unload models held by ComfyUI without clearing cached workflow results">${icon("memory", 15)}Free ComfyUI VRAM</button>
+          <span class="h3ps-prompt-lifecycle-actions" data-prompt-lifecycle-actions></span>
+        </div>
         <div class="h3ps-status is-busy" data-status hidden><span><strong></strong><small data-status-detail></small></span></div>
         <div class="h3ps-footer-actions">
           <span class="h3ps-generation-options">
@@ -2186,7 +2200,7 @@ function createStudio() {
   });
   root.querySelector("[data-generate]").addEventListener("click", startGenerationPreview);
   root.querySelector("[data-restore-default-drafts]").addEventListener("click", restoreDefaultDrafts);
-  root.querySelector("[data-memory-action]").addEventListener("click", runMemoryAction);
+  root.querySelector("[data-comfy-memory-action]").addEventListener("click", () => releaseComfyVram());
   root.querySelector("[data-guide-toggle]").addEventListener("click", async () => {
     const menu = root.querySelector("[data-guide-menu]");
     menu.hidden = !menu.hidden;

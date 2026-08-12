@@ -169,8 +169,19 @@ routes = PromptServer.instance.routes
 
 @routes.get(f"{ROUTE_PREFIX}/status")
 async def get_status(_request: web.Request) -> web.Response:
-    backend = BACKENDS.get(STATE.get("selected_model_family"), GGUF_BACKEND)
-    backend_status = await asyncio.to_thread(backend.status)
+    family = STATE.get("selected_model_family")
+    backend = BACKENDS.get(family, GGUF_BACKEND)
+    ollama_status_call = OLLAMA_BACKEND.status if family == "ollama" else OLLAMA_BACKEND.retained_status
+    direct_status, ollama_status = await asyncio.gather(
+        asyncio.to_thread(GGUF_BACKEND.status),
+        asyncio.to_thread(ollama_status_call),
+    )
+    if family == "gguf" or family is None:
+        backend_status = direct_status
+    elif family == "ollama":
+        backend_status = ollama_status
+    else:
+        backend_status = await asyncio.to_thread(backend.status)
     return web.json_response({
         **STATE,
         **backend_status,
@@ -180,6 +191,16 @@ async def get_status(_request: web.Request) -> web.Response:
         "version": VERSION,
         "developer_log_path": str(LOG_PATH) if DEVELOPER_MODE else None,
         "gpu_memory": gpu_memory_snapshot(),
+        "prompt_residency": {
+            "direct": {
+                "loaded": bool(direct_status.get("loaded")),
+                "model_id": direct_status.get("loaded_model_id"),
+            },
+            "ollama": {
+                "models": ollama_status.get("writer_retained_models", []),
+                "running": bool(ollama_status.get("ollama_running")),
+            },
+        },
     })
 
 
@@ -435,19 +456,30 @@ async def cancel(_request: web.Request) -> web.Response:
 
 
 @routes.post(f"{ROUTE_PREFIX}/unload")
-async def unload(_request: web.Request) -> web.Response:
-    backend = BACKENDS.get(STATE.get("selected_model_family"), GGUF_BACKEND)
-    if STATE["active_request_id"] is not None:
+async def unload(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    body = body or {}
+    family = body.get("family") or STATE.get("selected_model_family")
+    model_id = body.get("model_id")
+    if family not in BACKENDS:
+        return _error("INVALID_MODEL_FAMILY", "A supported model family is required.", status=400)
+    if model_id is not None and not isinstance(model_id, str):
+        return _error("INVALID_REQUEST", "model_id must be a string.", status=400)
+    backend = BACKENDS[family]
+    active_same_family = STATE["active_request_id"] is not None and STATE.get("selected_model_family") == family
+    if active_same_family:
         return web.json_response({"unload_requested": backend.request_unload(), "deferred": True})
     if getattr(backend, "externally_managed", False):
-        family = STATE.get("selected_model_family")
         return web.json_response({
             "unload_requested": False,
             "deferred": False,
             "externally_managed": True,
             "message": "The API provider owns its model lifecycle." if family == "api" else "The external llama.cpp server owns its model lifecycle.",
         })
-    await asyncio.to_thread(backend.unload)
+    if family == "ollama":
+        await asyncio.to_thread(OLLAMA_BACKEND.unload, model_id)
+    else:
+        await asyncio.to_thread(backend.unload)
     return web.json_response({"unload_requested": True, "deferred": False})
 
 

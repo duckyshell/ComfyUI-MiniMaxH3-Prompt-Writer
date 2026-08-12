@@ -108,6 +108,8 @@ class OllamaBackend:
         self._connection_lock = threading.Lock()
         self._details_cache: dict[str, tuple[str, dict[str, Any]]] = {}
         self._last_load_duration = 0
+        self.retained_models: set[str] = set()
+        self._retained_lock = threading.Lock()
 
     def prepare_request(self) -> None:
         self.cancel_event.clear()
@@ -455,6 +457,14 @@ class OllamaBackend:
     def status(self) -> dict[str, Any]:
         try:
             running = self._running_models()
+            running_names = {
+                str(item.get("model") or item.get("name"))
+                for item in running
+                if item.get("model") or item.get("name")
+            }
+            with self._retained_lock:
+                self.retained_models.intersection_update(running_names)
+                retained_models = sorted(self.retained_models)
             loaded = next((item for item in running if str(item.get("model") or item.get("name")) == self.model_name), None)
             return {
                 "loaded_model_id": f"ollama::{self.model_name}" if loaded and self.model_name else None,
@@ -463,17 +473,26 @@ class OllamaBackend:
                 "loaded_kv_cache": "ollama" if loaded else None,
                 "ollama_running": True,
                 "ollama_model": self.model_name,
+                "writer_retained_models": retained_models,
             }
         except ModelError as error:
             return {
                 "loaded_model_id": None, "loaded": False,
                 "loaded_context_tokens": None, "loaded_kv_cache": None,
                 "ollama_running": False, "ollama_model": self.model_name,
+                "writer_retained_models": [],
                 "ollama_error": {"code": error.code, "message": error.message},
             }
 
-    def unload(self) -> None:
-        model_name = self.model_name
+    def retained_status(self) -> dict[str, Any]:
+        with self._retained_lock:
+            has_retained_models = bool(self.retained_models)
+        if not has_retained_models:
+            return {"ollama_running": False, "writer_retained_models": []}
+        return self.status()
+
+    def unload(self, model_name: str | None = None) -> None:
+        model_name = model_name or self.model_name
         if not model_name:
             return
         self._request_json(
@@ -481,6 +500,8 @@ class OllamaBackend:
             {"model": model_name, "keep_alive": 0, "stream": False},
             timeout=30,
         )
+        with self._retained_lock:
+            self.retained_models.discard(model_name)
 
     def generate(
         self,
@@ -547,6 +568,9 @@ class OllamaBackend:
                     except ModelError:
                         if not active_error:
                             raise
+                elif self.model_name:
+                    with self._retained_lock:
+                        self.retained_models.add(self.model_name)
                 self.force_unload_event.clear()
 
 

@@ -37,7 +37,7 @@ export const getSystemPrompt = (mode) => request(`/system-prompt/${encodeURIComp
 export const assemble = (payload) => post("/assemble", payload);
 export const generate = (payload) => post("/generate", payload);
 export const cancel = () => post("/cancel");
-export const unloadModel = () => post("/unload");
+export const unloadModel = (target = {}) => post("/unload", target);
 export const refine = (payload) => post("/refine", payload);
 
 export async function freeComfyVram() {

@@ -760,8 +760,8 @@
   font-size: 11px;
 }
 .h3ps-ollama-model-select option { background: #151518; }
-.h3ps-ollama-add-model-toggle { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 6px 9px; border: 1px solid #2a2a30; border-radius: 7px; background: #151518; color: var(--h3ps-muted); font-size: 9.5px; }
-.h3ps-ollama-add-model-toggle:hover { border-color: #3a3a40; color: var(--h3ps-text); }
+.h3ps-ollama-add-model-toggle { display: block; width: fit-content; margin: 7px 0 0 auto; padding: 2px 0; border: 0; background: transparent; color: var(--h3ps-muted); font-size: 9.5px; }
+.h3ps-ollama-add-model-toggle:hover { color: var(--h3ps-text); }
 .h3ps-ollama-add-model { margin-top: 10px; padding: 11px; border: 1px solid #29292e; border-radius: 9px; background: #101012; }
 .h3ps-ollama-add-model > strong { color: var(--h3ps-muted); font-size: 10px; font-weight: 600; }
 .h3ps-ollama-add-model .h3ps-ollama-tier-list { width: 100%; margin-top: 8px; }

@@ -591,8 +591,9 @@ async function resampleCurrentVideo(options = null) {
   }
 }
 
-function showToast(title, message, details = null, action = null) {
+function showToast(title, message, details = null, action = null, options = {}) {
   const toast = studio.root.querySelector("[data-h3ps-toast]");
+  const dismissOnWorkspaceClick = options.dismissOnWorkspaceClick === true;
   toast.querySelector("[data-toast-title]").textContent = title;
   toast.querySelector("[data-toast-message]").textContent = message;
   const technical = toast.querySelector("[data-toast-details]");
@@ -605,15 +606,31 @@ function showToast(title, message, details = null, action = null) {
   actionButton.textContent = action?.label || "";
   actionButton.onclick = action ? () => { action.onClick(); hideToast(); } : null;
   toast.classList.toggle("has-action", Boolean(action));
+  toast.classList.toggle("is-persistent", dismissOnWorkspaceClick);
   toast.classList.add("is-visible");
+  studio.toastDismissOnWorkspaceClick = dismissOnWorkspaceClick;
   clearTimeout(studio.toastTimer);
-  studio.toastTimer = setTimeout(() => toast.classList.remove("is-visible"), action ? 12000 : details == null ? 2800 : 7000);
+  if (!dismissOnWorkspaceClick) {
+    studio.toastTimer = setTimeout(() => toast.classList.remove("is-visible"), action ? 12000 : details == null ? 2800 : 7000);
+  }
 }
 
 function hideToast() {
   if (!studio) return;
   clearTimeout(studio.toastTimer);
-  studio.root.querySelector("[data-h3ps-toast]").classList.remove("is-visible");
+  studio.toastDismissOnWorkspaceClick = false;
+  studio.root.querySelector("[data-h3ps-toast]").classList.remove("is-visible", "is-persistent");
+}
+
+function thinkingFallbackMessage(result, outputLabel) {
+  if (
+    result.thinking_budget_reduced
+    && studio.selectedModel?.family === "gguf"
+    && Number(result.context_tokens || 0) < 24_576
+  ) {
+    return `Thinking used all the space available in the selected context. The ${outputLabel} was completed in standard mode. A larger Context setting can give Thinking more room.`;
+  }
+  return `Thinking used its full token budget. The ${outputLabel} was completed in standard mode.`;
 }
 
 function setGenerationState(state, label, detail) {
@@ -792,11 +809,11 @@ async function startGenerationPreview() {
     studio.refineRestore = null;
     studio.root.querySelector("[data-refine-restore]").hidden = true;
     if (result.thinking_fallback) {
-      showToast("Prompt completed", "Thinking reached its budget — the final prompt was completed in standard mode.");
+      showToast("Prompt completed", thinkingFallbackMessage(result, "final prompt"), null, null, { dismissOnWorkspaceClick: true });
     } else if (result.format_repair_applied) {
-      showToast("Prompt generated", `The first draft failed ${result.format_repair_reason}; ${result.format_repair_method} corrected it without re-uploading media.`);
+      showToast("Prompt generated", `The first draft failed ${result.format_repair_reason}; ${result.format_repair_method} corrected it without re-uploading media.`, null, null, { dismissOnWorkspaceClick: true });
     } else if (result.format_repair_failure) {
-      showToast("Prompt generated with a format warning", `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`);
+      showToast("Prompt generated with a format warning", `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`, null, null, { dismissOnWorkspaceClick: true });
     } else {
       const reasoning = result.api_provider ? "Reasoning provider managed" : `Thinking ${result.thinking ? "on" : "off"}`;
       showToast("Prompt generated", `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · ${reasoning}`);
@@ -1788,7 +1805,7 @@ async function submitRefinement() {
     showToast(
       result.thinking_fallback ? "Rewrite completed" : "Prompt rewritten",
       result.thinking_fallback
-        ? "Thinking reached its budget — the rewrite was completed in standard mode."
+        ? thinkingFallbackMessage(result, "rewrite")
         : result.format_repair_applied
           ? `The first draft failed ${result.format_repair_reason}; its format was repaired once without media.`
         : result.format_repair_failure
@@ -1946,6 +1963,7 @@ function createStudio() {
   root.querySelector("[data-aspect-description]").textContent = restoredAspect[1];
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
   root.addEventListener("click", (event) => {
+    if (studio.toastDismissOnWorkspaceClick && !event.target.closest("[data-h3ps-toast]")) hideToast();
     if (!event.target.closest("[data-asset-menu], [data-asset-menu-toggle]")) {
       root.querySelectorAll("[data-asset-menu]").forEach((menu) => { menu.hidden = true; });
     }

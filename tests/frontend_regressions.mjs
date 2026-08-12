@@ -148,6 +148,19 @@ test("API provider storage persists configuration but never secret values", () =
   });
 });
 
+test("exceptional generation notices persist until a workspace click", () => {
+  assert.match(mainSource, /dismissOnWorkspaceClick = options\.dismissOnWorkspaceClick === true/);
+  assert.match(mainSource, /studio\.toastDismissOnWorkspaceClick && !event\.target\.closest\("\[data-h3ps-toast\]"\)/);
+  assert.match(mainSource, /format_repair_failure[\s\S]{0,500}dismissOnWorkspaceClick: true/);
+});
+
+test("Thinking fallback suggests more context only when Direct GGUF was context-limited", () => {
+  assert.match(mainSource, /result\.thinking_budget_reduced[\s\S]{0,160}studio\.selectedModel\?\.family === "gguf"/);
+  assert.match(mainSource, /A larger Context setting can give Thinking more room\./);
+  assert.match(mainSource, /Thinking used its full token budget\./);
+  assert.doesNotMatch(mainSource, /Thinking reached its budget —/);
+});
+
 test("user preferences persist only stable non-secret settings", () => {
   const storage = memoryStorage();
   saveUserPreferences(storage, {

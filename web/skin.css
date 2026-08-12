@@ -745,7 +745,7 @@
 .h3ps-ollama-ready-heading strong { font-size: 12px; font-weight: 600; }
 .h3ps-ollama-ready-heading small { display: block; margin-top: 2px; color: var(--h3ps-dim); font-size: 9.5px; }
 .h3ps-ollama-ready-heading > em { color: var(--h3ps-green); font-size: 10px; }
-.h3ps-ollama-model-heading { margin-top: 18px; }
+.h3ps-ollama-model-heading { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; }
 .h3ps-ollama-model-heading > span { color: var(--h3ps-dim); font-size: 9.5px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
 .h3ps-ollama-model-select { display: block; margin-top: 7px; }
 .h3ps-ollama-model-select select {
@@ -760,8 +760,8 @@
   font-size: 11px;
 }
 .h3ps-ollama-model-select option { background: #151518; }
-.h3ps-ollama-add-model-toggle { display: block; width: fit-content; margin: 7px 0 0 auto; padding: 2px 0; border: 0; background: transparent; color: var(--h3ps-muted); font-size: 9.5px; }
-.h3ps-ollama-add-model-toggle:hover { color: var(--h3ps-text); }
+.h3ps-ollama-add-model-toggle { padding: 2px 0; border: 0; background: transparent; color: var(--h3ps-muted); font-size: 10.5px; }
+.h3ps-ollama-add-model-toggle:hover { color: var(--h3ps-accent-strong); }
 .h3ps-ollama-add-model { margin-top: 10px; padding: 11px; border: 1px solid #29292e; border-radius: 9px; background: #101012; }
 .h3ps-ollama-add-model > strong { color: var(--h3ps-muted); font-size: 10px; font-weight: 600; }
 .h3ps-ollama-add-model .h3ps-ollama-tier-list { width: 100%; margin-top: 8px; }

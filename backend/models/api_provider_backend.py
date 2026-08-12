@@ -357,7 +357,7 @@ class ApiProviderBackend:
         headers = {
             "Accept": accept,
             "Content-Type": "application/json",
-            "User-Agent": "H3-Prompt-Writer/0.2.1",
+            "User-Agent": "H3-Prompt-Writer/0.3.0",
         }
         if connection.api_key:
             headers["Authorization"] = f"Bearer {connection.api_key}"

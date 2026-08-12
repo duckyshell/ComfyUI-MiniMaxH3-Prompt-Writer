@@ -537,8 +537,11 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
 
 test("Generate owns a compact standard-mode draft reset and leaves Reference out", () => {
   assert.match(mainSource, /data-draft-reset hidden/);
-  assert.match(mainSource, /STANDARD_DEFAULT_BRIEF/);
-  assert.match(mainSource, /STANDARD_DEFAULT_PROMPT/);
+  assert.match(mainSource, /MODE_DEFAULT_DRAFTS/);
+  assert.match(mainSource, /T2VA:[\s\S]{0,900}rooftop greenhouse/);
+  assert.match(mainSource, /I2VA:[\s\S]{0,1200}<Picture 1>/);
+  assert.match(mainSource, /FL2VA:[\s\S]{0,1400}<Picture 2>/);
+  assert.match(mainSource, /L2VA:[\s\S]{0,1200}final composition established by <Picture 1>/);
   assert.match(mainSource, /saveCurrentModeDraft\(\)/);
   assert.match(mainSource, /resetCurrentModeDraft/);
   assert.match(mainSource, /Draft reset to defaults/);

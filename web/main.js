@@ -58,12 +58,46 @@ const MODES = {
   },
 };
 
-const STANDARD_DEFAULT_BRIEF = "A baker opens a small street bakery before sunrise, places a fresh loaf on the wooden counter and says: First batch of the morning. The camera slowly pushes in as steam rises from the sliced bread. Keep the scene realistic, warm and restrained.";
-const STANDARD_DEFAULT_PROMPT = `integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames a baker opening the shutters of a small street bakery before sunrise. The camera pushes in with small amplitude at slow speed as the middle-aged baker with a calm, slightly raspy voice (S1) places a fresh loaf on the wooden counter and says: <d>[English] First batch of the morning.</d> Steam rises from the sliced bread as the camera settles on the counter.
+const MODE_DEFAULT_DRAFTS = {
+  T2VA: {
+    brief: "At blue hour, a bicycle courier arrives at a quiet rooftop greenhouse, sets down a softly glowing parcel and watches the city lights switch on below. Use one continuous tracking shot, realistic motion and restrained sound.",
+    prompt: `integrated_multimodal_description: [Shot 1] Live-action, cinematic, a wide tracking shot follows a bicycle courier across a rain-dark rooftop toward a glass greenhouse at blue hour. The courier brakes beside the doorway, steps down and places a softly glowing parcel on a wooden bench. The camera arcs with small amplitude at slow speed as the courier turns toward the skyline and rows of city lights switch on across the distance. Reflections travel over the greenhouse glass while the courier remains still beside the parcel.
 
-overall_soundscape: Wooden shutters scrape open over a quiet street as trays clink softly inside the bakery. The doorbell rings once, followed by light footsteps and the crisp sound of bread being sliced.
+overall_soundscape: Bicycle tires hiss across wet concrete, the chain clicks as the rider stops, and low rooftop wind moves through the greenhouse frame. Distant traffic continues below.
 
-non_diegetic_music: A soft acoustic-guitar pattern at a moderate tempo, joined by sparse upright-bass notes and a gentle fade at the end.`;
+non_diegetic_music: Sparse electronic pulses at a slow tempo with a low sustained synth tone, fading during the final skyline view.`,
+  },
+  I2VA: {
+    brief: "Preserve the person, wardrobe, setting and framing from the uploaded first frame. A small paper bird drifts into view; the person notices it, follows it with their eyes and slowly reaches toward it while the camera gently pushes in.",
+    prompt: `For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
+
+integrated_multimodal_description: [Shot 1] Live-action, cinematic, the person shown in <Picture 1> remains in the same setting, preserving identity, wardrobe, lighting, spatial relationships and opening composition. A small folded paper bird drifts into the frame on a light current of air. The subject notices it, follows its path with their eyes and slowly raises one hand as the camera pushes in with small amplitude at slow speed. The paper bird settles just above the open palm while the original background remains stable.
+
+overall_soundscape: Soft room ambience continues beneath a faint rustle of paper and fabric movement.
+
+non_diegetic_music: A restrained pattern of widely spaced piano notes, ending on a sustained note as the paper bird reaches the hand.`,
+  },
+  FL2VA: {
+    brief: "Create one continuous, physically believable transition from the uploaded opening frame to the uploaded ending frame. A cyclist releases the handlebar, raises and opens an umbrella, then settles precisely into the final pose and composition.",
+    prompt: `How the reference pictures align with the target video: Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the final moment of the target video.
+
+integrated_multimodal_description: [Shot 1] Live-action, cinematic, the cyclist begins in the identity, clothing, pose, setting and framing established by <Picture 1>, holding a closed umbrella beside the bicycle. The camera pulls out with small amplitude at slow speed as the cyclist releases the handlebar, raises the umbrella and presses the runner upward until the canopy opens. Water rolls from the expanding fabric while the cyclist steps beneath it, rotates the handle and gradually settles into the exact pose, spacing, object positions, camera angle and final composition established by <Picture 2>.
+
+overall_soundscape: Steady rain falls on the pavement, followed by the metallic click of the umbrella runner and the soft snap of the canopy opening. Water drips from the bicycle as distant traffic passes.
+
+non_diegetic_music: N/A`,
+  },
+  L2VA: {
+    brief: "Build a plausible action that lands exactly on the uploaded final frame. Begin with an intact ceramic cup near the table edge; a hand knocks it down, it breaks on the floor, and every fragment settles into the final arrangement.",
+    prompt: `How the reference picture aligns with the target video: <Picture 1> (from [Shot 1]) aligns with the final moment of the target video.
+
+integrated_multimodal_description: [Shot 1] Live-action, cinematic, a close shot begins with an intact ceramic cup near the edge of a dark wooden table. The same hand and sleeve visible in <Picture 1> approach from the right. The camera pushes in with small amplitude at slow speed as the fingertips strike the cup. It tips, falls and breaks against the floor; fragments slide outward and gradually lose momentum. The hand lowers into view while every piece settles into the exact arrangement, lighting, focus, camera angle and final composition established by <Picture 1>.
+
+overall_soundscape: Fingertips tap the ceramic before it scrapes across the tabletop, falls and breaks with a sharp impact. Small fragments scatter and then stop sliding across the floor.
+
+non_diegetic_music: A low electronic pulse at a slow tempo stops immediately when the cup breaks.`,
+  },
+};
 const REFERENCE_DEFAULT_BRIEF = "Use identity and wardrobe from <Picture 1> and the slow lateral camera movement from <Video 1>. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.";
 
 const SAMPLE_PROMPT = `subject_definitions:
@@ -628,7 +662,7 @@ function showToast(title, message, details = null, action = null, options = {}) 
 }
 
 function defaultModeDraft(mode) {
-  return { brief: STANDARD_DEFAULT_BRIEF, prompt: STANDARD_DEFAULT_PROMPT };
+  return MODE_DEFAULT_DRAFTS[mode] || MODE_DEFAULT_DRAFTS.T2VA;
 }
 
 function currentDraftFields() {

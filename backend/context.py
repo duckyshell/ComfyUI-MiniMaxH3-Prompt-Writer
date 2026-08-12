@@ -16,6 +16,7 @@ ESTIMATED_VISUAL_TOKENS = 280
 CHAT_TEMPLATE_OVERHEAD_TOKENS = 384
 STANDARD_OUTPUT_TOKENS = 1_536
 THINKING_OUTPUT_TOKENS = 6_144
+LOCAL_THINKING_OUTPUT_TOKENS = 8_192
 
 
 class ContextPlanError(ValueError):
@@ -89,21 +90,29 @@ def plan_context(
         + visual_input_count * ESTIMATED_VISUAL_TOKENS
         + CHAT_TEMPLATE_OVERHEAD_TOKENS
     )
-    minimum_required = estimated_input_tokens + STANDARD_OUTPUT_TOKENS + CONTEXT_SAFETY_TOKENS
+    desired_output_tokens = LOCAL_THINKING_OUTPUT_TOKENS if thinking else STANDARD_OUTPUT_TOKENS
+    minimum_required = estimated_input_tokens + desired_output_tokens + CONTEXT_SAFETY_TOKENS
     automatic_ladder = automatic and model_info.get("auto_context_ladder") is True
-    if automatic_ladder:
+    if automatic and thinking:
         minimum_tier_tokens = max(
             CONTEXT_PROFILES[profile],
-            CONTEXT_PROFILES["standard"] if thinking else 0,
+            CONTEXT_PROFILES["standard"],
             minimum_required,
         )
         profile = next(
             (name for name, tokens in CONTEXT_PROFILES.items() if tokens >= minimum_tier_tokens),
             "extended",
         )
-    elif automatic and profile == "low" and (
-        thinking or minimum_required > CONTEXT_PROFILES["low"]
-    ):
+    elif automatic_ladder:
+        minimum_tier_tokens = max(
+            CONTEXT_PROFILES[profile],
+            minimum_required,
+        )
+        profile = next(
+            (name for name, tokens in CONTEXT_PROFILES.items() if tokens >= minimum_tier_tokens),
+            "extended",
+        )
+    elif automatic and profile == "low" and minimum_required > CONTEXT_PROFILES["low"]:
         profile = "standard"
     context_tokens = CONTEXT_PROFILES[profile]
     if profile == "low" and thinking:
@@ -120,28 +129,35 @@ def plan_context(
             ),
             None,
         )
+        code = "THINKING_CONTEXT_INSUFFICIENT" if thinking else "CONTEXT_BUDGET_EXCEEDED"
+        message = (
+            "The selected Context cannot fit the complete Thinking request."
+            if thinking
+            else "This request does not leave enough context for a complete MiniMax prompt."
+        )
         raise ContextPlanError(
-            "CONTEXT_BUDGET_EXCEEDED",
-            "This request does not leave enough context for a complete MiniMax prompt.",
+            code,
+            message,
             {
                 "estimated_input_tokens": estimated_input_tokens,
-                "minimum_output_tokens": STANDARD_OUTPUT_TOKENS,
+                "minimum_output_tokens": desired_output_tokens,
                 "safety_tokens": CONTEXT_SAFETY_TOKENS,
                 "context_profile": profile,
                 "context_tokens": context_tokens,
                 "suggested_context_profile": suggested,
                 "suggestion": (
-                    f"Switch to {suggested.title()} context or remove references."
-                    if suggested else "Remove references or shorten the creative brief."
+                    f"Switch to {suggested.title()} context."
+                    if suggested and thinking
+                    else f"Switch to {suggested.title()} context or remove references."
+                    if suggested
+                    else "Disable Thinking, remove references, use a smaller model, or shorten the creative brief."
+                    if thinking
+                    else "Remove references or shorten the creative brief."
                 ),
             },
         )
 
-    available_output_tokens = context_tokens - estimated_input_tokens - CONTEXT_SAFETY_TOKENS
-    max_output_tokens = (
-        min(THINKING_OUTPUT_TOKENS, available_output_tokens)
-        if thinking else STANDARD_OUTPUT_TOKENS
-    )
+    max_output_tokens = desired_output_tokens
     return {
         "requested_context_profile": requested_context or "auto",
         "context_profile": profile,
@@ -154,5 +170,5 @@ def plan_context(
         "visual_input_count": visual_input_count,
         "max_output_tokens": max_output_tokens,
         "reserved_output_tokens": max_output_tokens + CONTEXT_SAFETY_TOKENS,
-        "thinking_budget_reduced": thinking and max_output_tokens < THINKING_OUTPUT_TOKENS,
+        "thinking_budget_reduced": False,
     }

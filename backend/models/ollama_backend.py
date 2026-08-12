@@ -517,7 +517,7 @@ class OllamaBackend:
                 result = run_h3_pipeline(
                     model_info, assembled, session_id, runtime_plan,
                     complete=complete,
-                    count_text_tokens=lambda text: estimate_text_tokens(text) + 1,
+                    count_text_tokens=estimate_text_tokens,
                     is_cancelled=self.cancel_event.is_set,
                     thinking=thinking,
                     seed=seed,

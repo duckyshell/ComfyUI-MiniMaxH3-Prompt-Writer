@@ -37,6 +37,7 @@ class ContextPlanTests(unittest.TestCase):
             thinking=True,
         )
         self.assertEqual(result["context_profile"], "standard")
+        self.assertEqual(result["max_output_tokens"], 8192)
 
     def test_manual_low_context_rejects_thinking_before_load(self):
         with self.assertRaises(ContextPlanError) as raised:
@@ -58,6 +59,21 @@ class ContextPlanTests(unittest.TestCase):
             thinking=False,
         )
         self.assertEqual(result["context_profile"], "standard")
+        self.assertEqual(result["max_output_tokens"], 1536)
+
+    def test_auto_thinking_selects_extended_for_full_completion_budget(self):
+        result = plan_context(
+            request("x" * 30_000),
+            {"recommended_context": "standard"},
+            requested_context="auto",
+            requested_kv_cache="q8",
+            thinking=True,
+        )
+
+        self.assertEqual(result["context_profile"], "extended")
+        self.assertEqual(result["context_tokens"], 24576)
+        self.assertEqual(result["max_output_tokens"], 8192)
+        self.assertFalse(result["thinking_budget_reduced"])
 
     def test_opt_in_auto_ladder_selects_the_smallest_sufficient_tier(self):
         standard = plan_context(
@@ -92,17 +108,19 @@ class ContextPlanTests(unittest.TestCase):
         self.assertEqual(raised.exception.details["context_profile"], "extended")
         self.assertIsNone(raised.exception.details["suggested_context_profile"])
 
-    def test_thinking_budget_is_dynamic(self):
-        result = plan_context(
-            request("x" * 30_000),
-            {"recommended_context": "standard"},
-            requested_context="16k",
-            requested_kv_cache="q8",
-            thinking=True,
-        )
-        self.assertLess(result["max_output_tokens"], 6144)
-        self.assertGreaterEqual(result["max_output_tokens"], 1536)
-        self.assertTrue(result["thinking_budget_reduced"])
+    def test_manual_thinking_context_is_not_silently_degraded(self):
+        with self.assertRaises(ContextPlanError) as raised:
+            plan_context(
+                request("x" * 30_000),
+                {"recommended_context": "standard"},
+                requested_context="16k",
+                requested_kv_cache="q8",
+                thinking=True,
+            )
+
+        self.assertEqual(raised.exception.code, "THINKING_CONTEXT_INSUFFICIENT")
+        self.assertEqual(raised.exception.details["minimum_output_tokens"], 8192)
+        self.assertEqual(raised.exception.details["suggested_context_profile"], "extended")
 
     def test_preflight_suggests_larger_profile_without_dropping_media(self):
         with self.assertRaises(ContextPlanError) as raised:

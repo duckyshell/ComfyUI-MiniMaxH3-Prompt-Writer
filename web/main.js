@@ -972,7 +972,16 @@ function syncSelectedModelSourceLabel() {
 function syncActiveModelSummary(runtimeSummary = null) {
   if (!studio) return;
   const model = studio.selectedModel;
-  studio.root.querySelector("[data-active-model-icon]").textContent = model?.family === "external" ? "S" : model?.family === "ollama" ? "O" : model?.family === "api" ? "A" : "G";
+  const modelIcon = studio.root.querySelector("[data-active-model-icon]");
+  const providerIcon = model?.family === "external"
+    ? "external"
+    : model?.family === "ollama"
+      ? "ollama"
+      : model?.family === "api"
+        ? `api-${model.api_preset || studio.apiProviderConfig?.preset || "custom"}`
+        : "direct";
+  modelIcon.textContent = "";
+  modelIcon.dataset.providerIcon = providerIcon;
   studio.root.querySelector("[data-active-model-name]").textContent = model ? model.name.split("/").pop() : "No compatible prompt model";
   studio.root.querySelector("[data-active-model-source]").textContent = model?.family === "external"
     ? "External server"
@@ -1039,7 +1048,7 @@ function renderExternalServerControl() {
   return `
     <div class="h3ps-external-connection ${connected ? "is-connected" : ""}">
       <div class="h3ps-external-connection-status">
-        <span class="h3ps-provider-icon">S</span>
+        <span class="h3ps-provider-icon" data-provider-icon="external" aria-hidden="true"></span>
         <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(state)}</small></span>
         <em>${connected ? "Connected" : studio.externalServerError ? "Offline" : "Not connected"}</em>
       </div>
@@ -1137,7 +1146,7 @@ function renderOllamaProviderControl() {
   const selected = ollamaModelForSettings();
   const tested = selected?.tested_for_h3 === true;
   return `${header}${ollamaJourneyMarkup("ready")}<div class="h3ps-ollama-ready">
-    <div class="h3ps-ollama-ready-heading"><span class="h3ps-provider-icon">O</span><span><strong>Ollama is ready</strong><small>Version ${escapeHtml(status.version || "unknown")} · local service</small></span><em>Running</em></div>
+    <div class="h3ps-ollama-ready-heading"><span class="h3ps-provider-icon" data-provider-icon="ollama" aria-hidden="true"></span><span><strong>Ollama is ready</strong><small>Version ${escapeHtml(status.version || "unknown")} · local service</small></span><em>Running</em></div>
     <label class="h3ps-ollama-model-select"><span>Prompt model</span><select data-ollama-model>${models.map((model) => `<option value="${escapeHtml(model.remote_model)}" ${model.remote_model === selected?.remote_model ? "selected" : ""}>${escapeHtml(model.name)}${model.parameter_size ? ` · ${escapeHtml(model.parameter_size)}` : ""}${model.quantization_level ? ` · ${escapeHtml(model.quantization_level)}` : ""}</option>`).join("")}</select></label>
     <div class="h3ps-ollama-badges"><span>Vision</span><span>${selected?.thinking_detected ? "Thinking detected" : "Standard generation"}</span><span class="${tested ? "is-tested" : ""}">${tested ? "Tested for H3" : "Compatible · not yet H3-tested"}</span></div>
     <p>${tested ? "This exact Ollama tag passed the focused H3 Generate and Refine smoke test." : "Compatibility comes from Ollama model metadata. It is not a quality guarantee for H3 prompts."}</p>
@@ -1146,10 +1155,10 @@ function renderOllamaProviderControl() {
 }
 
 const API_PROVIDER_UI = {
-  gemini: { name: "Gemini", icon: "G", note: "Google API", env: "GEMINI_API_KEY", keyUrl: "https://aistudio.google.com/api-keys" },
-  openai: { name: "OpenAI", icon: "O", note: "OpenAI API", env: "OPENAI_API_KEY", keyUrl: "https://platform.openai.com/api-keys" },
-  openrouter: { name: "OpenRouter", icon: "R", note: "Multi-provider gateway", env: "OPENROUTER_API_KEY", keyUrl: "https://openrouter.ai/settings/keys" },
-  custom: { name: "Custom", icon: "C", note: "Generic OpenAI-compatible", env: "OPENAI_API_KEY", keyUrl: null },
+  gemini: { name: "Gemini", icon: "api-gemini", note: "Google API", env: "GEMINI_API_KEY", keyUrl: "https://aistudio.google.com/api-keys" },
+  openai: { name: "OpenAI", icon: "api-openai", note: "OpenAI API", env: "OPENAI_API_KEY", keyUrl: "https://platform.openai.com/api-keys" },
+  openrouter: { name: "OpenRouter", icon: "api-openrouter", note: "Multi-provider gateway", env: "OPENROUTER_API_KEY", keyUrl: "https://openrouter.ai/settings/keys" },
+  custom: { name: "Custom", icon: "api-custom", note: "Generic OpenAI-compatible", env: "OPENAI_API_KEY", keyUrl: null },
 };
 
 function apiProviderModelForSettings() {
@@ -1171,7 +1180,7 @@ function renderApiProviderControl() {
   const model = apiProviderModelForSettings();
   const providerChoices = Object.entries(API_PROVIDER_UI).map(([id, provider]) => `
     <button type="button" class="h3ps-api-preset ${id === config.preset ? "is-selected" : ""}" data-api-preset="${id}">
-      <span class="h3ps-provider-icon">${provider.icon}</span><span><strong>${provider.name}</strong><small>${provider.note}</small></span>${icon("check", 13)}
+      <span class="h3ps-provider-icon" data-provider-icon="${provider.icon}" aria-hidden="true"></span><span><strong>${provider.name}</strong><small>${provider.note}</small></span>${icon("check", 13)}
     </button>`).join("");
   const header = `<header class="h3ps-settings-section-heading"><span><small>OpenAI-compatible</small><strong>API providers</strong></span></header>`;
   const disclosure = `<div class="h3ps-api-disclosure"><strong>What leaves this computer</strong><p>The provider receives your brief, H3 instructions, enabled prepared images and one derived contact sheet per enabled video. Original videos and audio bytes are not uploaded.</p>${config.preset === "openrouter" ? "<small>OpenRouter forwards the request to an upstream model provider with its own data policy.</small>" : ""}</div>`;
@@ -1185,7 +1194,7 @@ function renderApiProviderControl() {
       <div class="h3ps-api-preset-list">${providerChoices}</div>
       <div class="h3ps-api-setup">
         <div class="h3ps-api-connected">
-          <span class="h3ps-provider-icon">${selectedPreset.icon}</span>
+          <span class="h3ps-provider-icon" data-provider-icon="${selectedPreset.icon}" aria-hidden="true"></span>
           <span><strong>${escapeHtml(connection.provider_name)}</strong><small>${escapeHtml(connection.base_url)} · ${escapeHtml(connection.key_hint || connection.environment_name || "no key")}${connection.compatibility_profile === "lm_studio" ? " · LM Studio detected" : ""}</small></span>
           <em>${connection.connection_verified ? "Connected" : "Configured"}</em>
         </div>

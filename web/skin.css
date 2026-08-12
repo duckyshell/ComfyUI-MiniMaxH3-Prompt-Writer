@@ -445,6 +445,10 @@
 .h3ps-provider-icon[data-provider-icon="direct"] { --h3ps-provider-icon: url("./assets/icons/direct-gguf.svg"); }
 .h3ps-provider-icon[data-provider-icon="external"] { --h3ps-provider-icon: url("./assets/icons/external-llama-server.svg"); }
 .h3ps-provider-icon[data-provider-icon="api"] { --h3ps-provider-icon: url("./assets/icons/api-providers.svg"); }
+.h3ps-provider-icon[data-provider-icon="api-gemini"] { --h3ps-provider-icon: url("./assets/icons/gemini.svg"); }
+.h3ps-provider-icon[data-provider-icon="api-openai"] { --h3ps-provider-icon: url("./assets/icons/openai.svg"); }
+.h3ps-provider-icon[data-provider-icon="api-openrouter"] { --h3ps-provider-icon: url("./assets/icons/openrouter.svg"); }
+.h3ps-provider-icon[data-provider-icon="api-custom"] { --h3ps-provider-icon: url("./assets/icons/custom.svg"); }
 .h3ps-provider-selector > button.is-selected .h3ps-provider-icon { color: var(--h3ps-text); }
 
 /* Model and utility rows */

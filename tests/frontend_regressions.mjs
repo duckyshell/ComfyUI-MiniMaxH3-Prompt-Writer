@@ -35,6 +35,7 @@ const settingsSource = await readFile(new URL("../web/settings.js", import.meta.
 const settingsEncoded = Buffer.from(settingsSource).toString("base64");
 const { settingsMarkup } = await import(`data:text/javascript;base64,${settingsEncoded}`);
 const mainSource = await readFile(new URL("../web/main.js", import.meta.url), "utf8");
+const skinSource = await readFile(new URL("../web/skin.css", import.meta.url), "utf8");
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -427,6 +428,13 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(mainSource, /OLLAMA_MODELS/);
   assert.match(mainSource, /syncOllamaAutoDetection/);
   assert.match(mainSource, /setTimeout\(\(\) => refreshOllama\(\{ automatic: true \}\), 4000\)/);
+  assert.match(mainSource, /data-provider-icon="external"/);
+  assert.match(mainSource, /data-provider-icon="ollama"/);
+  for (const providerIcon of ["api-gemini", "api-openai", "api-openrouter", "api-custom"]) {
+    assert.match(mainSource, new RegExp(`icon: "${providerIcon}"`));
+    assert.match(skinSource, new RegExp(`data-provider-icon="${providerIcon}"`));
+  }
+  assert.doesNotMatch(mainSource, /h3ps-provider-icon">[SO]<\/span>/);
   assert.match(mainSource, /data-api-provider-form/);
   assert.match(mainSource, /The key is sent once to the local H3 backend/);
   assert.match(mainSource, /Reasoning provider managed/);

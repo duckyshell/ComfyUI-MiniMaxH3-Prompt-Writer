@@ -441,6 +441,9 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(mainSource, /data-ollama-model/);
   assert.match(mainSource, /data-ollama-add-model/);
   assert.match(mainSource, /\+ Add model/);
+  assert.match(skinSource, /h3ps-root \.h3ps-ollama-add-model-toggle[^}]+color: var\(--h3ps-accent-strong\)[^}]+font-size: 9\.5px[^}]+cursor: pointer/);
+  assert.match(skinSource, /h3ps-ollama-model-select select[\s\S]{0,900}background-position: right 12px center[\s\S]{0,300}cursor: pointer/);
+  assert.match(skinSource, /h3ps-api-model-select select[\s\S]{0,900}background-position: right 12px center[\s\S]{0,300}cursor: pointer/);
   assert.match(mainSource, /Choose another tested model/);
   assert.match(mainSource, /studio\.ollamaAddModelOpen = !studio\.ollamaAddModelOpen/);
   assert.match(mainSource, /Need models on another drive\?/);

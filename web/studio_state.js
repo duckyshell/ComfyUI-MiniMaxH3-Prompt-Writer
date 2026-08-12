@@ -145,13 +145,18 @@ export function selectedApiProvider(state) {
   };
 }
 
-export function selectModelState(state, model) {
+export function selectModelState(state, model, { preserveSettingsProvider = false } = {}) {
+  const settingsProvider = state.settingsProvider;
   state.selectedModel = model || null;
   state.audioSupported = model?.capabilities?.audio === true;
-  if (model?.family === "external") state.settingsProvider = "external";
-  else if (model?.family === "ollama") state.settingsProvider = "ollama";
-  else if (model?.family === "api") state.settingsProvider = "api";
-  else if (model?.family === "gguf") state.settingsProvider = "direct";
+  if (!preserveSettingsProvider) {
+    if (model?.family === "external") state.settingsProvider = "external";
+    else if (model?.family === "ollama") state.settingsProvider = "ollama";
+    else if (model?.family === "api") state.settingsProvider = "api";
+    else if (model?.family === "gguf") state.settingsProvider = "direct";
+  } else {
+    state.settingsProvider = settingsProvider;
+  }
   if (["external", "api"].includes(model?.family)) {
     state.keepModelLoaded = false;
     state.modelLoaded = false;

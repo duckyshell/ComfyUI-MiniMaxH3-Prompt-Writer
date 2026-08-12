@@ -373,6 +373,21 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   assert.equal(apiPayload.ollama_model, null);
 });
 
+test("background model discovery does not override an open Settings provider tab", () => {
+  const state = createStudioState({ sessionId: "settings-race", storage: memoryStorage() });
+  state.settingsProvider = "api";
+  selectModelState(state, {
+    id: "direct-model",
+    family: "gguf",
+    capabilities: { audio: false, images: true },
+  }, { preserveSettingsProvider: true });
+  assert.equal(state.selectedModel.family, "gguf");
+  assert.equal(state.settingsProvider, "api");
+
+  selectModelState(state, state.selectedModel);
+  assert.equal(state.settingsProvider, "direct");
+});
+
 test("Settings separates providers, installed models, diagnostics, and verified models", () => {
   const markup = settingsMarkup(() => "<svg></svg>");
   assert.match(markup, /data-provider-option="direct"/);

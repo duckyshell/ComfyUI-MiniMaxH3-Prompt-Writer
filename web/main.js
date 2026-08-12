@@ -1389,9 +1389,9 @@ function selectSettingsProvider(provider) {
   saveUserPreferences(localStorage, studio);
 }
 
-function selectModel(model) {
+function selectModel(model, { preserveSettingsProvider = false } = {}) {
   rememberRuntimePreferences();
-  selectModelState(studio, model);
+  selectModelState(studio, model, { preserveSettingsProvider });
   applyRuntimePreferences(studio.settingsProvider);
   if (model?.family === "gguf") studio.preferredDirectModelId = model.id;
   const remote = ["external", "api"].includes(model?.family);
@@ -1724,6 +1724,7 @@ async function refreshModels() {
       || (selectedBeforeRefresh?.family === "ollama" ? selectedBeforeRefresh : null)
       || (selectedBeforeRefresh?.family === "api" ? selectedBeforeRefresh : null)
       || restoredModelAfterDiscovery(studio),
+      { preserveSettingsProvider: studio.root.classList.contains("is-settings-open") },
     );
     studio.preferencesRestoring = false;
     setGenerationState("idle", "", "");

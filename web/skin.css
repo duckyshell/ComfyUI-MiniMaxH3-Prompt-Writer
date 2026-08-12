@@ -433,6 +433,12 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-weight: 600;
 }
+.h3ps-draft-reset {
+  border-color: #2a2a2f;
+  background: #141416;
+  color: var(--h3ps-muted);
+}
+.h3ps-draft-reset:hover { border-color: #38383f; background: #17171a; color: var(--h3ps-text); }
 .h3ps-provider-icon[data-provider-icon]::before {
   content: "";
   width: 16px;
@@ -655,6 +661,7 @@
   border-top: 1px solid #1e1e23;
   border-bottom: 1px solid #1e1e23;
 }
+.h3ps-installed-model-heading { color: var(--h3ps-dim); }
 .h3ps-ollama-state-icon {
   display: grid;
   place-items: center;

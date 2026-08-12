@@ -64,6 +64,9 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-modes button.is-active small { color: #aeb3bc; }
 .h3ps-modes button[data-mode="Reference"] { margin-left:12px; }.h3ps-modes button[data-mode="Reference"]::before { content:""; position:absolute; left:-9px; top:8px; width:1px; height:18px; background:#343841; pointer-events:none; }
 .h3ps-output-toolbar { display:flex; align-items:center; justify-content:space-between; min-width:0; padding:0 22px; color:#aeb3bc; font-size:10px; font-weight:680; letter-spacing:.075em; text-transform:uppercase; }
+.h3ps-output-title { display:inline-flex; align-items:center; gap:8px; }
+.h3ps-draft-reset { display:grid; place-items:center; width:25px; height:25px; padding:0; border:1px solid var(--h3ps-border); border-radius:6px; background:#202329; color:var(--h3ps-muted); cursor:pointer; }
+.h3ps-draft-reset:hover { border-color:#4a505b; color:var(--h3ps-text); }
 
 .h3ps-workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 45%) minmax(0, 55%); }
 .h3ps-input-panel, .h3ps-output-panel { min-width: 0; min-height: 0; overflow: auto; }
@@ -311,6 +314,7 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-settings-section-heading > button { display:inline-flex; align-items:center; gap:5px; height:27px; padding:0 8px; border:1px solid var(--h3ps-border); border-radius:6px; background:#24272d; color:var(--h3ps-muted); font-size:9px; cursor:pointer; }
 .h3ps-settings-section-heading > button:hover { border-color:#4a505b; color:var(--h3ps-text); }
 .h3ps-installed-model-control { display:grid; grid-template-columns:31px minmax(0,1fr) auto; align-items:center; gap:9px; min-height:53px; padding:7px 9px; border:1px solid #343943; border-radius:8px; background:#202329; }
+.h3ps-installed-model-heading { margin:18px 0 5px; color:var(--h3ps-dim); font-size:9.5px; font-weight:650; letter-spacing:.09em; text-transform:uppercase; }
 .h3ps-installed-model-control > label { display:flex; min-width:0; flex-direction:column; }
 .h3ps-installed-model-control > label > span { margin-bottom:3px; color:var(--h3ps-muted); font-size:8px; }
 .h3ps-installed-model-control select { width:100%; min-width:0; height:23px; padding:0 24px 0 0; border:0; outline:0; background:transparent; color:#e0e2e6; font-size:10px; font-weight:620; cursor:pointer; text-overflow:ellipsis; }

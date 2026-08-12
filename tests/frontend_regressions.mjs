@@ -11,6 +11,7 @@ const {
   EXTERNAL_SERVER_STORAGE_KEY,
   API_PROVIDER_STORAGE_KEY,
   OLLAMA_MODEL_STORAGE_KEY,
+  MODE_DRAFTS_STORAGE_KEY,
   SYSTEM_PROMPT_STORAGE_KEY,
   USER_PREFERENCES_STORAGE_KEY,
   buildGeneratePayload,
@@ -21,15 +22,20 @@ const {
   loadApiProviderConfig,
   loadExternalServerConfig,
   loadOllamaModel,
+  loadModeDrafts,
   loadUserPreferences,
   saveCustomSystemPrompts,
   saveApiProviderConfig,
   saveExternalServerConfig,
   saveOllamaModel,
+  saveModeDrafts,
   saveUserPreferences,
   restoredModelAfterDiscovery,
   selectModelState,
   systemPromptProfile,
+  isModeDraftDirty,
+  isPersistedDraftMode,
+  resetModeDraft,
 } = await import(`data:text/javascript;base64,${stateEncoded}`);
 const settingsSource = await readFile(new URL("../web/settings.js", import.meta.url), "utf8");
 const settingsEncoded = Buffer.from(settingsSource).toString("base64");
@@ -250,6 +256,41 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
   assert.deepEqual(state.assets, []);
 });
 
+test("standard mode drafts persist independently across reloads", () => {
+  const storage = memoryStorage();
+  saveModeDrafts(storage, {
+    T2VA: { brief: "Text brief", prompt: "Text prompt" },
+    I2VA: { brief: "Image brief", prompt: "Image prompt" },
+    Reference: { brief: "must not persist", prompt: "must not persist" },
+  });
+  assert.deepEqual(loadModeDrafts(storage), {
+    T2VA: { brief: "Text brief", prompt: "Text prompt" },
+    I2VA: { brief: "Image brief", prompt: "Image prompt" },
+  });
+  assert.doesNotMatch(storage.entries()[MODE_DRAFTS_STORAGE_KEY], /must not persist|Reference/);
+  assert.deepEqual(createStudioState({ sessionId: "drafts", storage }).modeDrafts.T2VA, { brief: "Text brief", prompt: "Text prompt" });
+});
+
+test("draft reset visibility is limited to dirty standard modes", () => {
+  const defaults = { brief: "Default brief", prompt: "Default prompt" };
+  assert.equal(isModeDraftDirty("T2VA", defaults, defaults), false);
+  assert.equal(isModeDraftDirty("FL2VA", { ...defaults, brief: "Changed" }, defaults), true);
+  assert.equal(isModeDraftDirty("Reference", { brief: "Changed", prompt: "Changed" }, defaults), false);
+  assert.equal(isPersistedDraftMode("L2VA"), true);
+  assert.equal(isPersistedDraftMode("Reference"), false);
+});
+
+test("draft reset restores only the selected standard mode", () => {
+  const drafts = {
+    T2VA: { brief: "Custom T2VA", prompt: "Custom T2VA" },
+    I2VA: { brief: "Custom I2VA", prompt: "Custom I2VA" },
+  };
+  assert.deepEqual(resetModeDraft(drafts, "T2VA"), {
+    I2VA: drafts.I2VA,
+  });
+  assert.equal(resetModeDraft(drafts, "Reference"), drafts);
+});
+
 test("disconnected API preference falls back to the saved Direct model after discovery", () => {
   const preferred = { id: "preferred.gguf", family: "gguf", runtime_ready: true };
   const first = { id: "first.gguf", family: "gguf", runtime_ready: true };
@@ -408,6 +449,9 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(markup, /data-provider-panel="api"/);
   assert.match(markup, /API providers/);
   assert.match(markup, /data-installed-model/);
+  assert.match(markup, /Installed models/);
+  assert.match(markup, /h3ps-installed-model-heading">Select Model/);
+  assert.doesNotMatch(markup, /Model used for Direct GGUF/);
   assert.match(markup, /data-model-refresh/);
   assert.match(markup, /data-model-scan-slot/);
   assert.match(markup, /data-verified-models-slot/);
@@ -489,4 +533,16 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.match(mainSource, /"Server managed"/);
   assert.match(mainSource, /generate\(buildGeneratePayload\(studio/);
   assert.match(mainSource, /refine\(buildRefinePayload\(studio/);
+});
+
+test("Generate owns a compact standard-mode draft reset and leaves Reference out", () => {
+  assert.match(mainSource, /data-draft-reset hidden/);
+  assert.match(mainSource, /STANDARD_DEFAULT_BRIEF/);
+  assert.match(mainSource, /STANDARD_DEFAULT_PROMPT/);
+  assert.match(mainSource, /saveCurrentModeDraft\(\)/);
+  assert.match(mainSource, /resetCurrentModeDraft/);
+  assert.match(mainSource, /Draft reset to defaults/);
+  assert.match(mainSource, /isPersistedDraftMode\(studio\.mode\)/);
+  assert.match(mainSource, /studio\.referenceDraft = \{[\s\S]{0,240}lastModelPrompt/);
+  assert.match(skinSource, /h3ps-draft-reset/);
 });

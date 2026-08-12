@@ -6,10 +6,14 @@ import {
   buildGeneratePayload,
   buildRefinePayload,
   createStudioState,
+  isModeDraftDirty,
+  isPersistedDraftMode,
+  resetModeDraft,
   saveApiProviderConfig,
   saveCustomSystemPrompts,
   saveExternalServerConfig,
   saveOllamaModel,
+  saveModeDrafts,
   saveUserPreferences,
   restoredModelAfterDiscovery,
   selectModelState,
@@ -53,6 +57,14 @@ const MODES = {
     assets: [],
   },
 };
+
+const STANDARD_DEFAULT_BRIEF = "A baker opens a small street bakery before sunrise, places a fresh loaf on the wooden counter and says: First batch of the morning. The camera slowly pushes in as steam rises from the sliced bread. Keep the scene realistic, warm and restrained.";
+const STANDARD_DEFAULT_PROMPT = `integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames a baker opening the shutters of a small street bakery before sunrise. The camera pushes in with small amplitude at slow speed as the middle-aged baker with a calm, slightly raspy voice (S1) places a fresh loaf on the wooden counter and says: <d>[English] First batch of the morning.</d> Steam rises from the sliced bread as the camera settles on the counter.
+
+overall_soundscape: Wooden shutters scrape open over a quiet street as trays clink softly inside the bakery. The doorbell rings once, followed by light footsteps and the crisp sound of bread being sliced.
+
+non_diegetic_music: A soft acoustic-guitar pattern at a moderate tempo, joined by sparse upright-bass notes and a gentle fade at the end.`;
+const REFERENCE_DEFAULT_BRIEF = "Use identity and wardrobe from <Picture 1> and the slow lateral camera movement from <Video 1>. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.";
 
 const SAMPLE_PROMPT = `subject_definitions:
 <Subject 1> is the coffee shop in <Picture 1>, with a brick wall, orange sofa, neon sign, and wooden table.
@@ -615,6 +627,85 @@ function showToast(title, message, details = null, action = null, options = {}) 
   }
 }
 
+function defaultModeDraft(mode) {
+  return { brief: STANDARD_DEFAULT_BRIEF, prompt: STANDARD_DEFAULT_PROMPT };
+}
+
+function currentDraftFields() {
+  return {
+    brief: studio.root.querySelector(".h3ps-brief textarea").value,
+    prompt: studio.root.querySelector("[data-output]").value,
+  };
+}
+
+function saveCurrentModeDraft() {
+  if (!studio || !isPersistedDraftMode(studio.mode)) return;
+  studio.modeDrafts[studio.mode] = currentDraftFields();
+  saveModeDrafts(localStorage, studio.modeDrafts);
+}
+
+function stashCurrentModeDraft() {
+  if (!studio) return;
+  if (isPersistedDraftMode(studio.mode)) saveCurrentModeDraft();
+  else if (studio.mode === "Reference") studio.referenceDraft = {
+    ...currentDraftFields(),
+    lastModelPrompt: studio.lastModelPrompt,
+    lastModelMeta: studio.lastModelMeta,
+  };
+}
+
+function updateBriefLayout() {
+  if (!studio) return;
+  const brief = studio.root.querySelector(".h3ps-brief textarea");
+  const compactHeight = window.innerHeight <= 800;
+  const largeCanvas = window.innerWidth >= 3000 && window.innerHeight >= 1600;
+  const minimumHeight = compactHeight ? 80 : largeCanvas ? 125 : 105;
+  const maximumHeight = compactHeight ? 130 : largeCanvas ? 230 : 190;
+  studio.root.querySelector(".h3ps-char-count").textContent = `${brief.value.length.toLocaleString()} / 2,000`;
+  brief.style.height = "auto";
+  brief.style.height = `${Math.min(maximumHeight, Math.max(minimumHeight, brief.scrollHeight))}px`;
+  brief.style.overflowY = brief.scrollHeight > maximumHeight ? "auto" : "hidden";
+}
+
+function syncDraftResetVisibility() {
+  if (!studio) return;
+  const button = studio.root.querySelector("[data-draft-reset]");
+  if (!isPersistedDraftMode(studio.mode)) return void (button.hidden = true);
+  const defaults = defaultModeDraft(studio.mode);
+  button.hidden = !isModeDraftDirty(studio.mode, currentDraftFields(), defaults);
+}
+
+function restoreModeDraft(mode) {
+  if (!studio) return;
+  const draft = isPersistedDraftMode(mode)
+    ? studio.modeDrafts[mode] || defaultModeDraft(mode)
+    : studio.referenceDraft || { brief: REFERENCE_DEFAULT_BRIEF, prompt: SAMPLE_PROMPT };
+  const output = studio.root.querySelector("[data-output]");
+  studio.root.querySelector(".h3ps-brief textarea").value = draft.brief;
+  output.value = draft.prompt;
+  studio.lastModelPrompt = isPersistedDraftMode(mode) ? draft.prompt : draft.lastModelPrompt ?? null;
+  studio.lastModelMeta = isPersistedDraftMode(mode) ? promptLengthMeta(draft.prompt) : draft.lastModelMeta ?? null;
+  studio.refineRestore = null;
+  studio.root.querySelector("[data-refine-restore]").hidden = true;
+  studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = promptLengthMeta(output.value);
+  updateBriefLayout();
+  renderPromptHighlights();
+  syncModifiedState();
+  syncDraftResetVisibility();
+}
+
+function resetCurrentModeDraft() {
+  if (!isPersistedDraftMode(studio.mode)) return;
+  const defaults = defaultModeDraft(studio.mode);
+  const current = currentDraftFields();
+  if (current.brief !== defaults.brief && current.prompt !== defaults.prompt
+      && !window.confirm(`Reset the ${studio.mode} brief and prompt to their built-in defaults?`)) return;
+  studio.modeDrafts = resetModeDraft(studio.modeDrafts, studio.mode);
+  saveModeDrafts(localStorage, studio.modeDrafts);
+  restoreModeDraft(studio.mode);
+  showToast("Draft reset to defaults", `${studio.mode} is using the current built-in H3 draft.`);
+}
+
 function hideToast() {
   if (!studio) return;
   clearTimeout(studio.toastTimer);
@@ -800,12 +891,20 @@ async function startGenerationPreview() {
     const output = studio.root.querySelector("[data-output]");
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
+    if (studio.mode === "Reference") studio.referenceDraft = {
+      brief: studio.root.querySelector(".h3ps-brief textarea").value,
+      prompt: result.prompt,
+      lastModelPrompt: result.prompt,
+      lastModelMeta: formatGenerationMeta(result),
+    };
     renderPromptHighlights();
     studio.lastModelMeta = formatGenerationMeta(result);
     studio.modelLoaded = remote ? false : studio.keepModelLoaded;
     syncRuntimeSummary(result);
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
+    saveCurrentModeDraft();
+    syncDraftResetVisibility();
     studio.refineRestore = null;
     studio.root.querySelector("[data-refine-restore]").hidden = true;
     if (result.thinking_fallback) {
@@ -1810,6 +1909,12 @@ async function submitRefinement() {
     };
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
+    if (studio.mode === "Reference") studio.referenceDraft = {
+      brief: studio.root.querySelector(".h3ps-brief textarea").value,
+      prompt: result.prompt,
+      lastModelPrompt: result.prompt,
+      lastModelMeta: formatGenerationMeta(result),
+    };
     renderPromptHighlights();
     panel.querySelector("textarea").value = "";
     panel.querySelector("[data-refine-restore]").hidden = false;
@@ -1818,6 +1923,8 @@ async function submitRefinement() {
     syncRuntimeSummary(result);
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
+    saveCurrentModeDraft();
+    syncDraftResetVisibility();
     showToast(
       result.thinking_fallback ? "Rewrite completed" : "Prompt rewritten",
       result.thinking_fallback
@@ -1876,7 +1983,7 @@ function createStudio() {
           ${Object.keys(MODES).map((mode) => `<button type="button" role="tab" data-mode="${mode}">${mode}</button>`).join("")}
         </nav>
         <div class="h3ps-output-toolbar">
-          <span>Generated prompt</span>
+          <span class="h3ps-output-title"><button class="h3ps-small-refresh h3ps-draft-reset" type="button" title="Restore this mode's draft defaults" aria-label="Restore draft defaults" data-draft-reset hidden>${icon("refresh", 13)}</button><span>Generated prompt</span></span>
           <div class="h3ps-output-badges"><span data-modified-badge hidden>Modified</span><button type="button" data-undo-edits hidden>Undo</button></div>
         </div>
       </div>
@@ -2002,7 +2109,10 @@ function createStudio() {
   root.querySelectorAll("[data-close-preview]").forEach((el) => el.addEventListener("click", closeVideoPreview));
   root.querySelectorAll("[data-close-image-preview]").forEach((el) => el.addEventListener("click", closeImagePreview));
   root.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
+    if (button.dataset.mode === studio.mode) return;
+    stashCurrentModeDraft();
     studio.mode = button.dataset.mode;
+    restoreModeDraft(studio.mode);
     renderMedia(studio.mode);
     syncRuntimeSummary();
     saveUserPreferences(localStorage, studio);
@@ -2022,6 +2132,7 @@ function createStudio() {
     }
   });
   root.querySelector("[data-generate]").addEventListener("click", startGenerationPreview);
+  root.querySelector("[data-draft-reset]").addEventListener("click", resetCurrentModeDraft);
   root.querySelector("[data-memory-action]").addEventListener("click", runMemoryAction);
   root.querySelector("[data-guide-toggle]").addEventListener("click", async () => {
     const menu = root.querySelector("[data-guide-menu]");
@@ -2097,19 +2208,13 @@ function createStudio() {
     studio.keepModelLoaded = event.target.checked;
   });
   const brief = root.querySelector(".h3ps-brief textarea");
-  const briefCount = root.querySelector(".h3ps-char-count");
   const updateBriefCount = () => {
-    const compactHeight = window.innerHeight <= 800;
-    const largeCanvas = window.innerWidth >= 3000 && window.innerHeight >= 1600;
-    const minimumHeight = compactHeight ? 80 : largeCanvas ? 125 : 105;
-    const maximumHeight = compactHeight ? 130 : largeCanvas ? 230 : 190;
-    briefCount.textContent = `${brief.value.length.toLocaleString()} / 2,000`;
-    brief.style.height = "auto";
-    brief.style.height = `${Math.min(maximumHeight, Math.max(minimumHeight, brief.scrollHeight))}px`;
-    brief.style.overflowY = brief.scrollHeight > maximumHeight ? "auto" : "hidden";
+    updateBriefLayout();
+    saveCurrentModeDraft();
+    syncDraftResetVisibility();
   };
   brief.addEventListener("input", updateBriefCount);
-  updateBriefCount();
+  updateBriefLayout();
   root.querySelectorAll("[data-aspect]").forEach((button) => button.addEventListener("click", () => {
     studio.aspectRatio = button.dataset.aspect;
     const option = ASPECT_RATIOS.find(([value]) => value === studio.aspectRatio);
@@ -2258,6 +2363,8 @@ function createStudio() {
     studio.refineRestore = null;
     root.querySelector("[data-refine-restore]").hidden = true;
     syncModifiedState();
+    saveCurrentModeDraft();
+    syncDraftResetVisibility();
     showToast("Previous prompt restored", "The AI rewrite was discarded.");
   });
   root.querySelector("[data-undo-edits]").addEventListener("click", () => {
@@ -2267,6 +2374,8 @@ function createStudio() {
     root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     renderPromptHighlights();
     syncModifiedState();
+    saveCurrentModeDraft();
+    syncDraftResetVisibility();
     showToast("Edits undone", "Restored the latest AI-generated prompt.");
   });
   root.querySelector("[data-copy]").addEventListener("click", async () => {
@@ -2281,6 +2390,8 @@ function createStudio() {
     syncModifiedState();
     renderPromptHighlights();
     syncOutputLengthMeta();
+    saveCurrentModeDraft();
+    syncDraftResetVisibility();
   });
   root.querySelector("[data-output]").addEventListener("scroll", renderPromptHighlights);
   const editor = root.querySelector("[data-output]");
@@ -2320,6 +2431,7 @@ function createStudio() {
   root.querySelector("[data-include-endpoints]").addEventListener("change", (event) => {
     resampleCurrentVideo({ include_endpoints: event.target.checked });
   });
+  restoreModeDraft(studio.mode);
   renderMedia(studio.mode);
   renderPromptHighlights();
   syncSystemPromptEditors();

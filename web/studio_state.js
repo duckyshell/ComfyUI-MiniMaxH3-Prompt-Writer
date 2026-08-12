@@ -3,12 +3,54 @@ export const EXTERNAL_SERVER_STORAGE_KEY = "h3ps-external-llama-server-v1";
 export const OLLAMA_MODEL_STORAGE_KEY = "h3ps-ollama-model-v1";
 export const API_PROVIDER_STORAGE_KEY = "h3ps-api-provider-v1";
 export const USER_PREFERENCES_STORAGE_KEY = "h3ps-preferences-v1";
+export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
 
 const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference"];
 const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
 const PROVIDERS = ["direct", "external", "ollama", "api"];
 const CONTEXT_PROFILES = ["auto", "low", "standard", "extended"];
 const KV_CACHES = ["auto", "f16", "q8"];
+const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA"];
+
+export function isPersistedDraftMode(mode) {
+  return DRAFT_MODES.includes(mode);
+}
+
+export function isModeDraftDirty(mode, draft, defaults) {
+  return isPersistedDraftMode(mode)
+    && Boolean(draft)
+    && (draft.brief !== defaults.brief || draft.prompt !== defaults.prompt);
+}
+
+export function resetModeDraft(drafts, mode) {
+  if (!isPersistedDraftMode(mode)) return drafts;
+  const next = { ...drafts };
+  delete next[mode];
+  return next;
+}
+
+export function loadModeDrafts(storage = globalThis.localStorage) {
+  try {
+    const value = JSON.parse(storage?.getItem(MODE_DRAFTS_STORAGE_KEY) || "null");
+    if (!value || value.version !== 1 || !value.drafts || typeof value.drafts !== "object") return {};
+    return Object.fromEntries(DRAFT_MODES.flatMap((mode) => {
+      const draft = value.drafts[mode];
+      if (!draft || typeof draft.brief !== "string" || typeof draft.prompt !== "string") return [];
+      return [[mode, { brief: draft.brief.slice(0, 2000), prompt: draft.prompt.slice(0, 16000) }]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+export function saveModeDrafts(storage, drafts) {
+  const safeDrafts = Object.fromEntries(DRAFT_MODES.flatMap((mode) => {
+    const draft = drafts?.[mode];
+    if (!draft || typeof draft.brief !== "string" || typeof draft.prompt !== "string") return [];
+    return [[mode, { brief: draft.brief.slice(0, 2000), prompt: draft.prompt.slice(0, 16000) }]];
+  }));
+  storage?.setItem(MODE_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: safeDrafts }));
+}
 
 export function loadUserPreferences(storage = globalThis.localStorage) {
   try {
@@ -295,5 +337,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     dragGhost: null,
     customSystemPrompts: loadCustomSystemPrompts(storage),
     systemPromptDefaults: {},
+    modeDrafts: loadModeDrafts(storage),
+    referenceDraft: null,
   };
 }

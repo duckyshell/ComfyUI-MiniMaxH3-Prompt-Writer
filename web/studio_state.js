@@ -245,6 +245,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     directContextProfile: preferences?.direct_context_profile || "auto",
     directKvCache: preferences?.direct_kv_cache || "auto",
     settingsPromptProfile: "standard",
+    ollamaAddModelOpen: false,
     modelLoaded: false,
     requestBusy: false,
     toastTimer: null,

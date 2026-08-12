@@ -1145,9 +1145,12 @@ function renderOllamaProviderControl() {
   }
   const selected = ollamaModelForSettings();
   const tested = selected?.tested_for_h3 === true;
+  const addModelOpen = studio.ollamaAddModelOpen === true;
   return `${header}${ollamaJourneyMarkup("ready")}<div class="h3ps-ollama-ready">
     <div class="h3ps-ollama-ready-heading"><span class="h3ps-provider-icon" data-provider-icon="ollama" aria-hidden="true"></span><span><strong>Ollama is ready</strong><small>Version ${escapeHtml(status.version || "unknown")} · local service</small></span><em>Running</em></div>
-    <label class="h3ps-ollama-model-select"><span>Prompt model</span><select data-ollama-model>${models.map((model) => `<option value="${escapeHtml(model.remote_model)}" ${model.remote_model === selected?.remote_model ? "selected" : ""}>${escapeHtml(model.name)}${model.parameter_size ? ` · ${escapeHtml(model.parameter_size)}` : ""}${model.quantization_level ? ` · ${escapeHtml(model.quantization_level)}` : ""}</option>`).join("")}</select></label>
+    <div class="h3ps-ollama-model-heading"><span>Prompt model</span><button type="button" data-ollama-add-model aria-expanded="${String(addModelOpen)}">${addModelOpen ? "Hide models" : "Add model"}</button></div>
+    <label class="h3ps-ollama-model-select"><select data-ollama-model>${models.map((model) => `<option value="${escapeHtml(model.remote_model)}" ${model.remote_model === selected?.remote_model ? "selected" : ""}>${escapeHtml(model.name)}${model.parameter_size ? ` · ${escapeHtml(model.parameter_size)}` : ""}${model.quantization_level ? ` · ${escapeHtml(model.quantization_level)}` : ""}</option>`).join("")}</select></label>
+    ${addModelOpen ? `<div class="h3ps-ollama-add-model"><strong>Choose another tested model</strong>${renderOllamaModelTiers(status)}<small>Copy a command and run it in Terminal or PowerShell. Select Refresh after the pull completes.</small></div>` : ""}
     <div class="h3ps-ollama-badges"><span>Vision</span><span>${selected?.thinking_detected ? "Thinking detected" : "Standard generation"}</span><span class="${tested ? "is-tested" : ""}">${tested ? "Tested for H3" : "Compatible · not yet H3-tested"}</span></div>
     <p>${tested ? "This exact Ollama tag passed the focused H3 Generate and Refine smoke test." : "Compatibility comes from Ollama model metadata. It is not a quality guarantee for H3 prompts."}</p>
     <small>Use “Keep model loaded” on the Generate page to control whether Ollama retains this model after each request.</small>
@@ -2152,6 +2155,12 @@ function createStudio() {
       const command = copyOllamaCommand.dataset.copyOllamaCommand;
       navigator.clipboard.writeText(command);
       showToast("Command copied", `${command} · paste it into Terminal or PowerShell.`);
+      return;
+    }
+    const ollamaAddModel = event.target.closest("[data-ollama-add-model]");
+    if (ollamaAddModel) {
+      studio.ollamaAddModelOpen = !studio.ollamaAddModelOpen;
+      renderInferenceSettings();
       return;
     }
     const copyDirectRuntimeCommand = event.target.closest("[data-copy-direct-runtime-command]");

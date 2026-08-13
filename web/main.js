@@ -6,6 +6,7 @@ import {
   buildGeneratePayload,
   buildRefinePayload,
   audioWasAdded,
+  uploadNeedsProcessingNotice,
   createStudioState,
   isPersistedDraftMode,
   saveApiProviderConfig,
@@ -512,8 +513,11 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
     showToast("Reference slot is full", "Use Replace on the existing image.");
     return;
   }
-  showToast("Processing media", "Creating previews and the ordered contact sheet…");
   const previousAssets = [...studio.assets];
+  const showProcessingNotice = uploadNeedsProcessingNotice(previousAssets, files);
+  if (showProcessingNotice) {
+    showToast("Processing media", "Creating previews and the ordered contact sheet…");
+  }
   try {
     const result = await uploadMedia(studio.sessionId, mode, files, replaceAssetId);
     studio.sessionId = result.session_id;
@@ -521,7 +525,7 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
     const showAudioNotice = audioWasAdded(previousAssets, studio.assets, studio.audioNoticeActive);
     studio.audioNoticeActive = studio.assets.some((asset) => asset.type === "audio");
     renderMedia(mode);
-    hideToast();
+    if (showProcessingNotice) hideToast();
     if (showAudioNotice) {
       showToast(
         "Audio added",

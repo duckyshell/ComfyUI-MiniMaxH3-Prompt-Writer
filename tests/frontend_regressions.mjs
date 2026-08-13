@@ -17,6 +17,7 @@ const {
   buildGeneratePayload,
   buildRefinePayload,
   audioWasAdded,
+  uploadNeedsProcessingNotice,
   createStudioState,
   currentSystemPromptOverride,
   loadCustomSystemPrompts,
@@ -295,6 +296,16 @@ test("audio notice has a six-second timeout and a per-audio-set latch", () => {
   assert.match(mainSource, /showAudioNotice = audioWasAdded\(previousAssets, studio\.assets, studio\.audioNoticeActive\)/);
   assert.match(mainSource, /"Audio added"[\s\S]{0,280}\{ durationMs: 6000 \}/);
   assert.match(mainSource, /studio\.audioNoticeActive = studio\.assets\.some\(\(asset\) => asset\.type === "audio"\)/);
+});
+
+test("adding another audio file does not flash the Processing media notice", () => {
+  const existingAudio = [{ id: "a1", type: "audio" }];
+  assert.equal(uploadNeedsProcessingNotice([], [{ type: "audio/wav", name: "first.wav" }]), true);
+  assert.equal(uploadNeedsProcessingNotice(existingAudio, [{ type: "audio/wav", name: "second.wav" }]), false);
+  assert.equal(uploadNeedsProcessingNotice(existingAudio, [{ type: "", name: "second.mp3" }]), false);
+  assert.equal(uploadNeedsProcessingNotice(existingAudio, [{ type: "audio/wav", name: "second.wav" }, { type: "image/png", name: "frame.png" }]), true);
+  assert.match(mainSource, /if \(showProcessingNotice\) \{\s*showToast\("Processing media"/);
+  assert.match(mainSource, /if \(showProcessingNotice\) hideToast\(\)/);
 });
 
 test("all mode drafts persist independently across reloads", () => {

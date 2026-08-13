@@ -422,6 +422,7 @@ function bindMediaActions(mode) {
       try {
         const result = await removeMedia(studio.sessionId, button.dataset.removeAsset);
         studio.assets = result.assets;
+        studio.audioNoticeActive = studio.assets.some((asset) => asset.type === "audio");
         renderMedia(mode);
       } catch (error) {
         showToast(error.code || "Remove failed", error.message, error.details);
@@ -517,10 +518,18 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
     const result = await uploadMedia(studio.sessionId, mode, files, replaceAssetId);
     studio.sessionId = result.session_id;
     studio.assets = replaceAssetId ? result.assets : [...studio.assets, ...result.assets];
+    const showAudioNotice = audioWasAdded(previousAssets, studio.assets, studio.audioNoticeActive);
+    studio.audioNoticeActive = studio.assets.some((asset) => asset.type === "audio");
     renderMedia(mode);
     hideToast();
-    if (audioWasAdded(previousAssets, studio.assets)) {
-      showToast("Audio added", "The prompt model can't hear audio files. Describe how the audio references should be used in the Creative Brief.");
+    if (showAudioNotice) {
+      showToast(
+        "Audio added",
+        "The prompt model can't hear audio files. Describe how the audio references should be used in the Creative Brief.",
+        null,
+        null,
+        { durationMs: 6000 },
+      );
     }
   } catch (error) {
     renderMedia(mode);
@@ -2173,6 +2182,7 @@ function createStudio() {
     try {
       const result = await clearMedia(studio.sessionId, studio.mode);
       studio.assets = result.assets;
+      studio.audioNoticeActive = studio.assets.some((asset) => asset.type === "audio");
       closeVideoPreview();
       renderMedia(studio.mode);
       showToast("Media cleared", "The temporary session files were removed.");

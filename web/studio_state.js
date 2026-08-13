@@ -16,8 +16,9 @@ export function isPersistedDraftMode(mode) {
   return DRAFT_MODES.includes(mode);
 }
 
-export function audioWasAdded(previousAssets, nextAssets) {
-  return previousAssets.every((asset) => asset.type !== "audio")
+export function audioWasAdded(previousAssets, nextAssets, noticeActive = false) {
+  return !noticeActive
+    && previousAssets.every((asset) => asset.type !== "audio")
     && nextAssets.some((asset) => asset.type === "audio");
 }
 
@@ -296,6 +297,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     activeRequestFamily: null,
     activeRequestModelId: null,
     requestBusy: false,
+    audioNoticeActive: false,
     toastTimer: null,
     statusTimer: null,
     lifecycleDotCount: 0,

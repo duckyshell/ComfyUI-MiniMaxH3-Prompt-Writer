@@ -35,6 +35,6 @@ External has its own local provider path and is the recommended advanced alterna
 
 Choose an API provider if you do not want a local prompt-model runtime. Gemini, OpenAI, and OpenRouter have presets. Custom accepts a generic OpenAI-compatible endpoint such as local LM Studio.
 
-Remote providers receive the brief, H3 instructions, and enabled prepared visual inputs. Read [API providers](API_PROVIDERS.md#what-leaves-this-computer) before connecting a remote service.
+Remote providers receive the brief, H3 instructions, and prepared visual inputs from the current mode's manifest. Read [API providers](API_PROVIDERS.md#what-leaves-this-computer) before connecting a remote service.
 
 Comfy Cloud has not been validated for v0.3.

@@ -16,6 +16,7 @@ const {
   USER_PREFERENCES_STORAGE_KEY,
   buildGeneratePayload,
   buildRefinePayload,
+  audioWasAdded,
   createStudioState,
   currentSystemPromptOverride,
   loadCustomSystemPrompts,
@@ -135,8 +136,8 @@ test("API provider storage persists configuration but never secret values", () =
     preset: "openrouter",
     base_url: "https://openrouter.ai/api/v1",
     model_id: "provider/model",
-    credential_source: "session",
-    environment_name: "",
+    credential_source: "environment",
+    environment_name: "SECRET_ENV",
     gemini_reasoning_effort: "minimal",
     custom_images: true,
     custom_context_tokens: 32768,
@@ -144,12 +145,11 @@ test("API provider storage persists configuration but never secret values", () =
   });
   const serialized = storage.entries()[API_PROVIDER_STORAGE_KEY];
   assert.doesNotMatch(serialized, /must-not-be-stored/);
+  assert.doesNotMatch(serialized, /SECRET_ENV|credential_source|environment_name/);
   assert.deepEqual(loadApiProviderConfig(storage), {
     preset: "openrouter",
     base_url: "https://openrouter.ai/api/v1",
     model_id: "provider/model",
-    credential_source: "session",
-    environment_name: "",
     gemini_reasoning_effort: "minimal",
     custom_images: true,
     custom_context_tokens: 32768,
@@ -257,6 +257,39 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
   assert.deepEqual(state.assets, []);
 });
 
+test("a clean first run defaults to Ollama while saved provider preferences remain authoritative", () => {
+  const clean = createStudioState({ sessionId: "clean", storage: memoryStorage() });
+  assert.equal(clean.settingsProvider, "ollama");
+  assert.equal(clean.preferredProvider, "ollama");
+
+  const saved = createStudioState({
+    sessionId: "saved",
+    storage: memoryStorage({
+      [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({ version: 1, active_provider: "direct" }),
+    }),
+  });
+  assert.equal(saved.settingsProvider, "direct");
+  assert.equal(saved.preferredProvider, "direct");
+
+  const savedApi = createStudioState({
+    sessionId: "saved-api",
+    storage: memoryStorage({
+      [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({ version: 1, active_provider: "api" }),
+    }),
+  });
+  assert.equal(savedApi.settingsProvider, "api");
+  assert.equal(savedApi.preferredProvider, "api");
+});
+
+test("audio notice triggers once per global zero-to-present transition", () => {
+  const audio = { id: "a1", type: "audio" };
+  assert.equal(audioWasAdded([], [audio]), true);
+  assert.equal(audioWasAdded([], [audio, { id: "a2", type: "audio" }]), true);
+  assert.equal(audioWasAdded([audio], [audio, { id: "a2", type: "audio" }]), false);
+  assert.equal(audioWasAdded([audio], []), false);
+  assert.equal(audioWasAdded([], [{ id: "a3", type: "audio" }]), true);
+});
+
 test("all mode drafts persist independently across reloads", () => {
   const storage = memoryStorage();
   saveModeDrafts(storage, {
@@ -312,6 +345,18 @@ test("disconnected API preference falls back to the saved Direct model after dis
 
   state.preferredDirectModelId = "missing.gguf";
   assert.equal(restoredModelAfterDiscovery(state), first);
+});
+
+test("clean Ollama preference selects a ready Ollama model before a ready Direct model", () => {
+  const direct = { id: "direct.gguf", family: "gguf", runtime_ready: true };
+  const ollama = { id: "ollama::vision", family: "ollama", remote_model: "vision", runtime_ready: true };
+  assert.equal(restoredModelAfterDiscovery({
+    models: [direct, ollama],
+    preferredProvider: "ollama",
+    preferredDirectModelId: null,
+    ollamaModelName: null,
+    externalModel: null,
+  }), ollama);
 });
 
 test("studio state owns model, runtime, lifecycle, and System Prompt settings", () => {
@@ -377,9 +422,12 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     seed: 3407,
     unload_after: true,
   });
-  assert.deepEqual(buildRefinePayload(state, { currentPrompt: "Current", instruction: "Slower", seed: 99 }), {
+  assert.deepEqual(buildRefinePayload(state, { currentPrompt: "Current", instruction: "Slower", creativeBrief: "Original brief", seed: 99 }), {
     session_id: state.sessionId,
     mode: "Reference",
+    duration_seconds: 8,
+    aspect_ratio: "3:2",
+    creative_brief: "Original brief",
     current_prompt: "Current",
     instruction: "Slower",
     model_id: "external-model",
@@ -454,6 +502,9 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(markup, /data-provider-panel="external"/);
   assert.match(markup, /data-provider-panel="ollama"/);
   assert.match(markup, /data-provider-panel="api"/);
+  assert.match(markup, /data-provider-option="ollama"[^>]*aria-selected="true"/);
+  assert.match(markup, /data-provider-panel="ollama"(?![^>]*hidden)/);
+  assert.match(markup, /data-provider-panel="direct"[^>]*hidden/);
   assert.match(markup, /API providers/);
   assert.match(markup, /data-installed-model/);
   assert.match(markup, /Installed models/);
@@ -512,6 +563,12 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(mainSource, /The key is sent once to the local H3 backend/);
   assert.match(mainSource, /Reasoning provider managed/);
   assert.match(mainSource, /label\.hidden = apiManaged/);
+  assert.doesNotMatch(mainSource, /credential_source|environment_name|Not analyzed locally|Exclude from AI analysis|data-analysis-asset/);
+});
+
+test("Reference defaults use plain Picture 1 and Video 1 text while canonical tags remain user-authored", () => {
+  assert.match(mainSource, /const REFERENCE_DEFAULT_BRIEF = ["`][^"`]*Picture 1[^"`]*Video 1[^"`]*["`]/s);
+  assert.doesNotMatch(mainSource.match(/const REFERENCE_DEFAULT_BRIEF = ["`][^"`]*["`]/s)?.[0] || "", /<Picture 1>|<Video 1>/);
 });
 
 test("Settings shows compact global System Prompt summaries and an on-demand editor", () => {

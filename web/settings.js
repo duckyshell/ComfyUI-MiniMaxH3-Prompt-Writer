@@ -34,10 +34,10 @@ export function settingsMarkup(icon) {
         <section class="h3ps-settings-card h3ps-provider-settings">
           <header><span><small>Inference</small><strong>Provider</strong></span></header>
           <div class="h3ps-provider-selector" role="tablist" aria-label="Inference provider">
-            <button type="button" role="tab" data-provider-option="ollama" aria-selected="false">
+            <button type="button" role="tab" data-provider-option="ollama" aria-selected="true">
               <span class="h3ps-provider-icon" data-provider-icon="ollama" aria-hidden="true"></span><span><strong>Ollama</strong><small>Simple local model service</small></span>${icon("check", 14)}
             </button>
-            <button type="button" role="tab" data-provider-option="direct" aria-selected="true">
+            <button type="button" role="tab" data-provider-option="direct" aria-selected="false">
               <span class="h3ps-provider-icon" data-provider-icon="direct" aria-hidden="true"></span><span><strong>Direct GGUF</strong><small>Models installed in ComfyUI</small></span>${icon("check", 14)}
             </button>
             <button type="button" role="tab" data-provider-option="external" aria-selected="false">
@@ -50,7 +50,7 @@ export function settingsMarkup(icon) {
         </section>
 
         <section class="h3ps-settings-card h3ps-provider-detail" data-provider-detail>
-          <div class="h3ps-provider-panel" data-provider-panel="direct">
+          <div class="h3ps-provider-panel" data-provider-panel="direct" hidden>
             <div data-direct-runtime-status></div>
             <header class="h3ps-settings-section-heading">
               <span><small>Model</small><strong>Installed models</strong></span>
@@ -75,7 +75,7 @@ export function settingsMarkup(icon) {
             <div data-external-provider-control></div>
           </div>
 
-          <div class="h3ps-provider-panel" data-provider-panel="ollama" hidden>
+          <div class="h3ps-provider-panel" data-provider-panel="ollama">
             <div data-ollama-provider-control></div>
           </div>
 

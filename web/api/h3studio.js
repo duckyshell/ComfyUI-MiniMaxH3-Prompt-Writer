@@ -51,12 +51,13 @@ export async function freeComfyVram() {
   }
 }
 
-export function uploadMedia(sessionId, mode, files) {
+export function uploadMedia(sessionId, mode, files, replaceAssetId = null) {
   const body = new FormData();
   body.append("session_id", sessionId);
   body.append("mode", mode);
   for (const file of files) body.append("file", file);
-  return request("/media/upload", { method: "POST", body });
+  const replace = replaceAssetId ? `?replace_asset_id=${encodeURIComponent(replaceAssetId)}` : "";
+  return request(`/media/upload${replace}`, { method: "POST", body });
 }
 
 export const listMedia = (sessionId) => request(`/media?session_id=${encodeURIComponent(sessionId)}`);
@@ -64,17 +65,13 @@ export const removeMedia = (sessionId, assetId) => request(
   `/media/${encodeURIComponent(assetId)}?session_id=${encodeURIComponent(sessionId)}`,
   { method: "DELETE" },
 );
-export const clearMedia = (sessionId) => request(
-  `/media?session_id=${encodeURIComponent(sessionId)}`,
+export const clearMedia = (sessionId, mode) => request(
+  `/media?session_id=${encodeURIComponent(sessionId)}&mode=${encodeURIComponent(mode)}`,
   { method: "DELETE" },
 );
 export const resampleMedia = (sessionId, assetId, options = {}) => post(
   `/media/${encodeURIComponent(assetId)}/resample`,
   { session_id: sessionId, ...options },
-);
-export const setMediaAnalysis = (sessionId, assetId, enabled) => post(
-  `/media/${encodeURIComponent(assetId)}/analysis`,
-  { session_id: sessionId, enabled },
 );
 export const reorderMedia = (sessionId, mode, assetIds) => post(
   "/media/reorder",

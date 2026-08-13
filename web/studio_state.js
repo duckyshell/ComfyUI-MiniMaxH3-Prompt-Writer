@@ -16,6 +16,11 @@ export function isPersistedDraftMode(mode) {
   return DRAFT_MODES.includes(mode);
 }
 
+export function audioWasAdded(previousAssets, nextAssets) {
+  return previousAssets.every((asset) => asset.type !== "audio")
+    && nextAssets.some((asset) => asset.type === "audio");
+}
+
 export function isModeDraftDirty(mode, draft, defaults) {
   return isPersistedDraftMode(mode)
     && Boolean(draft)
@@ -93,8 +98,6 @@ export function loadApiProviderConfig(storage = globalThis.localStorage) {
       preset: value.preset,
       base_url: typeof value.base_url === "string" ? value.base_url : "",
       model_id: typeof value.model_id === "string" ? value.model_id : "",
-      credential_source: value.credential_source === "environment" ? "environment" : "session",
-      environment_name: typeof value.environment_name === "string" ? value.environment_name : "",
       gemini_reasoning_effort: ["minimal", "low", "medium", "high"].includes(value.gemini_reasoning_effort) ? value.gemini_reasoning_effort : "minimal",
       custom_images: value.custom_images === true,
       custom_context_tokens: Number.isInteger(value.custom_context_tokens) ? value.custom_context_tokens : null,
@@ -113,8 +116,6 @@ export function saveApiProviderConfig(storage, config) {
     preset: config.preset,
     base_url: String(config.base_url || ""),
     model_id: String(config.model_id || ""),
-    credential_source: config.credential_source === "environment" ? "environment" : "session",
-    environment_name: String(config.environment_name || ""),
     gemini_reasoning_effort: ["minimal", "low", "medium", "high"].includes(config.gemini_reasoning_effort) ? config.gemini_reasoning_effort : "minimal",
     custom_images: config.custom_images === true,
     custom_context_tokens: Number.isInteger(config.custom_context_tokens) ? config.custom_context_tokens : null,
@@ -213,6 +214,7 @@ export function restoredModelAfterDiscovery(state) {
       ? state.externalModel
       : state.preferredProvider === "ollama"
         ? state.models.find((model) => model.family === "ollama" && model.remote_model === state.ollamaModelName && model.runtime_ready)
+          || state.models.find((model) => model.family === "ollama" && model.runtime_ready)
         : null;
   return preferredProviderModel
     || preferredDirect
@@ -259,11 +261,14 @@ export function buildGeneratePayload(state, { creativeBrief, seed }) {
   };
 }
 
-export function buildRefinePayload(state, { currentPrompt, instruction, seed }) {
+export function buildRefinePayload(state, { currentPrompt, instruction, creativeBrief, seed }) {
   return {
     ...sharedInferencePayload(state),
     current_prompt: currentPrompt,
     instruction,
+    duration_seconds: state.durationSeconds,
+    aspect_ratio: state.aspectRatio,
+    creative_brief: creativeBrief,
     seed,
   };
 }
@@ -279,9 +284,9 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     kvCache: "auto",
     thinking: false,
     keepModelLoaded: false,
-    settingsProvider: "direct",
+    settingsProvider: preferences?.active_provider || "ollama",
     preferencesRestoring: true,
-    preferredProvider: preferences?.active_provider || "direct",
+    preferredProvider: preferences?.active_provider || "ollama",
     preferredDirectModelId: preferences?.direct_model_id || null,
     directContextProfile: preferences?.direct_context_profile || "auto",
     directKvCache: preferences?.direct_kv_cache || "auto",
@@ -317,8 +322,6 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
       preset: "gemini",
       base_url: "",
       model_id: "",
-      credential_source: "session",
-      environment_name: "",
       gemini_reasoning_effort: "minimal",
       custom_images: false,
       custom_context_tokens: null,

@@ -1,10 +1,11 @@
 import { app } from "/scripts/app.js";
-import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, setMediaAnalysis, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { createSessionId, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
   buildRefinePayload,
+  audioWasAdded,
   createStudioState,
   isPersistedDraftMode,
   saveApiProviderConfig,
@@ -96,7 +97,7 @@ overall_soundscape: Fingertips tap the ceramic before it scrapes across the tabl
 non_diegetic_music: A low electronic pulse at a slow tempo stops immediately when the cup breaks.`,
   },
 };
-const REFERENCE_DEFAULT_BRIEF = "Use identity and wardrobe from <Picture 1> and the slow lateral camera movement from <Video 1>. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.";
+const REFERENCE_DEFAULT_BRIEF = "Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.";
 
 const SAMPLE_PROMPT = `subject_definitions:
 <Subject 1> is the coffee shop in <Picture 1>, with a brick wall, orange sofa, neon sign, and wooden table.
@@ -312,8 +313,7 @@ function icon(name, size = 16) {
 }
 
 function renderAsset(asset, index) {
-  const audioUnavailable = asset.type === "audio" && !studio.audioSupported;
-  const analysisExcluded = asset.type !== "audio" && !asset.analysis_requested;
+  const destructiveDisabled = studio.requestBusy ? "disabled" : "";
   const visual = asset.type === "audio"
     ? `<div class="h3ps-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`
     : asset.preview_url
@@ -322,8 +322,8 @@ function renderAsset(asset, index) {
   const overlay = asset.type === "video" ? `<span class="h3ps-play">${icon("play", 18)}</span>` : "";
   const duration = formatDuration(asset.duration);
   return `
-    <div class="h3ps-asset ${analysisExcluded ? "is-excluded" : ""}" draggable="true" data-asset-index="${index}" data-asset-id="${asset.id}">
-      <span class="h3ps-asset-preview h3ps-${asset.type}">${visual}${overlay}${audioUnavailable ? '<em class="h3ps-excluded-badge" title="Audio is not analyzed by the local model">Not analyzed locally</em>' : analysisExcluded ? '<em class="h3ps-excluded-badge">Excluded</em>' : ""}</span>
+    <div class="h3ps-asset" draggable="true" data-asset-index="${index}" data-asset-id="${asset.id}">
+      <span class="h3ps-asset-preview h3ps-${asset.type}">${visual}${overlay}</span>
       <span class="h3ps-asset-copy">
         <strong>${escapeHtml(asset.reference)}</strong>
         <small>${escapeHtml(asset.filename)}</small>
@@ -332,9 +332,8 @@ function renderAsset(asset, index) {
       <button class="h3ps-more" type="button" data-asset-menu-toggle="${asset.id}" title="Asset actions">${icon("dots", 16)}</button>
       <div class="h3ps-asset-menu" data-asset-menu="${asset.id}" hidden>
         <button type="button" data-preview-asset="${asset.id}">Preview</button>
-        ${asset.mode !== "Reference" ? `<button type="button" data-replace-asset="${asset.id}">Replace image</button>` : ""}
-        <button type="button" data-analysis-asset="${asset.id}" ${audioUnavailable ? "disabled title=\"Audio stays in the prompt manifest but is not heard by the local model\"" : ""}>${audioUnavailable ? "Not analyzed by local model" : asset.analysis_requested ? "Exclude from AI analysis" : "Use for AI analysis"}</button>
-        <button type="button" data-remove-asset="${asset.id}">Remove</button>
+        ${asset.mode !== "Reference" ? `<button type="button" data-replace-asset="${asset.id}" ${destructiveDisabled}>Replace image</button>` : ""}
+        <button type="button" data-remove-asset="${asset.id}" ${destructiveDisabled}>Remove</button>
       </div>
     </div>`;
 }
@@ -415,19 +414,6 @@ function bindMediaActions(mode) {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       chooseMedia(mode, button.dataset.replaceAsset);
-    });
-  });
-  studio.root.querySelectorAll("[data-analysis-asset]").forEach((button) => {
-    button.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      const asset = studio.assets.find((item) => item.id === button.dataset.analysisAsset);
-      try {
-        const result = await setMediaAnalysis(studio.sessionId, asset.id, !asset.analysis_requested);
-        Object.assign(asset, result.asset);
-        renderMedia(mode);
-      } catch (error) {
-        showToast(error.code || "Update failed", error.message, error.details);
-      }
     });
   });
   studio.root.querySelectorAll("[data-remove-asset]").forEach((button) => {
@@ -526,16 +512,16 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
     return;
   }
   showToast("Processing media", "Creating previews and the ordered contact sheet…");
+  const previousAssets = [...studio.assets];
   try {
-    if (replaceAssetId) {
-      const removed = await removeMedia(studio.sessionId, replaceAssetId);
-      studio.assets = removed.assets;
-    }
-    const result = await uploadMedia(studio.sessionId, mode, files);
+    const result = await uploadMedia(studio.sessionId, mode, files, replaceAssetId);
     studio.sessionId = result.session_id;
-    studio.assets.push(...result.assets);
+    studio.assets = replaceAssetId ? result.assets : [...studio.assets, ...result.assets];
     renderMedia(mode);
     hideToast();
+    if (audioWasAdded(previousAssets, studio.assets)) {
+      showToast("Audio added", "The prompt model can't hear audio files. Describe how the audio references should be used in the Creative Brief.");
+    }
   } catch (error) {
     renderMedia(mode);
     showToast(error.code || "Upload failed", error.message, error.details);
@@ -604,7 +590,7 @@ function setSheetUpdating(updating) {
   const preview = studio.root.querySelector("[data-h3ps-preview]");
   preview.classList.toggle("is-updating", updating);
   preview.querySelectorAll("[data-frame-count], [data-include-endpoints], [data-resample]").forEach((control) => {
-    control.disabled = updating;
+    control.disabled = updating || studio.requestBusy;
   });
 }
 
@@ -770,6 +756,7 @@ function setGenerationState(state, label, detail) {
   const statusDetail = studio.root.querySelector("[data-status-detail]");
   const busy = state === "busy";
   studio.requestBusy = busy;
+  studio.root.querySelector("[data-clear-media]").disabled = busy;
   const comfyMemory = studio.root.querySelector("[data-comfy-memory-action]");
   comfyMemory.disabled = busy;
   comfyMemory.title = busy
@@ -777,6 +764,8 @@ function setGenerationState(state, label, detail) {
     : "Unload models held by ComfyUI without clearing cached workflow results";
   button.classList.toggle("is-cancel", busy);
   button.innerHTML = busy ? `<span class="h3ps-spinner"></span>Cancel` : `${icon("spark", 16)}Generate prompt`;
+  renderMedia(studio.mode);
+  setSheetUpdating(false);
   syncLifecycleActions();
   status.hidden = !busy;
   status.classList.toggle("is-busy", busy);
@@ -1311,10 +1300,10 @@ function renderOllamaProviderControl() {
 }
 
 const API_PROVIDER_UI = {
-  gemini: { name: "Gemini", icon: "api-gemini", note: "Google API", env: "GEMINI_API_KEY", keyUrl: "https://aistudio.google.com/api-keys" },
-  openai: { name: "OpenAI", icon: "api-openai", note: "OpenAI API", env: "OPENAI_API_KEY", keyUrl: "https://platform.openai.com/api-keys" },
-  openrouter: { name: "OpenRouter", icon: "api-openrouter", note: "Multi-provider gateway", env: "OPENROUTER_API_KEY", keyUrl: "https://openrouter.ai/settings/keys" },
-  custom: { name: "Custom", icon: "api-custom", note: "Generic OpenAI-compatible", env: "OPENAI_API_KEY", keyUrl: null },
+  gemini: { name: "Gemini", icon: "api-gemini", note: "Google API", keyUrl: "https://aistudio.google.com/api-keys" },
+  openai: { name: "OpenAI", icon: "api-openai", note: "OpenAI API", keyUrl: "https://platform.openai.com/api-keys" },
+  openrouter: { name: "OpenRouter", icon: "api-openrouter", note: "Multi-provider gateway", keyUrl: "https://openrouter.ai/settings/keys" },
+  custom: { name: "Custom", icon: "api-custom", note: "Generic OpenAI-compatible", keyUrl: null },
 };
 
 function apiProviderModelForSettings() {
@@ -1339,7 +1328,7 @@ function renderApiProviderControl() {
       <span class="h3ps-provider-icon" data-provider-icon="${provider.icon}" aria-hidden="true"></span><span><strong>${provider.name}</strong><small>${provider.note}</small></span>${icon("check", 13)}
     </button>`).join("");
   const header = `<header class="h3ps-settings-section-heading"><span><small>OpenAI-compatible</small><strong>API providers</strong></span></header>`;
-  const disclosure = `<div class="h3ps-api-disclosure"><strong>What leaves this computer</strong><p>The provider receives your brief, H3 instructions, enabled prepared images and one derived contact sheet per enabled video. Original videos and audio bytes are not uploaded.</p>${config.preset === "openrouter" ? "<small>OpenRouter forwards the request to an upstream model provider with its own data policy.</small>" : ""}</div>`;
+  const disclosure = `<div class="h3ps-api-disclosure"><strong>What leaves this computer</strong><p>The provider receives your brief, H3 instructions, prepared images and one derived contact sheet per video in the current manifest. Original videos and audio bytes are not uploaded.</p>${config.preset === "openrouter" ? "<small>OpenRouter forwards the request to an upstream model provider with its own data policy.</small>" : ""}</div>`;
   const policyLinks = [
     providerMetadata.pricing_url ? `<a href="${escapeHtml(providerMetadata.pricing_url)}" target="_blank" rel="noopener noreferrer">Pricing ↗</a>` : "",
     providerMetadata.privacy_url ? `<a href="${escapeHtml(providerMetadata.privacy_url)}" target="_blank" rel="noopener noreferrer">Data policy ↗</a>` : "",
@@ -1351,7 +1340,7 @@ function renderApiProviderControl() {
       <div class="h3ps-api-setup">
         <div class="h3ps-api-connected">
           <span class="h3ps-provider-icon" data-provider-icon="${selectedPreset.icon}" aria-hidden="true"></span>
-          <span><strong>${escapeHtml(connection.provider_name)}</strong><small>${escapeHtml(connection.base_url)} · ${escapeHtml(connection.key_hint || connection.environment_name || "no key")}${connection.compatibility_profile === "lm_studio" ? " · LM Studio detected" : ""}</small></span>
+          <span><strong>${escapeHtml(connection.provider_name)}</strong><small>${escapeHtml(connection.base_url)} · ${escapeHtml(connection.key_hint || "no key")}${connection.compatibility_profile === "lm_studio" ? " · LM Studio detected" : ""}</small></span>
           <em>${connection.connection_verified ? "Connected" : "Configured"}</em>
         </div>
         <label class="h3ps-api-model-select"><span>Model</span><select data-api-model>${models.map((item) => `<option value="${escapeHtml(item.remote_model)}" ${item.remote_model === model?.remote_model ? "selected" : ""}>${escapeHtml(item.name)}${item.model_context_limit ? ` · ${Math.round(item.model_context_limit / 1024)}K` : ""}</option>`).join("")}</select></label>
@@ -1362,16 +1351,12 @@ function renderApiProviderControl() {
       </div>
     </div>`;
   }
-  const environment = config.environment_name || selectedPreset.env;
   return `${header}<div class="h3ps-api-layout">
     <div class="h3ps-api-preset-list">${providerChoices}</div>
     <form class="h3ps-api-setup" data-api-provider-form>
       <div class="h3ps-api-intro"><strong>Connect ${selectedPreset.name}</strong><p>One shared Chat Completions backend. Provider-specific fields are applied by the selected preset.</p></div>
       ${config.preset === "custom" ? `<label><span>API base URL</span><input name="base_url" type="url" value="${escapeHtml(config.base_url)}" placeholder="https://host.example/v1 or http://localhost:8000/v1" required><small>Remote endpoints require HTTPS; loopback HTTP is allowed for local vLLM or LM Studio.</small></label>` : ""}
-      <label><span>Credential source</span><select name="credential_source"><option value="session" ${config.credential_source === "session" ? "selected" : ""}>Session only</option><option value="environment" ${config.credential_source === "environment" ? "selected" : ""}>Environment variable</option></select></label>
-      ${config.credential_source === "environment"
-        ? `<label><span>Environment variable</span><input name="environment_name" type="text" value="${escapeHtml(environment)}" pattern="[A-Z_][A-Z0-9_]*" required><small>The secret stays in the ComfyUI process environment.</small></label>`
-        : `<label><span>API key ${config.preset === "custom" ? "<em>optional</em>" : ""}</span><input name="api_key" type="password" value="" placeholder="Paste key for this session" autocomplete="off" spellcheck="false" ${config.preset === "custom" ? "" : "required"}><small>The key is sent once to the local H3 backend, kept only in memory, and never saved in localStorage.</small></label>`}
+      <label><span>API key ${config.preset === "custom" ? "<em>optional</em>" : ""}</span><input name="api_key" type="password" value="" placeholder="Paste key for this session" autocomplete="off" spellcheck="false" ${config.preset === "custom" ? "" : "required"}><small>The key is sent once to the local H3 backend, kept only in memory, and never saved in localStorage.</small></label>
       <label><span>Model ID <em>optional before connect</em></span><input name="model_id" type="text" value="${escapeHtml(config.model_id)}" placeholder="Choose from provider list or enter an exact ID" spellcheck="false"></label>
       ${config.preset === "gemini" ? `<label><span>Thinking level</span><select name="gemini_reasoning_effort"><option value="minimal" ${config.gemini_reasoning_effort === "minimal" ? "selected" : ""}>Minimal</option><option value="low" ${config.gemini_reasoning_effort === "low" ? "selected" : ""}>Low</option><option value="medium" ${config.gemini_reasoning_effort === "medium" ? "selected" : ""}>Medium</option><option value="high" ${config.gemini_reasoning_effort === "high" ? "selected" : ""}>High</option></select><small>Gemini manages the reasoning and output budget. Higher levels can use more tokens and take longer.</small></label>` : ""}
       ${config.preset === "custom" ? `<div class="h3ps-api-custom-options"><label><input name="custom_images" type="checkbox" ${config.custom_images ? "checked" : ""}><span>Endpoint accepts image_url inputs</span></label><label><span>Known context <em>optional</em></span><input name="custom_context_tokens" type="number" min="4096" step="1024" value="${config.custom_context_tokens || ""}" placeholder="32768"></label></div>` : ""}
@@ -1654,13 +1639,14 @@ function syncRuntimeSummary(result = null) {
 function setSettingsOpen(open) {
   if (!studio) return;
   setOtherModelsPopover(false);
-  if (!open) studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : studio.selectedModel?.family === "api" ? "api" : "direct";
+  const selectedProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : studio.selectedModel?.family === "api" ? "api" : studio.selectedModel?.family === "gguf" ? "direct" : null;
+  if (!open && selectedProvider) studio.settingsProvider = selectedProvider;
   studio.root.querySelector("[data-settings-view]").hidden = !open;
   studio.root.querySelectorAll("[data-generate-view]").forEach((element) => { element.hidden = open; });
   studio.root.querySelector("[data-open-settings-header]").hidden = open;
   studio.root.classList.toggle("is-settings-open", open);
   if (open) {
-    studio.settingsProvider = studio.selectedModel?.family === "external" ? "external" : studio.selectedModel?.family === "ollama" ? "ollama" : studio.selectedModel?.family === "api" ? "api" : "direct";
+    if (selectedProvider) studio.settingsProvider = selectedProvider;
     renderInferenceSettings();
     syncRuntimeSummary();
     syncSystemPromptEditors();
@@ -1725,14 +1711,11 @@ function disconnectExternalServer() {
 
 async function connectConfiguredApiProvider(form) {
   const submit = form.querySelector('[type="submit"]');
-  const source = form.elements.credential_source.value;
   const contextValue = Number(form.elements.custom_context_tokens?.value || 0);
   const config = {
     preset: studio.apiProviderConfig.preset,
     base_url: form.elements.base_url?.value.trim() || "",
     model_id: form.elements.model_id.value.trim(),
-    credential_source: source,
-    environment_name: form.elements.environment_name?.value.trim() || "",
     gemini_reasoning_effort: form.elements.gemini_reasoning_effort?.value || studio.apiProviderConfig.gemini_reasoning_effort || "minimal",
     custom_images: Boolean(form.elements.custom_images?.checked),
     custom_context_tokens: Number.isInteger(contextValue) && contextValue >= 4096 ? contextValue : null,
@@ -1745,9 +1728,8 @@ async function connectConfiguredApiProvider(form) {
       base_url: config.base_url,
       model_id: config.model_id,
       credential: {
-        source,
+        source: "session",
         value: form.elements.api_key?.value || "",
-        environment_name: config.environment_name,
       },
       custom_capabilities: {
         images: config.custom_images,
@@ -1815,7 +1797,6 @@ async function chooseApiProviderPreset(preset) {
     preset,
     base_url: "",
     model_id: "",
-    environment_name: API_PROVIDER_UI[preset].env,
     gemini_reasoning_effort: "minimal",
     custom_images: false,
     custom_context_tokens: null,
@@ -1968,6 +1949,7 @@ async function submitRefinement() {
     const result = await refine(buildRefinePayload(studio, {
       currentPrompt: previousPrompt,
       instruction,
+      creativeBrief: studio.root.querySelector(".h3ps-brief textarea").value.trim(),
       seed: newGenerationSeed(),
     }));
     studio.refineRestore = {
@@ -2067,7 +2049,7 @@ function createStudio() {
 
           <label class="h3ps-brief">
             <span><strong>Creative brief</strong><small>Describe what should happen in the video</small></span>
-            <textarea spellcheck="true">Use identity and wardrobe from &lt;Picture 1&gt; and the slow lateral camera movement from &lt;Video 1&gt;. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
+            <textarea spellcheck="true">Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
             <small class="h3ps-char-count">0 / 2,000</small>
           </label>
 
@@ -2189,8 +2171,8 @@ function createStudio() {
   root.querySelector("[data-close-settings]").addEventListener("click", () => setSettingsOpen(false));
   root.querySelector("[data-clear-media]").addEventListener("click", async () => {
     try {
-      await clearMedia(studio.sessionId);
-      studio.assets = [];
+      const result = await clearMedia(studio.sessionId, studio.mode);
+      studio.assets = result.assets;
       closeVideoPreview();
       renderMedia(studio.mode);
       showToast("Media cleared", "The temporary session files were removed.");
@@ -2367,16 +2349,6 @@ function createStudio() {
     }
   });
   root.querySelector("[data-provider-detail]").addEventListener("change", (event) => {
-    const credentialSource = event.target.closest('[data-api-provider-form] [name="credential_source"]');
-    if (credentialSource) {
-      studio.apiProviderConfig.credential_source = credentialSource.value;
-      if (credentialSource.value === "environment" && !studio.apiProviderConfig.environment_name) {
-        studio.apiProviderConfig.environment_name = API_PROVIDER_UI[studio.apiProviderConfig.preset].env;
-      }
-      saveApiProviderConfig(localStorage, studio.apiProviderConfig);
-      renderInferenceSettings();
-      return;
-    }
     const apiModel = event.target.closest("[data-api-model]");
     if (apiModel) {
       const model = studio.apiProviderModels.find((item) => item.remote_model === apiModel.value);

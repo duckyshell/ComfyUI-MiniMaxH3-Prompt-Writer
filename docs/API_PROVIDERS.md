@@ -19,7 +19,7 @@ The API provider path is not tied to Gemma 4. You can choose another multimodal 
 
 1. Open **H3 Prompt Writer > Settings > API providers**.
 2. Choose a preset.
-3. Select **Session only** and paste a key, or choose **Environment variable** and enter its name.
+3. Paste the API key for the current Writer session. Custom endpoints may be used without a key.
 4. Optionally enter an exact Model ID before connecting.
 5. Select **Connect & test**, then choose a vision-capable model from the provider list or enter its exact ID.
 
@@ -52,9 +52,7 @@ Custom is a transport contract, not a claim that every OpenAI-compatible server 
 
 ## Keys and saved settings
 
-A Session-only key is sent once to the local H3 backend and held only in that ComfyUI process's memory. It is not written to browser storage, model settings, developer notes, or request content. The backend uses it only to authenticate provider requests. Disconnecting removes the in-memory connection.
-
-Environment-variable mode reads the key from the ComfyUI process. Browser storage keeps only the variable name. The browser may save the preset, base URL, model ID, credential source, Gemini Thinking level, and Custom capability settings. It never saves the key.
+The key is sent once to the local H3 backend and held only in that ComfyUI process's memory. It is not read from environment variables and is not written to browser storage, model settings, developer notes, or request content. The backend uses it only to authenticate provider requests. Disconnecting removes the in-memory connection. The browser may save the preset, base URL, model ID, Gemini Thinking level, and Custom capability settings.
 
 ## What leaves this computer
 
@@ -62,8 +60,8 @@ For a remote provider, Writer sends:
 
 - your Creative Brief;
 - H3 and system instructions;
-- enabled prepared images;
-- one derived contact sheet for each enabled video.
+- prepared images in the current mode's manifest;
+- one derived contact sheet for each video in that manifest.
 
 Writer does not upload original video bytes or audio bytes. Audio references remain textual entries in the request manifest, so describe their intended role in the brief.
 

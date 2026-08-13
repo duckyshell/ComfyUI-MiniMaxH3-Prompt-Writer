@@ -125,7 +125,7 @@ Writer saves stable preferences in the browser used to open ComfyUI:
 - Direct Context and KV preference;
 - Ollama model tag;
 - External URL and optional Model ID;
-- API preset, URL, model ID, credential source, environment-variable name, Gemini Thinking level, and Custom capabilities;
+- API preset, URL, model ID, Gemini Thinking level, and Custom capabilities;
 - custom Standard and Reference system-prompt overrides.
 
 It never saves API keys. If a saved model no longer exists, discovery falls back without treating the missing model as a fatal error.

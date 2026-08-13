@@ -245,6 +245,10 @@ def assemble_refinement(
         f"Cached first-pass observation:\n{observation}\n\n"
         f"Current prompt:\n{current_prompt}\n\n"
         f"Revision instruction:\n{instruction}\n\n"
+        "Reference revision rule: preserve each existing <Audio N> that is absent from the Revision instruction. "
+        "Each <Audio N> present in the Revision instruction is mutable in this rewrite: follow the instruction's "
+        "meaning to decide whether that reference is present, absent, or changed in the revised prompt. Use only "
+        "canonical reference tags listed in the current Reference manifest.\n\n"
         f"{_final_contract(mode, current_prompt + ' ' + instruction)}"
     )
     return {

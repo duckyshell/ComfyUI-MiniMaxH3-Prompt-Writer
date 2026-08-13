@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from backend.models.contract import ModelError
+from backend.h3_pipeline import _audit
 from backend.models.gguf_backend import GGUFBackend
 
 
@@ -21,7 +22,11 @@ def reference_prompt(word_count: int, *, include_soundscape: bool = True) -> str
 def reference_manifest(*references: str) -> dict:
     return {
         "assets": [
-            {"id": f"asset-{index}", "type": "image", "reference": reference}
+            {
+                "id": f"asset-{index}",
+                "type": "audio" if reference.startswith("<Audio ") else "video" if reference.startswith("<Video ") else "image",
+                "reference": reference,
+            }
             for index, reference in enumerate(references, 1)
         ]
     }
@@ -116,6 +121,224 @@ def model_info():
 
 
 class GenerationCharacterizationTests(unittest.TestCase):
+    def test_unmentioned_uploaded_audio_is_allowed_but_not_required_by_audit(self):
+        assembled = {
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "Use Picture 1 for the character. The uploaded audio needs no role.",
+                "media_manifest": reference_manifest("<Picture 1>", "<Audio 1>", "<Audio 2>"),
+            },
+        }
+        without_audio, policy, *_ = _audit(reference_prompt(340), assembled)
+        with_optional_audio, *_ = _audit(reference_prompt(340).replace(
+            "<Subject 1> comes from <Picture 1>.",
+            "<Subject 1> comes from <Picture 1>. <Audio 1> is available.",
+        ), assembled)
+
+        self.assertEqual(policy.required, {"<Picture 1>"})
+        self.assertEqual(policy.mutable, set())
+        self.assertEqual(policy.allowed, {"<Picture 1>", "<Audio 1>", "<Audio 2>"})
+        self.assertEqual(without_audio["missing_reference_tags"], [])
+        self.assertFalse(without_audio["repair_required"])
+        self.assertEqual(with_optional_audio["unexpected_reference_tags"], [])
+
+    def test_exact_canonical_audio_tag_in_brief_is_required_independent_of_surrounding_text(self):
+        base_input = {
+            "mode": "Reference",
+            "duration_seconds": 10,
+            "media_manifest": reference_manifest("<Picture 1>", "<Video 1>", "<Audio 1>"),
+        }
+        untagged, untagged_policy, *_ = _audit(reference_prompt(340), {
+            "input": {**base_input, "creative_brief": "zibble frobnitz audio-one quux"},
+        })
+        canonical, canonical_policy, *_ = _audit(reference_prompt(340), {
+            "input": {**base_input, "creative_brief": "zibble <Audio 1> frobnitz quux"},
+        })
+
+        self.assertEqual(untagged_policy.required, {"<Picture 1>", "<Video 1>"})
+        self.assertEqual(untagged["missing_reference_tags"], ["<Video 1>"])
+        self.assertEqual(canonical_policy.required, {"<Picture 1>", "<Video 1>", "<Audio 1>"})
+        self.assertEqual(canonical["missing_reference_tags"], ["<Audio 1>", "<Video 1>"])
+
+    def test_refine_preserves_existing_audio_not_named_by_instruction(self):
+        current_prompt = reference_prompt(340).replace(
+            "<Subject 1> comes from <Picture 1>.",
+            "<Subject 1> comes from <Picture 1>. <Audio 1> is its voice reference.",
+        )
+        assembled = {
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "Use Picture 1 for the character.",
+                "current_prompt": current_prompt,
+                "instruction": "zibble frobnitz quux",
+                "media_manifest": reference_manifest("<Picture 1>", "<Audio 1>"),
+            },
+        }
+
+        audit, policy, *_ = _audit(reference_prompt(340), assembled)
+
+        self.assertEqual(policy.required, {"<Picture 1>", "<Audio 1>"})
+        self.assertEqual(policy.mutable, set())
+        self.assertEqual(audit["missing_reference_tags"], ["<Audio 1>"])
+
+    def test_refine_audio_named_by_instruction_is_mutable_regardless_of_surrounding_text(self):
+        current_prompt = reference_prompt(340).replace(
+            "<Subject 1> comes from <Picture 1>.",
+            "<Subject 1> comes from <Picture 1>. <Audio 1> is its voice reference.",
+        )
+        assembled = {
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "Use Picture 1 for the character.",
+                "current_prompt": current_prompt,
+                "instruction": "zibble <Audio 1> frobnitz quux",
+                "media_manifest": reference_manifest("<Picture 1>", "<Audio 1>"),
+            },
+        }
+
+        without_audio, policy, *_ = _audit(reference_prompt(340), assembled)
+        with_audio, *_ = _audit(current_prompt, assembled)
+
+        self.assertEqual(policy.required, {"<Picture 1>"})
+        self.assertEqual(policy.mutable, {"<Audio 1>"})
+        self.assertEqual(policy.allowed, {"<Picture 1>", "<Audio 1>"})
+        self.assertEqual(without_audio["missing_reference_tags"], [])
+        self.assertEqual(with_audio["missing_reference_tags"], [])
+        self.assertFalse(without_audio["repair_required"])
+        self.assertFalse(with_audio["repair_required"])
+
+    def test_refine_mutable_audio_present_with_audio_task_passes_audit(self):
+        candidate = reference_prompt(340).replace(
+            "<Subject 1> comes from <Picture 1>.",
+            "<Subject 1> comes from <Picture 1>. <Audio 1> is its voice reference.",
+        ).replace(
+            "[reference generation]",
+            "[reference generation + audio reference]",
+        )
+        assembled = {
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "zibble frobnitz quux",
+                "current_prompt": reference_prompt(340),
+                "instruction": "zibble <Audio 1> frobnitz quux",
+                "media_manifest": reference_manifest("<Picture 1>", "<Audio 1>"),
+            },
+        }
+
+        audit, policy, *_ = _audit(candidate, assembled)
+
+        self.assertEqual(policy.required, {"<Picture 1>"})
+        self.assertEqual(policy.mutable, {"<Audio 1>"})
+        self.assertFalse(audit["unexpected_audio_task"])
+        self.assertFalse(audit["repair_required"])
+
+    def test_two_sequential_refines_do_not_restore_audio_from_original_brief(self):
+        prompt_with_audio = reference_prompt(340).replace(
+            "<Subject 1> comes from <Picture 1>.",
+            "<Subject 1> comes from <Picture 1>. <Audio 1> is its voice reference.",
+        )
+        prompt_without_audio = reference_prompt(340)
+        shared_input = {
+            "mode": "Reference",
+            "duration_seconds": 10,
+            "creative_brief": "zibble <Audio 1> frobnitz quux",
+            "media_manifest": reference_manifest("<Picture 1>", "<Audio 1>"),
+        }
+
+        first_audit, first_policy, *_ = _audit(prompt_without_audio, {
+            "input": {
+                **shared_input,
+                "current_prompt": prompt_with_audio,
+                "instruction": "zibble <Audio 1> frobnitz quux",
+            },
+        })
+        second_audit, second_policy, *_ = _audit(prompt_without_audio, {
+            "input": {
+                **shared_input,
+                "current_prompt": prompt_without_audio,
+                "instruction": "zibble frobnitz quux",
+            },
+        })
+
+        self.assertEqual(first_policy.required, {"<Picture 1>"})
+        self.assertEqual(first_policy.mutable, {"<Audio 1>"})
+        self.assertEqual(first_audit["missing_reference_tags"], [])
+        self.assertEqual(second_policy.required, {"<Picture 1>"})
+        self.assertEqual(second_policy.mutable, set())
+        self.assertEqual(second_audit["missing_reference_tags"], [])
+        self.assertFalse(second_audit["repair_required"])
+
+    def test_refine_audio_named_only_by_instruction_can_be_added_or_omitted(self):
+        assembled = {
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "Use Picture 1 for the character.",
+                "current_prompt": reference_prompt(340),
+                "instruction": "zibble <Audio 1> frobnitz quux",
+                "media_manifest": reference_manifest("<Picture 1>", "<Audio 1>"),
+            },
+        }
+
+        without_audio, policy, *_ = _audit(reference_prompt(340), assembled)
+        with_audio, *_ = _audit(reference_prompt(340).replace(
+            "<Subject 1> comes from <Picture 1>.",
+            "<Subject 1> comes from <Picture 1>. <Audio 1> is present.",
+        ), assembled)
+
+        self.assertEqual(policy.required, {"<Picture 1>"})
+        self.assertEqual(policy.mutable, {"<Audio 1>"})
+        self.assertEqual(without_audio["missing_reference_tags"], [])
+        self.assertEqual(with_audio["unexpected_reference_tags"], [])
+
+    def test_refine_repair_does_not_restore_audio_made_mutable_by_instruction(self):
+        first_draft = reference_prompt(340, include_soundscape=False)
+        repaired = first_draft.replace(
+            "<Subject 1> comes from <Picture 1>.",
+            "<Subject 1> comes from <Picture 1>. <Audio 1> is its voice reference.",
+        ).replace("\n\nnon_diegetic_music:", "\n\noverall_soundscape:\nQuiet room tone.\n\nnon_diegetic_music:")
+        backend = _CharacterizedBackend([
+            response(first_draft, prompt_tokens=100, completion_tokens=80),
+            response(repaired, prompt_tokens=120, completion_tokens=90),
+        ])
+        assembled = {
+            "messages": [{"role": "user", "content": "Rewrite the prompt."}],
+            "media_inputs": [],
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "Use Picture 1 for the character.",
+                "current_prompt": first_draft.replace(
+                    "<Subject 1> comes from <Picture 1>.",
+                    "<Subject 1> comes from <Picture 1>. <Audio 1> is its voice reference.",
+                ),
+                "instruction": "zibble <Audio 1> frobnitz quux",
+                "media_manifest": reference_manifest("<Picture 1>", "<Audio 1>"),
+            },
+        }
+
+        result = backend.generate(
+            model_info(),
+            assembled,
+            "characterization-session",
+            thinking=False,
+            seed=None,
+            unload_after=False,
+            runtime_plan=runtime_plan(),
+        )
+
+        self.assertTrue(result["format_repair_attempted"])
+        self.assertFalse(result["format_repair_applied"])
+        self.assertNotIn("<Audio 1>", result["prompt"])
+        self.assertEqual(
+            result["format_repair_failure"],
+            "correction changed the reference inventory or user dialogue",
+        )
+
     def test_non_thinking_length_response_is_rejected_instead_of_returned_truncated(self):
         backend = _CharacterizedBackend([
             response("subject_definitions:\n<Subject 1> is", prompt_tokens=10, completion_tokens=1, finish_reason="length"),
@@ -350,7 +573,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         repair_messages = backend.chat_handler.calls[1]["messages"]
         self.assertEqual(repair_messages[:2], original_multimodal_messages)
         self.assertEqual(repair_messages[2], {"role": "assistant", "content": initial})
-        self.assertIn("missing reference tags: <Picture 2>", repair_messages[3]["content"])
+        self.assertIn("generated draft is missing required reference tags: <Picture 2>", repair_messages[3]["content"])
         self.assertEqual(
             sum(part.get("type") == "image_url" for part in repair_messages[1]["content"]),
             2,

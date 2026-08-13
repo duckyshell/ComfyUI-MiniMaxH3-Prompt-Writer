@@ -21,9 +21,9 @@ from .prompt_repair import (
     explicit_constraint_violations,
     multimodal_repair_messages,
     narrow_repair_messages,
-    reference_tags,
     unexpected_audio_task,
 )
+from .references import ReferencePolicy, reference_policy, reference_tags
 
 def _data_uri(path: str) -> str:
     media_type = mimetypes.guess_type(path)[0] or "image/png"
@@ -131,10 +131,12 @@ def _messages(
 def _audit(
     prompt: str,
     assembled: dict[str, Any],
-) -> tuple[dict[str, Any], set[str], str, float | None, bool]:
+) -> tuple[dict[str, Any], ReferencePolicy, str, float | None, bool]:
     duration_seconds = assembled["input"].get("duration_seconds")
-    intent_text = assembled["input"].get("creative_brief") or "\n".join(
-        str(assembled["input"].get(key, "")) for key in ("current_prompt", "instruction")
+    intent_text = "\n".join(
+        str(assembled["input"].get(key, ""))
+        for key in ("creative_brief", "current_prompt", "instruction")
+        if assembled["input"].get(key)
     )
     camera_structure_allowed = camera_structure_requested(intent_text)
     result = audit_prompt(
@@ -143,19 +145,18 @@ def _audit(
         duration_seconds,
         camera_structure_allowed,
     )
-    expected_reference_tags = {
-        asset["reference"]
-        for asset in assembled["input"].get("media_manifest", {}).get("assets", [])
-        if assembled["input"]["mode"] == "Reference" and asset.get("reference")
-    }
+    policy = reference_policy(assembled["input"])
     actual_reference_tags = reference_tags(prompt)
-    missing_reference_tags = sorted(expected_reference_tags - actual_reference_tags)
-    unexpected_reference_tags = sorted(actual_reference_tags - expected_reference_tags)
-    has_unexpected_audio_task = unexpected_audio_task(result.get("task_label"), expected_reference_tags)
+    missing_reference_tags = sorted(policy.required - actual_reference_tags)
+    unexpected_reference_tags = sorted(actual_reference_tags - policy.allowed)
+    has_unexpected_audio_task = unexpected_audio_task(result.get("task_label"), actual_reference_tags)
     constraint_violations = explicit_constraint_violations(intent_text, prompt)
     if assembled["input"]["mode"] == "Reference":
         result["missing_reference_tags"] = missing_reference_tags
         result["unexpected_reference_tags"] = unexpected_reference_tags
+        result["required_reference_tags"] = sorted(policy.required)
+        result["mutable_reference_tags"] = sorted(policy.mutable)
+        result["allowed_reference_tags"] = sorted(policy.allowed)
         result["unexpected_audio_task"] = has_unexpected_audio_task
         result["explicit_constraint_violations"] = constraint_violations
         result["repair_required"] = bool(
@@ -165,7 +166,7 @@ def _audit(
             or has_unexpected_audio_task
             or constraint_violations
         )
-    return result, expected_reference_tags, intent_text, duration_seconds, camera_structure_allowed
+    return result, policy, intent_text, duration_seconds, camera_structure_allowed
 
 
 def validate_media_capabilities(model_info: dict[str, Any], assembled: dict[str, Any]) -> None:
@@ -250,10 +251,14 @@ def run_h3_pipeline(
         raise ModelError("EMPTY_GENERATION", "The model did not produce a final prompt.")
 
     prompt = final_text(text)
-    initial_audit, expected_reference_tags, intent_text, duration_seconds, camera_structure_allowed = _audit(
+    initial_audit, reference_policy_value, intent_text, duration_seconds, camera_structure_allowed = _audit(
         prompt,
         assembled,
     )
+    expected_reference_tags = reference_policy_value.required
+    allowed_reference_tags = reference_policy_value.allowed
+    initial_reference_tags = reference_tags(prompt)
+    repair_reference_tags = (initial_reference_tags & allowed_reference_tags) | expected_reference_tags
     format_repair_attempted = False
     format_repair_applied = False
     format_repair_tokens = 0
@@ -274,8 +279,9 @@ def run_h3_pipeline(
                 messages,
                 prompt,
                 failed_checks,
-                expected_reference_tags,
+                repair_reference_tags,
                 duration_seconds,
+                allowed_reference_tags,
             )
         else:
             format_repair_method = "narrow text correction"
@@ -283,8 +289,9 @@ def run_h3_pipeline(
                 assembled,
                 prompt,
                 failed_checks,
-                expected_reference_tags,
+                repair_reference_tags,
                 duration_seconds,
+                allowed_reference_tags,
             )
         if is_cancelled():
             raise ModelError("GENERATION_CANCELLED", "Generation was cancelled before prompt correction.")
@@ -309,9 +316,12 @@ def run_h3_pipeline(
         )
         repaired_tags = reference_tags(repaired)
         repaired_audit["missing_reference_tags"] = sorted(expected_reference_tags - repaired_tags)
-        repaired_audit["unexpected_reference_tags"] = sorted(repaired_tags - expected_reference_tags)
+        repaired_audit["unexpected_reference_tags"] = sorted(repaired_tags - allowed_reference_tags)
+        repaired_audit["required_reference_tags"] = sorted(reference_policy_value.required)
+        repaired_audit["mutable_reference_tags"] = sorted(reference_policy_value.mutable)
+        repaired_audit["allowed_reference_tags"] = sorted(reference_policy_value.allowed)
         repaired_audit["unexpected_audio_task"] = unexpected_audio_task(
-            repaired_audit.get("task_label"), expected_reference_tags
+            repaired_audit.get("task_label"), repaired_tags
         )
         repaired_audit["explicit_constraint_violations"] = explicit_constraint_violations(intent_text, repaired)
         repaired_audit["repair_required"] = bool(
@@ -321,7 +331,7 @@ def run_h3_pipeline(
             or repaired_audit["unexpected_audio_task"]
             or repaired_audit["explicit_constraint_violations"]
         )
-        repair_tags_match = repaired_tags == expected_reference_tags
+        repair_tags_match = repaired_tags == repair_reference_tags
         dialogue_preserved = dialogue_lines(repaired) == dialogue_lines(prompt)
         if (
             repaired

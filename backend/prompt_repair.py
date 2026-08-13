@@ -3,12 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
-def reference_tags(text: str) -> set[str]:
-    return {
-        f"<{kind.title()} {number}>"
-        for kind, number in re.findall(r"<\s*(Picture|Video|Audio)\s+(\d+)\s*>", text, re.IGNORECASE)
-    }
+from .references import reference_tags
 
 
 def dialogue_lines(text: str) -> list[str]:
@@ -74,11 +69,11 @@ def audit_failures(audit: dict[str, Any]) -> list[str]:
     if audit.get("missing_dialogue_source"):
         failures.append("dialogue without a stable speaker ID")
     if audit.get("missing_reference_tags"):
-        failures.append("missing reference tags: " + ", ".join(audit["missing_reference_tags"]))
+        failures.append("generated draft is missing required reference tags: " + ", ".join(audit["missing_reference_tags"]))
     if audit.get("unexpected_reference_tags"):
         failures.append("unexpected reference tags: " + ", ".join(audit["unexpected_reference_tags"]))
     if audit.get("unexpected_audio_task"):
-        failures.append("audio reference/reuse declared without an uploaded audio asset")
+        failures.append("audio reference/reuse declared without a canonically requested uploaded audio reference")
     failures.extend(audit.get("explicit_constraint_violations") or [])
     return failures
 
@@ -89,18 +84,21 @@ def narrow_repair_messages(
     violations: list[str],
     expected_tags: set[str],
     duration_seconds: float | int | None,
+    allowed_reference_tags: set[str] | None = None,
 ) -> list[dict[str, str]]:
     original_request = next(message["content"] for message in assembled["messages"] if message["role"] == "user")
-    allowed_tags = ", ".join(sorted(expected_tags)) or "none"
+    required_tags = ", ".join(sorted(expected_tags)) or "none"
+    allowed_tags = ", ".join(sorted(allowed_reference_tags if allowed_reference_tags is not None else expected_tags)) or "none"
     return [
         {
             "role": "system",
             "content": (
                 "This is a narrow correction pass, not a new prompt-generation pass. Correct only the exact violations "
                 "listed below and preserve every other supported fact, reference role, action, dialogue line, shot, and "
-                "creative choice unchanged. Return the complete corrected prompt with no commentary. The exact allowed "
-                f"numbered media tags are: {allowed_tags}. Do not add any other media tag. Requested music without an "
-                "uploaded audio asset belongs only in non_diegetic_music and is not audio reference or reuse. Target "
+                "creative choice unchanged. Return the complete corrected prompt with no commentary. The required "
+                f"numbered media tags are: {required_tags}. The exact allowed numbered media tags are: {allowed_tags}. "
+                "Do not add any other media tag. Requested music without a canonically assigned uploaded audio "
+                "reference belongs only in non_diegetic_music and is not audio reference or reuse. Target "
                 f"timestamps must use MM:SS.mmm and remain within {duration_seconds} seconds. Violations: "
                 + "; ".join(violations)
             ),
@@ -118,17 +116,20 @@ def multimodal_repair_messages(
     violations: list[str],
     expected_tags: set[str],
     duration_seconds: float | int | None,
+    allowed_reference_tags: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Continue the original multimodal conversation for one constrained repair pass."""
-    allowed_tags = ", ".join(sorted(expected_tags)) or "none"
+    required_tags = ", ".join(sorted(expected_tags)) or "none"
+    allowed_tags = ", ".join(sorted(allowed_reference_tags if allowed_reference_tags is not None else expected_tags)) or "none"
     correction = (
         "CORRECTION PASS: The draft above failed only the objective checks listed below. "
         "Re-read the same uploaded reference media and original request, then return the complete corrected prompt "
-        "with no commentary. Every active uploaded reference must be accounted for with its exact numbered media "
+        "with no commentary. Every required uploaded reference must be accounted for with its exact numbered media "
         "tag, but it does not need to become a primary scene element. Preserve every supported fact, reference role, "
         "action, dialogue line, shot, and creative choice that does not conflict with the listed checks. The exact "
-        f"allowed numbered media tags are: {allowed_tags}. Do not add any other media tag. Requested music without "
-        "an uploaded audio asset belongs only in non_diegetic_music and is not audio reference or reuse. Target "
+        f"required numbered media tags are: {required_tags}. The exact allowed numbered media tags are: {allowed_tags}. "
+        "Do not add any other media tag. Requested music without a canonically assigned uploaded audio reference "
+        "belongs only in non_diegetic_music and is not audio reference or reuse. Target "
         f"timestamps must use MM:SS.mmm and remain within {duration_seconds} seconds. Objective failures: "
         + "; ".join(violations)
     )

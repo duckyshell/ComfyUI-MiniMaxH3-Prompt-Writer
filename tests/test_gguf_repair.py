@@ -5,9 +5,9 @@ from backend.prompt_repair import (
     explicit_constraint_violations,
     multimodal_repair_messages,
     narrow_repair_messages,
-    reference_tags,
     unexpected_audio_task,
 )
+from backend.references import reference_tags
 
 
 class GGUFRepairTests(unittest.TestCase):
@@ -74,13 +74,13 @@ class GGUFRepairTests(unittest.TestCase):
         messages = multimodal_repair_messages(
             original,
             "draft with <Picture 1>",
-            ["missing reference tags: <Picture 2>"],
+            ["generated draft is missing required reference tags: <Picture 2>"],
             {"<Picture 1>", "<Picture 2>"},
             10,
         )
         self.assertEqual(messages[:2], original)
         self.assertEqual(messages[2]["role"], "assistant")
-        self.assertIn("missing reference tags: <Picture 2>", messages[3]["content"])
+        self.assertIn("generated draft is missing required reference tags: <Picture 2>", messages[3]["content"])
         self.assertIn("does not need to become a primary scene element", messages[3]["content"])
 
 

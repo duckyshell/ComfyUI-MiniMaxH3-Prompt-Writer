@@ -18,6 +18,15 @@ def reference_prompt(word_count: int, *, include_soundscape: bool = True) -> str
     )
 
 
+def reference_manifest(*references: str) -> dict:
+    return {
+        "assets": [
+            {"id": f"asset-{index}", "type": "image", "reference": reference}
+            for index, reference in enumerate(references, 1)
+        ]
+    }
+
+
 class _Closer:
     def close(self):
         return None
@@ -222,6 +231,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 as Subject 1.",
+                "media_manifest": reference_manifest("<Picture 1>"),
             },
         }
 
@@ -268,6 +278,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Use Picture 1 as Subject 1.",
+                "media_manifest": reference_manifest("<Picture 1>"),
             },
         }
 
@@ -304,6 +315,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "mode": "Reference",
                 "duration_seconds": 10,
                 "creative_brief": "Create a story from all active references.",
+                "media_manifest": reference_manifest("<Picture 1>", "<Picture 2>"),
             },
         }
         original_multimodal_messages = [
@@ -358,7 +370,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
             "media_inputs": [
                 {"type": "image", "asset_id": "one", "reference": "<Picture 1>", "requires_capability": "images"},
             ],
-            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both."},
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both.", "media_manifest": reference_manifest("<Picture 1>", "<Picture 2>")},
         }
         fake_messages = [
             {"role": "system", "content": "reference guide"},
@@ -394,7 +406,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 {"role": "user", "content": "Use <Picture 1> as <Subject 1>."},
             ],
             "media_inputs": [],
-            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use Picture 1."},
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use Picture 1.", "media_manifest": reference_manifest("<Picture 1>")},
         }
 
         result = backend.generate(
@@ -422,7 +434,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
             "media_inputs": [
                 {"type": "image", "asset_id": "one", "reference": "<Picture 1>", "requires_capability": "images"},
             ],
-            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both."},
+            "input": {"mode": "Reference", "duration_seconds": 10, "creative_brief": "Use both.", "media_manifest": reference_manifest("<Picture 1>", "<Picture 2>")},
         }
         fake_messages = [
             {"role": "system", "content": "reference guide"},

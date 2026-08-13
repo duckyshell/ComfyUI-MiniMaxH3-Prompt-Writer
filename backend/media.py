@@ -122,6 +122,23 @@ class MediaStore:
             raise MediaError("UNSUPPORTED_MEDIA", "This file type is not supported.")
         assets = self.assets(session_id)
         validate_capacity(mode, assets, kind)
+        base = self._prepare_asset(session_id, mode, filename, content_type, stored_path, assets)
+        assets.append(base)
+        self._renumber(assets, mode)
+        return self.public(base)
+
+    def _prepare_asset(
+        self,
+        session_id: str,
+        mode: str,
+        filename: str,
+        content_type: str | None,
+        stored_path: Path,
+        assets: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        kind = media_type(filename, content_type)
+        if kind is None:
+            raise MediaError("UNSUPPORTED_MEDIA", "This file type is not supported.")
         asset_id = stored_path.parent.name
         base: dict[str, Any] = {
             "id": asset_id,
@@ -135,7 +152,6 @@ class MediaStore:
                 if content_type and content_type != "application/octet-stream"
                 else mimetypes.guess_type(filename)[0] or "application/octet-stream"
             ),
-            "analysis_requested": True,
             "_original_path": str(stored_path),
         }
         try:
@@ -150,9 +166,34 @@ class MediaStore:
             raise
         except Exception as exc:
             raise MediaError("MEDIA_DECODE_FAILED", f"Could not decode {kind} file: {exc}") from exc
-        assets.append(base)
-        self._renumber(assets, mode)
-        return self.public(base)
+        return base
+
+    def replace(
+        self,
+        session_id: str,
+        asset_id: str,
+        filename: str,
+        content_type: str | None,
+        stored_path: Path,
+    ) -> dict[str, Any]:
+        old_asset = self.get(session_id, asset_id)
+        assets = self.sessions[session_id]
+        kind = media_type(filename, content_type)
+        if kind != old_asset["type"]:
+            raise MediaError("REPLACEMENT_TYPE_MISMATCH", "The replacement must use the same media type.")
+        replacement = self._prepare_asset(
+            session_id,
+            old_asset["mode"],
+            filename,
+            content_type,
+            stored_path,
+            [asset for asset in assets if asset is not old_asset],
+        )
+        index = assets.index(old_asset)
+        assets[index] = replacement
+        self._renumber(assets, old_asset["mode"])
+        shutil.rmtree(Path(old_asset["_original_path"]).parent, ignore_errors=True)
+        return self.public(replacement)
 
     def remove(self, session_id: str, asset_id: str) -> None:
         asset = self.get(session_id, asset_id)
@@ -164,6 +205,23 @@ class MediaStore:
     def clear(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)
         shutil.rmtree(CACHE_ROOT / session_id, ignore_errors=True)
+
+    def clear_mode(self, session_id: str, mode: str) -> list[dict[str, Any]]:
+        if mode not in MODE_LIMITS:
+            raise MediaError("INVALID_MODE", "The selected MiniMax mode is not supported.")
+        assets = self.sessions.get(session_id, [])
+        removed = [asset for asset in assets if asset["mode"] == mode]
+        remaining = [asset for asset in assets if asset["mode"] != mode]
+        if remaining:
+            self.sessions[session_id] = remaining
+        else:
+            self.sessions.pop(session_id, None)
+        for asset in removed:
+            shutil.rmtree(Path(asset["_original_path"]).parent, ignore_errors=True)
+        session_dir = CACHE_ROOT / session_id
+        if session_dir.exists() and not any(session_dir.iterdir()):
+            session_dir.rmdir()
+        return self.list(session_id)
 
     def resample(
         self,
@@ -186,22 +244,37 @@ class MediaStore:
             or selected_endpoints != asset.get("include_endpoints", True)
         )
         sample_index = 0 if settings_changed else int(asset.get("sample_index", 0)) + 1
-        for frame in asset.get("_frames", []):
-            Path(frame["path"]).unlink(missing_ok=True)
         content_revision = int(asset.get("content_revision", 0)) + 1
-        asset.update(process_video(
-            Path(asset["_original_path"]),
-            Path(asset["_original_path"]).parent,
-            frame_count_mode=selected_count,
-            include_endpoints=selected_endpoints,
-            sample_index=sample_index,
-        ))
+        asset_dir = Path(asset["_original_path"]).parent
+        derived_dir = asset_dir / f"derived_{uuid4()}"
+        derived_dir.mkdir(parents=False, exist_ok=False)
+        try:
+            processed = process_video(
+                Path(asset["_original_path"]),
+                derived_dir,
+                frame_count_mode=selected_count,
+                include_endpoints=selected_endpoints,
+                sample_index=sample_index,
+            )
+        except MediaError:
+            shutil.rmtree(derived_dir, ignore_errors=True)
+            raise
+        except Exception as exc:
+            shutil.rmtree(derived_dir, ignore_errors=True)
+            raise MediaError("MEDIA_DECODE_FAILED", f"Could not resample video file: {exc}") from exc
+        old_paths = {
+            Path(value)
+            for value in [asset.get("_preview_path"), asset.get("_contact_sheet_path")]
+            if value
+        } | {Path(frame["path"]) for frame in asset.get("_frames", [])}
+        asset.update(processed)
         asset["content_revision"] = content_revision
-        return self.public(asset)
-
-    def set_analysis(self, session_id: str, asset_id: str, enabled: bool) -> dict[str, Any]:
-        asset = self.get(session_id, asset_id)
-        asset["analysis_requested"] = enabled
+        for path in old_paths:
+            if path != Path(asset["_original_path"]):
+                path.unlink(missing_ok=True)
+        for parent in {path.parent for path in old_paths}:
+            if parent != asset_dir and parent.exists():
+                shutil.rmtree(parent, ignore_errors=True)
         return self.public(asset)
 
     def reorder(self, session_id: str, mode: str, ordered_ids: list[str]) -> list[dict[str, Any]]:

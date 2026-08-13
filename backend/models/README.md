@@ -26,8 +26,8 @@ already-running local OpenAI-compatible `llama-server`. It does not inherit from
 the Direct GGUF backend. The remote process owns model loading, context, KV
 cache, and unloading; the adapter never stops or unloads that process.
 
-`api_provider_backend.py` keeps credentials in backend memory or reads them from
-an environment variable. Browser storage receives only non-secret connection
+`api_provider_backend.py` keeps session credentials only in backend memory. It does not read API keys from
+environment variables. Browser storage receives only non-secret connection
 configuration. The shared transport handles HTTPS/loopback HTTP, SSE, usage,
 best-effort cancellation, and normalized errors. Presets only map endpoint,
 output-token, reasoning, model metadata, and disclosure differences; they are

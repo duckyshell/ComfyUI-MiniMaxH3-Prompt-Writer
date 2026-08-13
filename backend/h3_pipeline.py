@@ -143,9 +143,11 @@ def _audit(
         duration_seconds,
         camera_structure_allowed,
     )
-    expected_reference_tags = reference_tags(
-        next(message["content"] for message in assembled["messages"] if message["role"] == "user")
-    )
+    expected_reference_tags = {
+        asset["reference"]
+        for asset in assembled["input"].get("media_manifest", {}).get("assets", [])
+        if assembled["input"]["mode"] == "Reference" and asset.get("reference")
+    }
     actual_reference_tags = reference_tags(prompt)
     missing_reference_tags = sorted(expected_reference_tags - actual_reference_tags)
     unexpected_reference_tags = sorted(actual_reference_tags - expected_reference_tags)
@@ -172,7 +174,7 @@ def validate_media_capabilities(model_info: dict[str, Any], assembled: dict[str,
     if unsupported:
         raise ModelError(
             "UNSUPPORTED_MEDIA",
-            "The selected prompt model cannot analyze all enabled media.",
+            "The selected prompt model cannot analyze all media in the current manifest.",
             {"capabilities": unsupported},
         )
 

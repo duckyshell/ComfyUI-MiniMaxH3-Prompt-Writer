@@ -41,7 +41,17 @@ BACKENDS = {
     "ollama": OLLAMA_BACKEND,
     "api": API_PROVIDER_BACKEND,
 }
-GENERATION_CACHE: dict[str, str] = {}
+GENERATION_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def _cache_key(session_id: str, mode: str) -> tuple[str, str]:
+    return session_id, mode
+
+
+def _generation_busy_error() -> web.Response | None:
+    if STATE["active_request_id"] is None:
+        return None
+    return _error("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.", status=409)
 
 
 async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: dict[str, Any]) -> None:
@@ -410,7 +420,13 @@ async def generate(request: web.Request) -> web.Response:
         total_seconds = round(time.perf_counter() - request_started, 3)
         peak_vram_mb = vram_monitor.stop()
         debug_input_sequence = result.pop("debug_input_sequence", None)
-        GENERATION_CACHE[body["session_id"]] = result["prompt"]
+        GENERATION_CACHE[_cache_key(body["session_id"], body["mode"])] = {
+            "prompt": result["prompt"],
+            "mode": body["mode"],
+            "duration_seconds": assembled["input"]["duration_seconds"],
+            "aspect_ratio": assembled["input"]["aspect_ratio"],
+            "creative_brief": assembled["input"]["creative_brief"],
+        }
         write_event(
             "request_succeeded",
             request_id=request_id,
@@ -507,7 +523,7 @@ async def refine(request: web.Request) -> web.Response:
     if body.get("seed") is not None and (not isinstance(body["seed"], int) or isinstance(body["seed"], bool) or body["seed"] < 0):
         return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
     try:
-        assembled = assemble_refinement(body, GENERATION_CACHE.get(body["session_id"]))
+        assembled = assemble_refinement(body, GENERATION_CACHE.get(_cache_key(body["session_id"], body["mode"])))
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
     try:
@@ -610,6 +626,11 @@ async def upload_media(request: web.Request) -> web.Response:
     uploaded: list[dict[str, Any]] = []
     uploaded_ids: list[str] = []
     asset_dir: Path | None = None
+    replace_asset_id: str | None = request.query.get("replace_asset_id") or None
+    if replace_asset_id:
+        busy = _generation_busy_error()
+        if busy is not None:
+            return busy
     try:
         while field := await reader.next():
             if field.name == "session_id":
@@ -617,6 +638,14 @@ async def upload_media(request: web.Request) -> web.Response:
                 continue
             if field.name == "mode":
                 mode = (await field.text()).strip()
+                continue
+            if field.name == "replace_asset_id":
+                multipart_replace_asset_id = (await field.text()).strip() or None
+                if uploaded:
+                    raise MediaError("INVALID_REPLACEMENT", "Replacement metadata must be provided before the file.")
+                replace_asset_id = multipart_replace_asset_id
+                if replace_asset_id and STATE["active_request_id"] is not None:
+                    raise MediaError("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.")
                 continue
             if field.name != "file" or not field.filename:
                 continue
@@ -636,25 +665,41 @@ async def upload_media(request: web.Request) -> web.Response:
                     if size > MAX_FILE_BYTES:
                         raise MediaError("MEDIA_TOO_LARGE", "A media file cannot exceed 1 GB.")
                     output.write(chunk)
-            asset = STORE.add(session_id, mode, field.filename, field.headers.get("Content-Type"), stored_path)
+            if replace_asset_id:
+                if uploaded:
+                    raise MediaError("INVALID_REPLACEMENT", "Replace accepts exactly one file.")
+                old_asset = STORE.get(session_id, replace_asset_id)
+                if old_asset["mode"] != mode:
+                    raise MediaError("INVALID_REPLACEMENT", "The replacement must stay in the same mode.")
+                asset = STORE.replace(
+                    session_id,
+                    replace_asset_id,
+                    field.filename,
+                    field.headers.get("Content-Type"),
+                    stored_path,
+                )
+            else:
+                asset = STORE.add(session_id, mode, field.filename, field.headers.get("Content-Type"), stored_path)
             uploaded.append(asset)
             uploaded_ids.append(asset["id"])
             asset_dir = None
     except (MediaError, ValueError) as error:
         if asset_dir is not None:
             shutil.rmtree(asset_dir, ignore_errors=True)
-        if session_id is not None:
+        if session_id is not None and not replace_asset_id:
             for asset_id in uploaded_ids:
                 try:
                     STORE.remove(session_id, asset_id)
                 except MediaError:
                     pass
         if isinstance(error, MediaError):
-            return _media_error(error)
+            return _media_error(error, status=409 if error.code == "GENERATION_BUSY" else 400)
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
 
     if not uploaded:
         return _error("INVALID_REQUEST", "No media files were provided.", status=400)
+    if replace_asset_id:
+        return web.json_response({"session_id": session_id, "asset": uploaded[0], "assets": STORE.list(session_id)}, status=201)
     return web.json_response({"session_id": session_id, "assets": uploaded}, status=201)
 
 
@@ -701,6 +746,9 @@ async def media_content(request: web.Request) -> web.StreamResponse:
 
 @routes.delete(f"{ROUTE_PREFIX}/media/{{asset_id}}")
 async def remove_media(request: web.Request) -> web.Response:
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
     try:
         session_id = parse_session_id(request.query.get("session_id"))
         STORE.remove(session_id, request.match_info["asset_id"])
@@ -713,17 +761,26 @@ async def remove_media(request: web.Request) -> web.Response:
 
 @routes.delete(f"{ROUTE_PREFIX}/media")
 async def clear_media(request: web.Request) -> web.Response:
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
     try:
         session_id = parse_session_id(request.query.get("session_id"))
+        mode = request.query.get("mode", "")
+        assets = STORE.clear_mode(session_id, mode)
     except ValueError:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
-    STORE.clear(session_id)
-    GENERATION_CACHE.pop(session_id, None)
-    return web.json_response({"cleared": True})
+    except MediaError as error:
+        return _media_error(error)
+    GENERATION_CACHE.pop(_cache_key(session_id, mode), None)
+    return web.json_response({"cleared": True, "assets": assets})
 
 
 @routes.post(f"{ROUTE_PREFIX}/media/{{asset_id}}/resample")
 async def resample_media(request: web.Request) -> web.Response:
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
     body = await _json_body(request)
     try:
         session_id = parse_session_id((body or {}).get("session_id"))
@@ -737,21 +794,6 @@ async def resample_media(request: web.Request) -> web.Response:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
         return _media_error(error)
-    return web.json_response({"asset": asset})
-
-
-@routes.post(f"{ROUTE_PREFIX}/media/{{asset_id}}/analysis")
-async def set_media_analysis(request: web.Request) -> web.Response:
-    body = await _json_body(request)
-    if body is None or not isinstance(body.get("enabled"), bool):
-        return _error("INVALID_REQUEST", "The enabled field must be a boolean.", status=400)
-    try:
-        session_id = parse_session_id(body.get("session_id"))
-        asset = STORE.set_analysis(session_id, request.match_info["asset_id"], body["enabled"])
-    except ValueError:
-        return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
-    except MediaError as error:
-        return _media_error(error, status=404)
     return web.json_response({"asset": asset})
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import json
-import os
 import re
 import threading
 from dataclasses import dataclass, field
@@ -29,14 +28,12 @@ DEFAULT_CONTEXT_TOKENS = 32_768
 DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024
 GEMINI_MAX_REQUEST_BYTES = 20 * 1024 * 1024
 MAX_API_CONNECTIONS = 32
-ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 GEMINI_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
 PRESETS: dict[str, dict[str, Any]] = {
     "openai": {
         "name": "OpenAI",
         "base_url": "https://api.openai.com/v1",
-        "env": "OPENAI_API_KEY",
         "key_url": "https://platform.openai.com/api-keys",
         "privacy_url": "https://developers.openai.com/api/docs/guides/your-data",
         "pricing_url": "https://developers.openai.com/api/docs/pricing",
@@ -46,7 +43,6 @@ PRESETS: dict[str, dict[str, Any]] = {
     "gemini": {
         "name": "Gemini",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "env": "GEMINI_API_KEY",
         "key_url": "https://aistudio.google.com/api-keys",
         "privacy_url": "https://ai.google.dev/gemini-api/terms",
         "pricing_url": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -56,7 +52,6 @@ PRESETS: dict[str, dict[str, Any]] = {
     "openrouter": {
         "name": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
-        "env": "OPENROUTER_API_KEY",
         "key_url": "https://openrouter.ai/settings/keys",
         "privacy_url": "https://openrouter.ai/docs/guides/privacy/provider-logging/",
         "pricing_url": "https://openrouter.ai/pricing",
@@ -66,7 +61,6 @@ PRESETS: dict[str, dict[str, Any]] = {
     "custom": {
         "name": "Custom",
         "base_url": None,
-        "env": "OPENAI_API_KEY",
         "key_url": None,
         "privacy_url": None,
         "pricing_url": None,
@@ -135,9 +129,7 @@ class ApiConnection:
     id: str
     preset: str
     base_url: str
-    credential_source: str
     api_key: str
-    environment_name: str | None
     custom_images: bool
     custom_context_tokens: int | None
     reasoning_effort: str = "minimal"
@@ -260,7 +252,6 @@ class ApiProviderBackend:
                 "id": preset,
                 "name": config["name"],
                 "base_url": config["base_url"],
-                "default_environment_name": config["env"],
                 "key_url": config["key_url"],
                 "privacy_url": config["privacy_url"],
                 "pricing_url": config["pricing_url"],
@@ -269,28 +260,19 @@ class ApiProviderBackend:
         ]
 
     @staticmethod
-    def _credential(config: dict[str, Any], preset: str) -> tuple[str, str, str | None]:
+    def _credential(config: dict[str, Any], preset: str) -> str:
         credential = config.get("credential")
         if not isinstance(credential, dict):
             credential = {}
-        source = str(credential.get("source") or "session").strip().lower()
-        if source not in {"session", "environment"}:
-            raise ModelError("API_CREDENTIAL_SOURCE_INVALID", "Use a session key or an environment variable.")
-        environment_name: str | None = None
-        if source == "environment":
-            environment_name = str(credential.get("environment_name") or PRESETS[preset]["env"]).strip()
-            if not ENV_NAME_RE.fullmatch(environment_name):
-                raise ModelError("API_ENVIRONMENT_NAME_INVALID", "Enter a valid environment variable name.")
-            key = str(os.environ.get(environment_name) or "").strip()
-        else:
-            key = str(credential.get("value") or "").strip()
+        if credential.get("source") not in {None, "", "session"} or credential.get("environment_name"):
+            raise ModelError("API_CREDENTIAL_SOURCE_INVALID", "API keys must be entered for the current Writer session.")
+        key = str(credential.get("value") or "").strip()
         if not key and preset != "custom":
             raise ModelError(
                 "API_CREDENTIAL_MISSING",
-                f"Enter a {PRESETS[preset]['name']} API key or configure its environment variable.",
-                {"credential_source": source, "environment_name": environment_name},
+                f"Enter a {PRESETS[preset]['name']} API key for this Writer session.",
             )
-        return source, key, environment_name
+        return key
 
     @staticmethod
     def _safe_error_details(
@@ -563,7 +545,7 @@ class ApiProviderBackend:
     def probe(self, config: dict[str, Any]) -> dict[str, Any]:
         preset = str(config.get("preset") or "").strip().lower()
         base_url = normalize_api_base_url(preset, config.get("base_url"))
-        source, key, environment_name = self._credential(config, preset)
+        key = self._credential(config, preset)
         custom_capabilities = config.get("custom_capabilities")
         if not isinstance(custom_capabilities, dict):
             custom_capabilities = {}
@@ -581,9 +563,7 @@ class ApiProviderBackend:
             id=str(uuid4()),
             preset=preset,
             base_url=base_url,
-            credential_source=source,
             api_key=key,
-            environment_name=environment_name,
             custom_images=bool(custom_capabilities.get("images")),
             custom_context_tokens=custom_context,
             reasoning_effort=reasoning_effort,
@@ -612,10 +592,8 @@ class ApiProviderBackend:
             "preset": connection.preset,
             "provider_name": PRESETS[connection.preset]["name"],
             "base_url": connection.base_url,
-            "credential_source": connection.credential_source,
             "credential_configured": bool(connection.api_key) or connection.preset == "custom",
             "key_hint": f"…{connection.api_key[-4:]}" if connection.api_key else None,
-            "environment_name": connection.environment_name,
             "reasoning_effort": connection.reasoning_effort if connection.preset == "gemini" else None,
             "compatibility_profile": connection.compatibility_profile,
             "externally_managed": True,

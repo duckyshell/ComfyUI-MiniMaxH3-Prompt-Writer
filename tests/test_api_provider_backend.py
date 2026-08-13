@@ -1,10 +1,8 @@
 import json
-import os
 import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import patch
 
 from backend.models.api_provider_backend import (
     ApiConnection,
@@ -160,9 +158,7 @@ class ApiProviderBackendTests(unittest.TestCase):
             id="test-connection",
             preset=preset,
             base_url=self.base_url,
-            credential_source="session",
             api_key=key,
-            environment_name=None,
             custom_images=kwargs.get("custom_images", True),
             custom_context_tokens=kwargs.get("custom_context_tokens", 32768),
             reasoning_effort=kwargs.get("reasoning_effort", "minimal"),
@@ -244,13 +240,20 @@ class ApiProviderBackendTests(unittest.TestCase):
         payload = _FakeApiHandler.requests[-1][3]
         self.assertEqual(payload["reasoning_effort"], "none")
 
-    def test_environment_credentials_are_resolved_without_returning_the_secret(self):
-        with patch.dict(os.environ, {"H3_TEST_API_KEY": "environment-secret"}, clear=False):
-            source, key, name = self.backend._credential(
+    def test_only_session_credentials_are_accepted(self):
+        self.assertEqual(
+            self.backend._credential({"credential": {"source": "session", "value": "session-secret"}}, "openai"),
+            "session-secret",
+        )
+        with self.assertRaises(ModelError) as environment:
+            self.backend._credential(
                 {"credential": {"source": "environment", "environment_name": "H3_TEST_API_KEY"}},
                 "openai",
             )
-        self.assertEqual((source, key, name), ("environment", "environment-secret", "H3_TEST_API_KEY"))
+        self.assertEqual(environment.exception.code, "API_CREDENTIAL_SOURCE_INVALID")
+
+    def test_custom_provider_allows_an_empty_session_key(self):
+        self.assertEqual(self.backend._credential({"credential": {"source": "session", "value": ""}}, "custom"), "")
 
     def test_openrouter_handler_uses_common_multimodal_contract_and_reasoning_adapter(self):
         connection = self._connection(preset="openrouter")

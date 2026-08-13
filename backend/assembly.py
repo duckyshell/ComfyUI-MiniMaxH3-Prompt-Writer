@@ -47,6 +47,34 @@ def _effective_system_prompt(body: dict[str, Any], mode: str) -> tuple[str, bool
         raise AssemblyError(error.code, error.message) from error
 
 
+def _validate_reference_tags(brief: str, manifest: dict[str, Any], mode: str) -> None:
+    if mode != "Reference":
+        return
+    available = {asset["reference"] for asset in manifest["assets"]}
+    canonical_tags = set(re.findall(r"<(?:Picture|Video|Audio) [1-9]\d*>", brief))
+    missing = sorted(canonical_tags - available)
+    if missing:
+        tag = missing[0]
+        raise AssemblyError(
+            "REFERENCE_NOT_FOUND",
+            f"{tag} doesn't exist. Add the reference or remove it from the Creative Brief.",
+            {"reference": tag},
+        )
+
+
+def _validated_generation_context(source: dict[str, Any]) -> tuple[float, str, str]:
+    duration = source.get("duration_seconds")
+    if not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration <= 0 or duration > 20:
+        raise AssemblyError("INVALID_DURATION", "Duration must be between 1 and 20 seconds.")
+    aspect_ratio = _required_text(source, "aspect_ratio", "Aspect ratio")
+    if aspect_ratio not in ASPECT_RATIOS:
+        raise AssemblyError("INVALID_ASPECT_RATIO", "The selected aspect ratio is not supported.")
+    brief = _required_text(source, "creative_brief", "Creative brief")
+    if len(brief) > 2000:
+        raise AssemblyError("BRIEF_TOO_LONG", "Creative brief cannot exceed 2,000 characters.")
+    return duration, aspect_ratio, brief
+
+
 def _guide_messages(mode: str, system_prompt: str) -> list[dict[str, str]]:
     guide = guide_for_mode(mode)
     messages = []
@@ -130,10 +158,8 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     if not manifest["valid"]:
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
 
-    declared_references = [
-        asset for asset in manifest["assets"]
-        if asset["type"] == "audio" or asset.get("analysis_requested", True)
-    ]
+    _validate_reference_tags(brief, manifest, mode)
+    declared_references = manifest["assets"]
     eligible = [asset for asset in declared_references if asset["type"] != "audio"]
     media_inputs = [
         {
@@ -181,7 +207,7 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
 
 def assemble_refinement(
     body: dict[str, Any],
-    cached_observation: str | None,
+    cached_generation: dict[str, Any] | None,
 ) -> dict[str, Any]:
     mode = _required_text(body, "mode", "Mode")
     if mode not in MODE_GUIDES:
@@ -199,12 +225,22 @@ def assemble_refinement(
         raise AssemblyError("INVALID_SESSION", "The media session ID is invalid.") from error
 
     manifest = STORE.manifest(session_id, mode)
+    if not manifest["valid"]:
+        raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
+    context_source = cached_generation if cached_generation and cached_generation.get("mode") == mode else body
+    duration, aspect_ratio, creative_brief = _validated_generation_context(context_source)
+    _validate_reference_tags(creative_brief, manifest, mode)
     references = "\n".join(_media_line(asset) for asset in manifest["assets"]) or "None"
-    observation = cached_observation.strip() if cached_observation else current_prompt
+    cached_prompt = cached_generation.get("prompt") if cached_generation else None
+    observation = cached_prompt.strip() if isinstance(cached_prompt, str) and cached_prompt.strip() else current_prompt
     guide = guide_for_mode(mode)
     user_content = (
         "Rewrite the current H3 prompt according to the revision instruction. "
         "Return only the complete revised H3 prompt. Do not discuss the changes.\n\n"
+        f"Original mode: {mode}\n"
+        f"Original duration: {duration:g} seconds\n"
+        f"Original aspect ratio: {aspect_ratio}\n"
+        f"Original Creative Brief:\n{creative_brief}\n\n"
         f"Reference manifest (text only; media is intentionally not attached):\n{references}\n\n"
         f"Cached first-pass observation:\n{observation}\n\n"
         f"Current prompt:\n{current_prompt}\n\n"
@@ -216,6 +252,9 @@ def assemble_refinement(
         "guide": {key: value for key, value in guide.items() if key != "content"},
         "input": {
             "mode": mode,
+            "duration_seconds": duration,
+            "aspect_ratio": aspect_ratio,
+            "creative_brief": creative_brief,
             "current_prompt": current_prompt,
             "instruction": instruction,
             "media_manifest": manifest,

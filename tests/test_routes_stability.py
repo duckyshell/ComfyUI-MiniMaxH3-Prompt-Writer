@@ -4,7 +4,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class _FakeRoutes:
@@ -33,6 +33,42 @@ class _Request:
 
     async def multipart(self):
         return object()
+
+
+class _MultipartField:
+    def __init__(self, name, *, text=None, filename=None, content=b"", content_type="application/octet-stream", on_read=None):
+        self.name = name
+        self.filename = filename
+        self.headers = {"Content-Type": content_type}
+        self._text = text
+        self._chunks = [content] if content else []
+        self._on_read = on_read
+
+    async def text(self):
+        return self._text or ""
+
+    async def read_chunk(self, _size):
+        chunk = self._chunks.pop(0) if self._chunks else b""
+        if chunk and self._on_read:
+            self._on_read()
+        return chunk
+
+
+class _MultipartReader:
+    def __init__(self, fields):
+        self._fields = list(fields)
+
+    async def next(self):
+        return self._fields.pop(0) if self._fields else None
+
+
+class _MultipartRequest(_Request):
+    def __init__(self, fields, *, query=None):
+        super().__init__(query=query)
+        self._reader = _MultipartReader(fields)
+
+    async def multipart(self):
+        return self._reader
 
 
 class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
@@ -139,7 +175,12 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             routes.remove_media(_Request(query={"session_id": self.session_id}, match_info={"asset_id": "asset"})),
             routes.clear_media(_Request(query={"session_id": self.session_id, "mode": "Reference"})),
             routes.resample_media(_Request(match_info={"asset_id": "asset"}, body={"session_id": self.session_id})),
-            routes.upload_media(_Request(query={"replace_asset_id": "asset"})),
+            routes.upload_media(_Request()),
+            routes.reorder_media(_Request(body={
+                "session_id": self.session_id,
+                "mode": "Reference",
+                "asset_ids": [],
+            })),
         ]
         for response in await __import__("asyncio").gather(*requests):
             self.assertEqual(response.status, 409)
@@ -174,6 +215,171 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(reference_key, routes.GENERATION_CACHE)
         self.assertIn(text_key, routes.GENERATION_CACHE)
         self.assertEqual(self.payload(response)["assets"], [{"id": "text-asset"}])
+
+    async def test_upload_and_replace_preserve_their_http_response_contracts(self):
+        uploaded = {"id": "new", "mode": "Reference"}
+        replacement = {"id": "old", "mode": "Reference", "filename": "replacement.png"}
+        reference_key = (self.session_id, "Reference")
+        text_key = (self.session_id, "T2VA")
+        routes.GENERATION_CACHE.update({reference_key: {"prompt": "reference"}, text_key: {"prompt": "text"}})
+        fields = [
+            _MultipartField("session_id", text=self.session_id),
+            _MultipartField("mode", text="Reference"),
+            _MultipartField("file", filename="image.png", content=b"image", content_type="image/png"),
+        ]
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(routes, "CACHE_ROOT", Path(directory)),
+            patch.object(routes.STORE, "add", return_value=uploaded),
+        ):
+            response = await routes.upload_media(_MultipartRequest(fields))
+        self.assertEqual(response.status, 201)
+        self.assertEqual(self.payload(response), {"session_id": self.session_id, "assets": [uploaded]})
+        self.assertNotIn(reference_key, routes.GENERATION_CACHE)
+        self.assertIn(text_key, routes.GENERATION_CACHE)
+
+        routes.GENERATION_CACHE[reference_key] = {"prompt": "reference"}
+        replace_fields = [
+            _MultipartField("session_id", text=self.session_id),
+            _MultipartField("mode", text="Reference"),
+            _MultipartField("file", filename="replacement.png", content=b"replacement", content_type="image/png"),
+        ]
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(routes, "CACHE_ROOT", Path(directory)),
+            patch.object(routes.STORE, "get", return_value={"id": "old", "mode": "Reference"}),
+            patch.object(routes.STORE, "replace", return_value=replacement),
+            patch.object(routes.STORE, "list", return_value=[replacement]),
+        ):
+            response = await routes.upload_media(_MultipartRequest(replace_fields, query={"replace_asset_id": "old"}))
+        self.assertEqual(response.status, 201)
+        self.assertEqual(self.payload(response), {
+            "session_id": self.session_id,
+            "asset": replacement,
+            "assets": [replacement],
+        })
+        self.assertNotIn(reference_key, routes.GENERATION_CACHE)
+        self.assertIn(text_key, routes.GENERATION_CACHE)
+
+    async def test_upload_rechecks_busy_state_after_multipart_streaming(self):
+        fields = [
+            _MultipartField("session_id", text=self.session_id),
+            _MultipartField("mode", text="Reference"),
+            _MultipartField(
+                "file",
+                filename="image.png",
+                content=b"image",
+                content_type="image/png",
+                on_read=lambda: routes.STATE.update({"active_request_id": "request"}),
+            ),
+        ]
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(routes, "CACHE_ROOT", Path(directory)),
+            patch.object(routes.STORE, "add") as add,
+        ):
+            response = await routes.upload_media(_MultipartRequest(fields))
+
+        self.assertEqual(response.status, 409)
+        self.assertEqual(self.payload(response)["error"]["code"], "GENERATION_BUSY")
+        add.assert_not_called()
+
+    async def test_generate_success_caches_prompt_and_always_returns_to_idle(self):
+        body = self.generation_body("Use <Video 1>.")
+        assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
+        model = {"id": "test-model", "name": "Test", "family": "test"}
+        backend = MagicMock(manages_gpu_memory=False)
+        backend.preflight.return_value = {"context_profile": "auto", "kv_cache": "auto"}
+        backend.generate.return_value = {"prompt": "Generated prompt"}
+        monitor = MagicMock()
+        monitor.stop.return_value = 0
+        with (
+            patch.object(routes, "assemble_request", return_value=assembled),
+            patch.object(routes, "_resolve_model", new_callable=AsyncMock, return_value=model),
+            patch.dict(routes.BACKENDS, {"test": backend}),
+            patch.object(routes, "PeakVRAMMonitor", return_value=monitor),
+            patch.object(routes, "write_event"),
+        ):
+            response = await routes.generate(_Request(body=body))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.payload(response)["prompt"], "Generated prompt")
+        self.assertEqual(routes.GENERATION_CACHE[(self.session_id, "Reference")]["prompt"], "Generated prompt")
+        self.assertEqual(routes.STATE["phase"], "idle")
+        self.assertIsNone(routes.STATE["active_request_id"])
+
+    async def test_refine_failure_does_not_overwrite_cache_and_returns_to_idle(self):
+        body = {
+            **self.generation_body("Use <Video 1>."),
+            "current_prompt": "Current prompt",
+            "instruction": "Make it slower.",
+        }
+        cache_key = (self.session_id, "Reference")
+        routes.GENERATION_CACHE[cache_key] = {"prompt": "Current prompt"}
+        assembled = {"input": {"instruction": body["instruction"]}}
+        model = {"id": "test-model", "name": "Test", "family": "test"}
+        backend = MagicMock(manages_gpu_memory=False)
+        backend.preflight.return_value = {"context_profile": "auto", "kv_cache": "auto"}
+        backend.generate.side_effect = routes.ModelError("GENERATION_FAILED", "Generation failed.")
+        monitor = MagicMock()
+        monitor.stop.return_value = 0
+        with (
+            patch.object(routes, "assemble_refinement", return_value=assembled),
+            patch.object(routes, "_resolve_model", new_callable=AsyncMock, return_value=model),
+            patch.dict(routes.BACKENDS, {"test": backend}),
+            patch.object(routes, "PeakVRAMMonitor", return_value=monitor),
+            patch.object(routes, "write_event"),
+        ):
+            response = await routes.refine(_Request(body=body))
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(self.payload(response)["error"]["code"], "GENERATION_FAILED")
+        self.assertEqual(routes.GENERATION_CACHE[cache_key]["prompt"], "Current prompt")
+        self.assertEqual(routes.STATE["phase"], "idle")
+        self.assertIsNone(routes.STATE["active_request_id"])
+
+    async def test_successful_media_mutations_return_updated_assets(self):
+        assets = [{"id": "second"}, {"id": "first"}]
+        reference_key = (self.session_id, "Reference")
+        text_key = (self.session_id, "T2VA")
+        routes.GENERATION_CACHE.update({reference_key: {"prompt": "reference"}, text_key: {"prompt": "text"}})
+        with (
+            patch.object(routes.STORE, "get", return_value={"mode": "Reference"}),
+            patch.object(routes.STORE, "remove"),
+            patch.object(routes.STORE, "list", return_value=assets),
+        ):
+            response = await routes.remove_media(_Request(
+                query={"session_id": self.session_id},
+                match_info={"asset_id": "first"},
+            ))
+        self.assertEqual(self.payload(response), {"removed": True, "assets": assets})
+        self.assertNotIn(reference_key, routes.GENERATION_CACHE)
+        self.assertIn(text_key, routes.GENERATION_CACHE)
+
+        resampled = {"id": "video", "frames": [{"index": 0}]}
+        routes.GENERATION_CACHE[reference_key] = {"prompt": "reference"}
+        with (
+            patch.object(routes.STORE, "get", return_value={"mode": "Reference"}),
+            patch.object(routes.STORE, "resample", return_value=resampled),
+        ):
+            response = await routes.resample_media(_Request(
+                match_info={"asset_id": "video"},
+                body={"session_id": self.session_id, "frame_count": 1},
+            ))
+        self.assertEqual(self.payload(response), {"asset": resampled})
+        self.assertNotIn(reference_key, routes.GENERATION_CACHE)
+        self.assertIn(text_key, routes.GENERATION_CACHE)
+
+        routes.GENERATION_CACHE[reference_key] = {"prompt": "reference"}
+        with patch.object(routes.STORE, "reorder", return_value=assets):
+            response = await routes.reorder_media(_Request(body={
+                "session_id": self.session_id,
+                "mode": "Reference",
+                "asset_ids": ["second", "first"],
+            }))
+        self.assertEqual(self.payload(response), {"assets": assets})
+        self.assertNotIn(reference_key, routes.GENERATION_CACHE)
+        self.assertIn(text_key, routes.GENERATION_CACHE)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,11 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
     def setUp(self):
         runtime_diagnostics._CACHE = None
 
+    def test_probe_matches_the_direct_gemma_loader_contract(self):
+        self.assertIn("version < (0, 3, 34) or version >= (0, 4, 0)", runtime_diagnostics._CHILD_PROBE)
+        self.assertIn("GGML_TYPE_F16, GGML_TYPE_Q8_0, Llama, LogitsProcessorList", runtime_diagnostics._CHILD_PROBE)
+        self.assertIn("Gemma4ChatHandler", runtime_diagnostics._CHILD_PROBE)
+
     def test_cuda_is_reported_only_when_system_info_names_it(self):
         payload = {
             "status": "ok",

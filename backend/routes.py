@@ -616,6 +616,9 @@ async def refine(request: web.Request) -> web.Response:
 
 @routes.post(f"{ROUTE_PREFIX}/media/upload")
 async def upload_media(request: web.Request) -> web.Response:
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
     try:
         reader = await request.multipart()
     except Exception:
@@ -627,10 +630,6 @@ async def upload_media(request: web.Request) -> web.Response:
     uploaded_ids: list[str] = []
     asset_dir: Path | None = None
     replace_asset_id: str | None = request.query.get("replace_asset_id") or None
-    if replace_asset_id:
-        busy = _generation_busy_error()
-        if busy is not None:
-            return busy
     try:
         while field := await reader.next():
             if field.name == "session_id":
@@ -665,6 +664,8 @@ async def upload_media(request: web.Request) -> web.Response:
                     if size > MAX_FILE_BYTES:
                         raise MediaError("MEDIA_TOO_LARGE", "A media file cannot exceed 1 GB.")
                     output.write(chunk)
+            if STATE["active_request_id"] is not None:
+                raise MediaError("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.")
             if replace_asset_id:
                 if uploaded:
                     raise MediaError("INVALID_REPLACEMENT", "Replace accepts exactly one file.")
@@ -698,6 +699,7 @@ async def upload_media(request: web.Request) -> web.Response:
 
     if not uploaded:
         return _error("INVALID_REQUEST", "No media files were provided.", status=400)
+    GENERATION_CACHE.pop(_cache_key(session_id, mode), None)
     if replace_asset_id:
         return web.json_response({"session_id": session_id, "asset": uploaded[0], "assets": STORE.list(session_id)}, status=201)
     return web.json_response({"session_id": session_id, "assets": uploaded}, status=201)
@@ -751,11 +753,13 @@ async def remove_media(request: web.Request) -> web.Response:
         return busy
     try:
         session_id = parse_session_id(request.query.get("session_id"))
+        mode = STORE.get(session_id, request.match_info["asset_id"])["mode"]
         STORE.remove(session_id, request.match_info["asset_id"])
     except ValueError:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
         return _media_error(error, status=404)
+    GENERATION_CACHE.pop(_cache_key(session_id, mode), None)
     return web.json_response({"removed": True, "assets": STORE.list(session_id)})
 
 
@@ -784,6 +788,7 @@ async def resample_media(request: web.Request) -> web.Response:
     body = await _json_body(request)
     try:
         session_id = parse_session_id((body or {}).get("session_id"))
+        mode = STORE.get(session_id, request.match_info["asset_id"])["mode"]
         asset = STORE.resample(
             session_id,
             request.match_info["asset_id"],
@@ -794,11 +799,15 @@ async def resample_media(request: web.Request) -> web.Response:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
         return _media_error(error)
+    GENERATION_CACHE.pop(_cache_key(session_id, mode), None)
     return web.json_response({"asset": asset})
 
 
 @routes.post(f"{ROUTE_PREFIX}/media/reorder")
 async def reorder_media(request: web.Request) -> web.Response:
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
     body = await _json_body(request)
     if body is None or body.get("mode") not in MODE_LIMITS or not isinstance(body.get("asset_ids"), list):
         return _error("INVALID_REQUEST", "Mode and ordered asset IDs are required.", status=400)
@@ -809,4 +818,5 @@ async def reorder_media(request: web.Request) -> web.Response:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
         return _media_error(error)
+    GENERATION_CACHE.pop(_cache_key(session_id, body["mode"]), None)
     return web.json_response({"assets": assets})

@@ -25,6 +25,7 @@ _CHILD_PROBE = f"""
 import importlib.metadata
 import json
 import platform
+import re
 
 result = {{
     "status": "unavailable",
@@ -36,6 +37,11 @@ result = {{
 }}
 try:
     result["package_version"] = importlib.metadata.version("llama-cpp-python")
+    version = tuple(int(part) for part in re.findall(r"\\d+", result["package_version"])[:3])
+    if version < (0, 3, 34) or version >= (0, 4, 0):
+        raise RuntimeError("llama-cpp-python 0.3.34 or newer from the 0.3.x series is required")
+    from llama_cpp import GGML_TYPE_F16, GGML_TYPE_Q8_0, Llama, LogitsProcessorList
+    from llama_cpp.llama_chat_format import Gemma4ChatHandler
     from llama_cpp import llama_cpp as native
     result["gpu_offload"] = bool(native.llama_supports_gpu_offload())
     result["system_info"] = native.llama_print_system_info().decode("utf-8", "replace")

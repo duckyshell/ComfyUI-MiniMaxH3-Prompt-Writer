@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 - 2026-08-13
+
+### Fixes
+
+- Blocked media changes and mode switching while generation or refinement is active.
+- Invalidated mode-local generation context after successful media mutations.
+- Made uploaded audio optional in generated prompts unless its exact `<Audio N>` tag is explicitly requested.
+- Extended the Audio-added notice to six seconds without changing Processing media notifications.
+- Strengthened Direct GGUF runtime diagnostics to verify the supported version and required loader APIs.
+- Added route-level regression coverage for request preflight, media mutations, clearing, and runtime lifecycle behavior.
+
 ## 0.3.0 - 2026-08-12
 
 ### New interface

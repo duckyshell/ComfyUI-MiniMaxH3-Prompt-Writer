@@ -277,7 +277,7 @@ Writer says it repaired a missing reference tag or kept the original prompt with
 
 **Cause**
 
-The first model draft omitted an active typed reference or failed an objective Reference format check.
+The first model draft omitted a required typed reference or failed an objective Reference format check. Pictures and videos are required; uploaded audio is required only when the Creative Brief or Refine intent explicitly uses its exact `<Audio N>` tag.
 
 **Fix**
 
@@ -285,7 +285,7 @@ When repair succeeds, review the corrected prompt. When it is rejected, the edit
 
 **Verify**
 
-Every active reference has its exact `<Picture N>`, `<Video N>`, or `<Audio N>` tag and the final prompt preserves the requested dialogue and reference inventory.
+Every active picture and video has its exact tag. Any audio explicitly requested as `<Audio N>` also has its exact tag, while merely uploaded audio may remain unused. The final prompt preserves the requested dialogue and reference inventory.
 
 ## A reference transfers the wrong details
 

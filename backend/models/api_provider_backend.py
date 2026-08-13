@@ -19,6 +19,7 @@ from ..context import (
     estimate_text_tokens,
 )
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
+from ..version import VERSION
 from .contract import ModelError
 
 
@@ -339,7 +340,7 @@ class ApiProviderBackend:
         headers = {
             "Accept": accept,
             "Content-Type": "application/json",
-            "User-Agent": "H3-Prompt-Writer/0.3.0",
+            "User-Agent": f"H3-Prompt-Writer/{VERSION}",
         }
         if connection.api_key:
             headers["Authorization"] = f"Bearer {connection.api_key}"

@@ -314,6 +314,7 @@ function icon(name, size = 16) {
 
 function renderAsset(asset, index) {
   const destructiveDisabled = studio.requestBusy ? "disabled" : "";
+  const draggable = studio.requestBusy ? "false" : "true";
   const visual = asset.type === "audio"
     ? `<div class="h3ps-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`
     : asset.preview_url
@@ -322,7 +323,7 @@ function renderAsset(asset, index) {
   const overlay = asset.type === "video" ? `<span class="h3ps-play">${icon("play", 18)}</span>` : "";
   const duration = formatDuration(asset.duration);
   return `
-    <div class="h3ps-asset" draggable="true" data-asset-index="${index}" data-asset-id="${asset.id}">
+    <div class="h3ps-asset" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}">
       <span class="h3ps-asset-preview h3ps-${asset.type}">${visual}${overlay}</span>
       <span class="h3ps-asset-copy">
         <strong>${escapeHtml(asset.reference)}</strong>
@@ -374,7 +375,7 @@ function renderMedia(mode) {
     media.innerHTML = `
       ${filters}
       <div class="h3ps-assets ${isReference ? "is-reference" : ""}">${visibleAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
-        ${canAdd ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media>${icon("plus", 18)}<span>${addLabel}</span><small>Drop files here</small></button>` : ""}
+        ${canAdd ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 18)}<span>${addLabel}</span><small>Drop files here</small></button>` : ""}
       </div>`;
   }
   bindMediaActions(mode);
@@ -433,6 +434,10 @@ function bindMediaActions(mode) {
   });
   studio.root.querySelectorAll("[data-asset-id]").forEach((card) => {
     card.addEventListener("dragstart", (event) => {
+      if (studio.requestBusy) {
+        event.preventDefault();
+        return;
+      }
       studio.draggedAssetId = card.dataset.assetId;
       media.classList.add("is-reordering");
       event.dataTransfer.effectAllowed = "move";
@@ -469,6 +474,7 @@ function bindMediaActions(mode) {
   });
   replaceEventListener(media, "drop", "media", async (event) => {
     event.preventDefault();
+    if (studio.requestBusy) return;
     const sourceId = event.dataTransfer.getData("application/x-h3ps-asset") || studio.draggedAssetId;
     const targetId = event.target.closest("[data-asset-id]")?.dataset.assetId;
     if (sourceId) {
@@ -505,7 +511,7 @@ function chooseMedia(mode, replaceAssetId = null) {
 }
 
 async function uploadFiles(mode, files, replaceAssetId = null) {
-  if (!files.length) return;
+  if (!files.length || studio.requestBusy) return;
   const existing = studio.assets.filter((asset) => asset.mode === mode);
   if (mode !== "Reference" && !replaceAssetId && existing.length + files.length > MODES[mode].limit) {
     showToast("Reference slot is full", "Use Replace on the existing image.");
@@ -763,6 +769,7 @@ function setGenerationState(state, label, detail) {
   const busy = state === "busy";
   studio.requestBusy = busy;
   studio.root.querySelector("[data-clear-media]").disabled = busy;
+  studio.root.querySelectorAll("[data-mode]").forEach((control) => { control.disabled = busy; });
   const comfyMemory = studio.root.querySelector("[data-comfy-memory-action]");
   comfyMemory.disabled = busy;
   comfyMemory.title = busy

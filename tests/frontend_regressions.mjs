@@ -630,3 +630,12 @@ test("Settings owns a two-click restore for all mode draft defaults", () => {
   assert.doesNotMatch(mainSource, /referenceDraft/);
   assert.match(stylesSource, /h3ps-draft-defaults-action/);
 });
+
+test("active requests block add, reorder, and mode switching", () => {
+  assert.match(mainSource, /data-add-media \$\{studio\.requestBusy \? "disabled" : ""\}/);
+  assert.match(mainSource, /const draggable = studio\.requestBusy \? "false" : "true"/);
+  assert.match(mainSource, /dragstart[\s\S]{0,180}if \(studio\.requestBusy\)/);
+  assert.match(mainSource, /drop[\s\S]{0,180}if \(studio\.requestBusy\) return/);
+  assert.match(mainSource, /if \(!files\.length \|\| studio\.requestBusy\) return/);
+  assert.match(mainSource, /querySelectorAll\("\[data-mode\]"\)[\s\S]{0,120}control\.disabled = busy/);
+});

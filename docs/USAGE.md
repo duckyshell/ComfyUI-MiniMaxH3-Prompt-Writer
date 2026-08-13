@@ -65,7 +65,7 @@ Use <Picture 1> for the character's face and hair. Use <Picture 2> only for clot
 
 The roles can be short. Phrases such as `use for appearance`, `clothes only`, `background`, `movement only`, `camera motion only`, and `keep the visible text exactly` are enough when the intent is clear.
 
-Every active file in Reference mode belongs to the request. It does not need to become a main subject, but Writer expects the generated prompt to account for it. Remove a file before generating if it should not participate.
+Every active picture and video in Reference mode belongs to the request. It does not need to become a main subject, but Writer expects the generated prompt to account for it. Uploaded audio remains available in the manifest and becomes required only when the Creative Brief or Refine intent uses its exact canonical tag, such as `<Audio 1>`.
 
 ### Audio example
 
@@ -96,9 +96,11 @@ Use only the rhythm of <Audio 2>; do not copy its voice.
 
 Include any transcript, voice description, music style, rhythm, or sound detail that the prompt needs.
 
+Uploading audio alone does not require its tag in the generated prompt. Only an exact canonical mention such as `<Audio 1>` makes that audio reference required; ordinary phrases such as `audio 1` or `voice reference` remain ordinary text.
+
 ## How Reference mode keeps track of media
 
-Every active Reference upload is expected to be accounted for with its exact `<Picture N>`, `<Video N>`, or `<Audio N>` tag. A reference can be background context, motion, style, sound, or another supporting role; it does not need to become a primary subject.
+Every active picture and video is expected to be accounted for with its exact `<Picture N>` or `<Video N>` tag. An uploaded `<Audio N>` is active and allowed, but required only when the user explicitly uses that exact tag in the Creative Brief, current prompt, or Refine instruction.
 
 After generation, Writer checks the required format and exact media tags. A valid prompt is returned without being rewritten. If a visual reference tag is missing, Writer can make one correction using the same prepared media. If the correction does not pass the check, Writer keeps the original prompt and shows a warning instead of hiding the problem.
 
@@ -106,7 +108,9 @@ After generation, Writer checks the required format and exact media tags. A vali
 
 Select **Refine** to rewrite the current prompt from a short revision instruction. Refine uses the currently selected provider and model. The previous prompt can be restored after a successful rewrite.
 
-The normal Refine pass works from the current prompt and revision instruction. In Reference mode, Writer checks that the revised result still accounts for the active media.
+The normal Refine pass works from the current prompt and revision instruction. In Reference mode, Writer checks that the revised result still accounts for active pictures and videos plus any audio explicitly requested with an exact `<Audio N>` tag.
+
+Reference video and audio clips must be 2–15 seconds long. An audio-only Reference manifest is not valid; add at least one image or video. Each uploaded file is limited to 1 GB.
 
 ## Thinking
 

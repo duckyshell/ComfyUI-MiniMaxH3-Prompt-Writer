@@ -97,7 +97,7 @@ class AssemblyReferenceManifestTests(unittest.TestCase):
                     assemble_request(self.body(brief))
                 self.assertEqual(raised.exception.code, "REFERENCE_NOT_FOUND")
                 self.assertEqual(raised.exception.details, {"reference": expected})
-                self.assertEqual(raised.exception.message, f"{expected} doesn't exist. Add the reference or remove it from the Creative Brief.")
+                self.assertEqual(raised.exception.message, f"{expected} doesn't exist. Add the reference or remove the tag from the Creative Brief.")
 
     def test_natural_language_reference_mentions_are_not_interpreted_as_tags(self):
         with patch("backend.assembly.STORE.manifest", return_value=self.manifest()):
@@ -135,6 +135,39 @@ class AssemblyReferenceManifestTests(unittest.TestCase):
         self.assertIn("Cached first-pass observation:\nFirst pass", cached["messages"][-1]["content"])
         self.assertEqual((fallback["input"]["duration_seconds"], fallback["input"]["aspect_ratio"], fallback["input"]["creative_brief"]), (6, "16:9", "Current brief"))
         self.assertEqual((wrong_mode_cache["input"]["duration_seconds"], wrong_mode_cache["input"]["aspect_ratio"], wrong_mode_cache["input"]["creative_brief"]), (6, "16:9", "Current brief"))
+
+    def test_refinement_describes_structural_audio_mutability_to_the_model(self):
+        picture = {"id": "p", "type": "image", "filename": "p.png", "reference": "<Picture 1>", "content_url": "/p", "frames": []}
+        audio = {"id": "a", "type": "audio", "filename": "a.wav", "reference": "<Audio 1>", "content_url": "/a", "frames": []}
+        body = {
+            **self.body("Use <Picture 1>."),
+            "current_prompt": "Current prompt with <Audio 1>.",
+            "instruction": "zibble <Audio 1> frobnitz quux",
+        }
+        with patch("backend.assembly.STORE.manifest", return_value=self.manifest(picture, audio)):
+            assembled = assemble_refinement(body, None)
+
+        content = assembled["messages"][-1]["content"]
+        self.assertIn("preserve each existing <Audio N> that is absent from the Revision instruction", content)
+        self.assertIn("Each <Audio N> present in the Revision instruction is mutable", content)
+        self.assertIn("follow the instruction's meaning", content)
+        self.assertIn("Use only canonical reference tags listed in the current Reference manifest", content)
+
+    def test_refinement_rejects_instruction_tag_missing_from_manifest(self):
+        with patch("backend.assembly.STORE.manifest", return_value=self.manifest()):
+            with self.assertRaises(AssemblyError) as raised:
+                assemble_refinement({
+                    **self.body("A restrained shot."),
+                    "current_prompt": "Current prompt.",
+                    "instruction": "zibble <Audio 1> frobnitz quux",
+                }, None)
+
+        self.assertEqual(raised.exception.code, "REFERENCE_NOT_FOUND")
+        self.assertEqual(raised.exception.details, {"reference": "<Audio 1>"})
+        self.assertEqual(
+            raised.exception.message,
+            "<Audio 1> doesn't exist. Add the reference or remove the tag from the Revision instruction.",
+        )
 
 
 if __name__ == "__main__":

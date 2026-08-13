@@ -351,6 +351,10 @@ async def generate(request: web.Request) -> web.Response:
     if STATE["active_request_id"] is not None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
     try:
+        assembled = assemble_request(body)
+    except AssemblyError as error:
+        return _error(error.code, error.message, status=400, details=error.details)
+    try:
         model = await _resolve_model(body)
     except ModelError as error:
         return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
@@ -363,10 +367,6 @@ async def generate(request: web.Request) -> web.Response:
         return _error("INVALID_REQUEST", "Thinking and unload_after must be booleans.", status=400)
     if body.get("seed") is not None and (not isinstance(body["seed"], int) or isinstance(body["seed"], bool) or body["seed"] < 0):
         return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
-    try:
-        assembled = assemble_request(body)
-    except AssemblyError as error:
-        return _error(error.code, error.message, status=400, details=error.details)
     try:
         runtime_plan = await asyncio.to_thread(
             backend.preflight,
@@ -510,6 +510,10 @@ async def refine(request: web.Request) -> web.Response:
     if STATE["active_request_id"] is not None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
     try:
+        assembled = assemble_refinement(body, GENERATION_CACHE.get(_cache_key(body["session_id"], body["mode"])))
+    except AssemblyError as error:
+        return _error(error.code, error.message, status=400, details=error.details)
+    try:
         model = await _resolve_model(body)
     except ModelError as error:
         return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
@@ -522,10 +526,6 @@ async def refine(request: web.Request) -> web.Response:
         return _error("INVALID_REQUEST", "Thinking and unload_after must be booleans.", status=400)
     if body.get("seed") is not None and (not isinstance(body["seed"], int) or isinstance(body["seed"], bool) or body["seed"] < 0):
         return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
-    try:
-        assembled = assemble_refinement(body, GENERATION_CACHE.get(_cache_key(body["session_id"], body["mode"])))
-    except AssemblyError as error:
-        return _error(error.code, error.message, status=400, details=error.details)
     try:
         runtime_plan = await asyncio.to_thread(
             backend.preflight,

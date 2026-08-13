@@ -5,6 +5,7 @@ from typing import Any
 
 from .guides import MODE_GUIDES, guide_for_mode, load_guide, reference_base_excerpt
 from .media import STORE, MediaError, parse_session_id
+from .references import canonical_reference_tags
 from .system_prompts import SystemPromptError, resolve_system_prompt
 
 
@@ -47,17 +48,17 @@ def _effective_system_prompt(body: dict[str, Any], mode: str) -> tuple[str, bool
         raise AssemblyError(error.code, error.message) from error
 
 
-def _validate_reference_tags(brief: str, manifest: dict[str, Any], mode: str) -> None:
+def _validate_reference_tags(text: str, manifest: dict[str, Any], mode: str, field_label: str) -> None:
     if mode != "Reference":
         return
     available = {asset["reference"] for asset in manifest["assets"]}
-    canonical_tags = set(re.findall(r"<(?:Picture|Video|Audio) [1-9]\d*>", brief))
+    canonical_tags = canonical_reference_tags(text)
     missing = sorted(canonical_tags - available)
     if missing:
         tag = missing[0]
         raise AssemblyError(
             "REFERENCE_NOT_FOUND",
-            f"{tag} doesn't exist. Add the reference or remove it from the Creative Brief.",
+            f"{tag} doesn't exist. Add the reference or remove the tag from the {field_label}.",
             {"reference": tag},
         )
 
@@ -158,7 +159,7 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     if not manifest["valid"]:
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
 
-    _validate_reference_tags(brief, manifest, mode)
+    _validate_reference_tags(brief, manifest, mode, "Creative Brief")
     declared_references = manifest["assets"]
     eligible = [asset for asset in declared_references if asset["type"] != "audio"]
     media_inputs = [
@@ -229,7 +230,8 @@ def assemble_refinement(
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
     context_source = cached_generation if cached_generation and cached_generation.get("mode") == mode else body
     duration, aspect_ratio, creative_brief = _validated_generation_context(context_source)
-    _validate_reference_tags(creative_brief, manifest, mode)
+    _validate_reference_tags(creative_brief, manifest, mode, "Creative Brief")
+    _validate_reference_tags(instruction, manifest, mode, "Revision instruction")
     references = "\n".join(_media_line(asset) for asset in manifest["assets"]) or "None"
     cached_prompt = cached_generation.get("prompt") if cached_generation else None
     observation = cached_prompt.strip() if isinstance(cached_prompt, str) and cached_prompt.strip() else current_prompt

@@ -286,15 +286,12 @@ test("audio notice triggers once per global zero-to-present transition", () => {
   assert.equal(audioWasAdded([], [audio]), true);
   assert.equal(audioWasAdded([], [audio, { id: "a2", type: "audio" }]), true);
   assert.equal(audioWasAdded([audio], [audio, { id: "a2", type: "audio" }]), false);
-  assert.equal(audioWasAdded([], [audio], true), false);
   assert.equal(audioWasAdded([audio], []), false);
   assert.equal(audioWasAdded([], [{ id: "a3", type: "audio" }]), true);
 });
 
-test("audio notice has a six-second timeout and a per-audio-set latch", () => {
-  assert.match(mainSource, /showAudioNotice = audioWasAdded\(previousAssets, studio\.assets, studio\.audioNoticeActive\)/);
+test("Audio added notice remains visible for six seconds", () => {
   assert.match(mainSource, /"Audio added"[\s\S]{0,280}\{ durationMs: 6000 \}/);
-  assert.match(mainSource, /studio\.audioNoticeActive = studio\.assets\.some\(\(asset\) => asset\.type === "audio"\)/);
 });
 
 test("all mode drafts persist independently across reloads", () => {

@@ -22,15 +22,6 @@ export function audioWasAdded(previousAssets, nextAssets, noticeActive = false) 
     && nextAssets.some((asset) => asset.type === "audio");
 }
 
-export function uploadNeedsProcessingNotice(previousAssets, files) {
-  const audioAlreadyPresent = previousAssets.some((asset) => asset.type === "audio");
-  const audioOnly = files.length > 0 && files.every((file) => (
-    String(file.type || "").toLowerCase().startsWith("audio/")
-    || /\.(?:wav|mp3|flac|m4a|ogg|aac|opus)$/i.test(String(file.name || ""))
-  ));
-  return !(audioAlreadyPresent && audioOnly);
-}
-
 export function isModeDraftDirty(mode, draft, defaults) {
   return isPersistedDraftMode(mode)
     && Boolean(draft)

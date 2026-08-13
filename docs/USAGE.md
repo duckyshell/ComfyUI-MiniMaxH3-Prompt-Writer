@@ -73,7 +73,7 @@ Use <Picture 1> for the character's face and hair. Use <Picture 2> only for clot
 
 The roles can be short. Phrases such as `use for appearance`, `clothes only`, `background`, `movement only`, `camera motion only`, and `keep the visible text exactly` are enough when the intent is clear.
 
-Every active picture and video in Reference mode belongs to the request. It does not need to become a main subject, but Writer expects the generated prompt to account for it. Uploaded audio remains available in the manifest and becomes required only when the Creative Brief or Refine intent uses its exact canonical tag, such as `<Audio 1>`.
+Every active picture and video in Reference mode belongs to the request. It does not need to become a main subject, but Writer expects the generated prompt to account for it. Uploaded audio remains available in the manifest without automatically becoming part of the prompt. During Generate, an exact canonical tag in the Creative Brief, such as `<Audio 1>`, makes that audio reference required.
 
 ### Audio example
 
@@ -104,11 +104,11 @@ Use only the rhythm of <Audio 2>; do not copy its voice.
 
 Include any transcript, voice description, music style, rhythm, or sound detail that the prompt needs.
 
-Uploading audio alone does not require its tag in the generated prompt. Only an exact canonical mention such as `<Audio 1>` makes that audio reference required; ordinary phrases such as `audio 1` or `voice reference` remain ordinary text.
+Uploading audio alone does not require its tag in the generated prompt. During Generate, only an exact canonical mention such as `<Audio 1>` in the Creative Brief makes that audio reference required. Text without a canonical tag has no structural reference meaning to Writer; the prompt model still interprets its natural-language meaning.
 
 ## How Reference mode keeps track of media
 
-Every active picture and video is expected to be accounted for with its exact `<Picture N>` or `<Video N>` tag. An uploaded `<Audio N>` is active and allowed, but required only when the user explicitly uses that exact tag in the Creative Brief, current prompt, or Refine instruction.
+Every active picture and video is expected to be accounted for with its exact `<Picture N>` or `<Video N>` tag. Uploaded audio tags are allowed only when they exist in the current manifest. Generate requires the audio tags used in the Creative Brief. Refine preserves audio tags already present in the current prompt unless the revision instruction contains that exact tag.
 
 Use **Insert reference** beside **Refine** to add a current subject, picture, video, or audio tag at the caret in the Creative Brief, Generated Prompt, or Refine instruction.
 
@@ -118,7 +118,9 @@ After generation, Writer checks the required format and exact media tags. A vali
 
 Select **Refine** to rewrite the current prompt from a short revision instruction. Refine uses the currently selected provider and model. The previous prompt can be restored after a successful rewrite.
 
-The normal Refine pass works from the current prompt and revision instruction. In Reference mode, Writer checks that the revised result still accounts for active pictures and videos plus any audio explicitly requested with an exact `<Audio N>` tag.
+The normal Refine pass works from the current prompt and revision instruction. In Reference mode, Writer preserves an existing audio reference when its exact `<Audio N>` tag is absent from the revision instruction. When the instruction contains that tag, the reference is mutable for this revision: the prompt model decides from the instruction's meaning whether to add it, keep it, change its role, or remove it. The audit accepts either presence or absence and a format-repair pass preserves that decision instead of restoring the previous reference inventory. The next Refine pass uses the resulting current prompt as its audio-reference baseline; the original Creative Brief does not independently restore a tag removed by an earlier revision.
+
+Any canonical reference tag used by the Creative Brief or revision instruction must exist in the current media manifest. A revised prompt containing a tag outside that manifest is rejected by the audit.
 
 Reference video and audio clips must be 2–15 seconds long. An audio-only Reference manifest is not valid; add at least one image or video. Each uploaded file is limited to 1 GB.
 

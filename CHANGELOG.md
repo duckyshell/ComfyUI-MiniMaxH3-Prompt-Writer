@@ -12,12 +12,12 @@
 
 ### Fixes
 
-- Blocked media changes and mode switching while generation or refinement is active.
-- Invalidated mode-local generation context after successful media mutations.
-- Made uploaded audio optional in generated prompts unless its exact `<Audio N>` tag is explicitly requested.
-- Extended the Audio-added notice to six seconds without changing Processing media notifications.
-- Strengthened Direct GGUF runtime diagnostics to verify the supported version and required loader APIs.
-- Added route-level regression coverage for request preflight, media mutations, clearing, and runtime lifecycle behavior.
+- Prevented media changes and mode switching during generation or refinement.
+- Made media replacement and video resampling transactional so failed operations preserve the existing asset.
+- Limited Clear to media in the current mode and ensured generation and refinement use the latest media after uploads, removals, resampling, and reordering.
+- Fixed Reference Audio handling: uploaded audio remains optional, Generate honors exact `<Audio N>` tags in the Creative Brief, and Refine preserves untouched audio references while allowing explicitly tagged references to change.
+- Rejected nonexistent canonical reference tags before loading or invoking the selected model.
+- Improved Direct GGUF compatibility diagnostics.
 
 ## 0.3.0 - 2026-08-12
 

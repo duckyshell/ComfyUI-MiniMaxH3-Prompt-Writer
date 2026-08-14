@@ -33,7 +33,13 @@ Music 3 is a separate workspace for the MiniMax Music 3 model. It writes structu
 
 Describe the intended sound, vocals, mood, arrangement, and production in **Music Brief**. **Lyrics** is optional. After generation, copy **Generated Caption** to the workflow **Caption** input and pass the original **Lyrics** to the workflow **Lyrics** input.
 
-Music 3 keeps its own saved Music Brief, Lyrics, and edited caption. **Prompt rules** edits the complete Music 3 system prompt. A custom value replaces the built-in default, and **Restore default** returns to the built-in rules.
+Use **Refine** under Lyrics to create Lyrics from an empty field or rewrite the current text. Write one instruction for either task. **Use Music Brief** is on by default, so the request can follow the current brief. Turn it off when only the Lyrics and instruction should be sent.
+
+Lyrics change only after a complete response. Cancelling or receiving an error keeps the current text. After a successful request, **Remove generated** returns an empty Lyrics field when the request started empty, while **Restore previous** returns the earlier Lyrics after a rewrite. The instruction stays in the Refine block so you can adjust and reuse it.
+
+Caption Refine uses the current Music Brief, current Lyrics, current caption, and refine instruction. It does not use an older saved copy of the brief or Lyrics.
+
+Music 3 keeps its own saved Music Brief, Lyrics, and edited caption. Open **System prompt** to edit two separate profiles: **Caption** for structured captions and **Lyrics** for creating or rewriting Lyrics. A custom prompt replaces that profile's complete built-in prompt. **Restore default** returns only that profile to its built-in prompt.
 
 ## Writing a useful Creative Brief
 
@@ -142,7 +148,7 @@ Writer saves stable preferences in the browser used to open ComfyUI:
 - Ollama model tag;
 - External URL and optional Model ID;
 - API preset, URL, model ID, Gemini Thinking level, and Custom capabilities;
-- custom Standard, Reference, and Music 3 system-prompt overrides.
+- custom Standard, Reference, Music 3 Caption, and Music 3 Lyrics system-prompt overrides.
 
 It never saves API keys. If a saved model no longer exists, discovery falls back without treating the missing model as a fatal error.
 
@@ -159,7 +165,7 @@ H3 prompt behavior is shared by all providers and has two profiles:
 
 Editing a profile creates an override of the built-in H3 instruction. It does not replace the separate official MiniMax guide for the selected mode. Resetting an override returns to the current built-in system prompt; there are no separate Standard system prompts for each mode.
 
-Music 3 has separate **Prompt rules** in its workspace. These rules apply through the selected provider in the same way as the H3 profiles.
+Music 3 has a collapsed **System prompt** control in its workspace. It contains separate **Caption** and **Lyrics** profiles. The collapsed row shows **Custom** when either profile has an override. These prompts apply through the selected provider in the same way as the H3 profiles.
 
 ## Lifecycle controls
 

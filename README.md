@@ -13,7 +13,9 @@ It is a ComfyUI UI extension, not a workflow node. It writes prompt text for you
 ## What's new in v0.3.2
 
 - Added an optional Music 3 workspace for writing structured captions for the separate MiniMax Music 3 model.
+- Added one Refine flow for creating or rewriting Lyrics, with separate Caption and Lyrics system prompts.
 - Added a small Reference mode control for inserting current reference tags at the caret.
+- External llama.cpp can now use text-only models when a request has no images or video.
 
 ## What's new in v0.3
 
@@ -35,7 +37,7 @@ You do not need to write MiniMax section headings, timestamps, or reference synt
 Use <Picture 1> for character appearance, <Picture 2> for clothes, and only the movement from <Video 1>. The character walks through a rainy Tokyo street at night.
 ```
 
-Writer sends your brief, selected mode, prepared references, and the official MiniMax prompt-writing guide to the chosen multimodal prompt model. The result is an editable H3 prompt. You can change it directly, use **Refine** for a revision, or select **Copy prompt** and paste it into your H3 workflow.
+Writer sends your brief, selected mode, prepared references, and the official MiniMax prompt-writing guide to the chosen prompt model. The result is an editable H3 prompt. You can change it directly, use **Refine** for a revision, or select **Copy prompt** and paste it into your H3 workflow.
 
 ## Key features
 
@@ -55,7 +57,7 @@ See [Writing a useful Creative Brief](docs/USAGE.md#writing-a-useful-creative-br
 | --- | --- | --- |
 | [Ollama](docs/OLLAMA.md) | You want the simplest local setup | Install Ollama and pull a vision model |
 | [Direct GGUF](docs/DIRECT_GGUF.md) | You want Writer to load a verified GGUF inside ComfyUI | Install the optional native runtime and add a matching GGUF + `mmproj` pair |
-| [External llama.cpp](docs/EXTERNAL_LLAMA_SERVER.md) | You already run llama.cpp or want full control over its runtime | Start a multimodal `llama-server` and connect its root URL |
+| [External llama.cpp](docs/EXTERNAL_LLAMA_SERVER.md) | You already run llama.cpp or want full control over its runtime | Start `llama-server`; add a matching `mmproj` for images and video |
 | [API providers](docs/API_PROVIDERS.md) | You want Gemini, OpenAI, OpenRouter, or a Custom OpenAI-compatible endpoint | Connect a key or an existing endpoint such as LM Studio |
 
 Not sure? Start with [Ollama](docs/OLLAMA.md). The [provider guide](docs/PROVIDERS.md) explains the differences. The Ollama and Direct GGUF guides contain the tested local model choices.
@@ -84,6 +86,7 @@ For Git, ZIP, Windows Portable, update, and provider-specific steps, see [Instal
 - The interface and documentation are in English. Briefs can use other languages, and Writer preserves supplied dialogue and visible text.
 - Gemma 4 is the recommended local model family and has received the most testing. Qwen 3.6 also completed all five H3 modes through Ollama without special changes to Writer.
 - Ollama, External llama.cpp, and compatible API endpoints let you try other multimodal models that accept images. Compatibility does not guarantee a good H3 prompt.
+- External llama.cpp also accepts text-only models for Music 3, T2VA, and Refine. Image and video requests still need a vision model.
 - Direct GGUF is the exception. It currently supports only the verified Gemma 4 pairs because its model loader and vision-projector integration are built for Gemma 4.
 - Gemini and a Custom OpenAI-compatible endpoint were tested live. OpenAI and OpenRouter have automated contract coverage but were not tested live with commercial credentials. Comfy Cloud has not been validated for v0.3.
 

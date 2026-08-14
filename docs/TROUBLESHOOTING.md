@@ -209,7 +209,7 @@ An input ending in `/v1` is accepted and normalized. Remove any other added path
 
 **Verify**
 
-External Settings show the connected model. Confirm it with a real image request instead of relying on the health probe alone.
+External Settings show the connected model. A text-only model is ready for Music 3, T2VA, and Refine. If you started the server with a projector, confirm vision with a real image request.
 
 ## Vision is unavailable
 
@@ -223,7 +223,7 @@ The loaded model is text-only, its matching projector is missing, or the OpenAI-
 
 **Fix**
 
-For External llama.cpp, restart with the model's matching `--mmproj`. For local LM Studio, load a vision model before reconnecting. For another Custom endpoint, enable **Endpoint accepts image_url inputs** only when both server and model support that contract.
+For External llama.cpp, restart with the model's matching `--mmproj`. You can keep using a text-only server for Music 3, T2VA, and Refine. For local LM Studio, load a vision model before reconnecting. For another Custom endpoint, enable **Endpoint accepts image_url inputs** only when both server and model support that contract.
 
 **Verify**
 

@@ -5,8 +5,14 @@
 ### Features
 
 - Added an optional Music 3 workspace for writing structured captions for the separate MiniMax Music 3 model.
-- Added saved Music Brief, optional Lyrics, editable generated captions, and separate Music 3 Prompt rules.
+- Added saved Music Brief, optional Lyrics, editable generated captions, and separate Caption and Lyrics system prompts.
+- Added one Lyrics Refine flow for creating new Lyrics or rewriting the current text, with optional Music Brief context and one-step restore.
 - Added a Reference mode control for inserting current reference tags at the caret in the Creative Brief, Generated Prompt, or Refine instruction.
+
+### Fixes
+
+- Allowed Custom OpenAI-compatible endpoints to use plain HTTP on loopback and private LAN addresses while keeping HTTPS required for public endpoints.
+- Allowed External llama.cpp to use text-only models for requests without images or video. Visual requests now show a clear vision requirement.
 
 ## 0.3.1 - 2026-08-13
 

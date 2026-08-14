@@ -48,3 +48,31 @@ export function isChoiceMenuInteraction(target) {
 export function isGuideMenuInteraction(target) {
   return Boolean(target?.closest?.("[data-guide-toggle], [data-guide-menu]"));
 }
+
+export function availableReferenceTags(assets, prompt) {
+  const media = [...new Set(assets
+    .filter((asset) => asset.mode === "Reference" && /^<(?:Picture|Video|Audio) \d+>$/.test(asset.reference || ""))
+    .map((asset) => asset.reference))];
+  if (!media.length) return [];
+
+  const subjects = [];
+  for (const line of String(prompt).split(/\r?\n/)) {
+    const subject = line.match(/^\s*(<Subject \d+>)/)?.[1];
+    if (subject && media.some((reference) => line.includes(reference)) && !subjects.includes(subject)) subjects.push(subject);
+  }
+  const rank = { Subject: 0, Picture: 1, Video: 2, Audio: 3 };
+  return [...subjects, ...media].sort((left, right) => {
+    const [, leftType, leftNumber] = left.match(/^<(Subject|Picture|Video|Audio) (\d+)>$/) || [];
+    const [, rightType, rightNumber] = right.match(/^<(Subject|Picture|Video|Audio) (\d+)>$/) || [];
+    return rank[leftType] - rank[rightType] || Number(leftNumber) - Number(rightNumber);
+  });
+}
+
+export function insertReferenceAtCaret(editor, reference, caret = editor?.selectionStart) {
+  if (!editor || typeof editor.setRangeText !== "function") return false;
+  const position = Number.isInteger(caret) ? Math.max(0, Math.min(caret, editor.value.length)) : editor.value.length;
+  editor.setRangeText(reference, position, position, "end");
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
+  editor.focus({ preventScroll: true });
+  return true;
+}

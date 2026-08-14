@@ -239,19 +239,23 @@
   background: rgba(255, 115, 86, .14);
   box-shadow: inset 0 0 0 1px rgba(255, 115, 86, .17);
 }
-.h3ps-editor-highlight mark.is-subject {
+.h3ps-editor-highlight mark.is-subject,
+.h3ps-reference-chip.is-subject {
   background: rgba(255, 151, 102, .15);
   box-shadow: inset 0 0 0 1px rgba(255, 151, 102, .18);
 }
-.h3ps-editor-highlight mark.is-image {
+.h3ps-editor-highlight mark.is-image,
+.h3ps-reference-chip.is-image {
   background: rgba(100, 156, 255, .2);
   box-shadow: inset 0 0 0 1px rgba(100, 156, 255, .22);
 }
-.h3ps-editor-highlight mark.is-video {
+.h3ps-editor-highlight mark.is-video,
+.h3ps-reference-chip.is-video {
   background: rgba(191, 119, 255, .2);
   box-shadow: inset 0 0 0 1px rgba(191, 119, 255, .22);
 }
-.h3ps-editor-highlight mark.is-audio {
+.h3ps-editor-highlight mark.is-audio,
+.h3ps-reference-chip.is-audio {
   background: rgba(99, 212, 155, .18);
   box-shadow: inset 0 0 0 1px rgba(99, 212, 155, .2);
 }
@@ -268,6 +272,13 @@
 }
 .h3ps-refine textarea { border-color: #29292e; background: #0d0d0f; }
 .h3ps-refine textarea:focus { border-color: rgba(232, 97, 60, .42); box-shadow: none; }
+.h3ps-reference-insert-toggle {
+  border-color: #27272c;
+  background: #111113;
+  color: #74747d;
+}
+.h3ps-reference-insert-toggle:hover { border-color: #36363d; background: #17171b; color: var(--h3ps-text); }
+.h3ps-reference-insert-popover { border-color: #2e2e34; background: #151518; box-shadow: 0 16px 48px rgba(0, 0, 0, .6); }
 .h3ps-refine-submit {
   border-color: #34343a;
   background: #17171b;

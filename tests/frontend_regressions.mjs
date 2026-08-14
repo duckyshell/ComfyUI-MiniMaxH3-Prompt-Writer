@@ -4,7 +4,7 @@ import test from "node:test";
 
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");
-const { createSessionId, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } = await import(`data:text/javascript;base64,${encoded}`);
+const { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } = await import(`data:text/javascript;base64,${encoded}`);
 const stateSource = await readFile(new URL("../web/studio_state.js", import.meta.url), "utf8");
 const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
@@ -288,6 +288,51 @@ test("audio notice triggers once per global zero-to-present transition", () => {
   assert.equal(audioWasAdded([audio], [audio, { id: "a2", type: "audio" }]), false);
   assert.equal(audioWasAdded([audio], []), false);
   assert.equal(audioWasAdded([], [{ id: "a3", type: "audio" }]), true);
+});
+
+test("Reference insertion lists current media and only subjects defined from that media", () => {
+  const assets = [
+    { mode: "Reference", reference: "<Picture 2>" },
+    { mode: "Reference", reference: "<Video 1>" },
+    { mode: "Reference", reference: "<Audio 1>" },
+    { mode: "I2VA", reference: "<Picture 1>" },
+  ];
+  const prompt = [
+    "subject_definitions:",
+    "<Subject 2> is defined by <Video 1>.",
+    "<Subject 1> is defined by <Picture 2>.",
+    "<Subject 3> is defined by <Picture 9>.",
+  ].join("\n");
+  assert.deepEqual(availableReferenceTags(assets, prompt), [
+    "<Subject 1>", "<Subject 2>", "<Picture 2>", "<Video 1>", "<Audio 1>",
+  ]);
+  assert.deepEqual(availableReferenceTags([], prompt), []);
+});
+
+test("Reference insertion uses the caret without replacing selected text and emits input", () => {
+  class Editor extends EventTarget {
+    constructor() {
+      super();
+      this.value = "keep selected text";
+      this.selectionStart = 5;
+      this.selectionEnd = 13;
+      this.focused = false;
+    }
+    setRangeText(value, start, end) {
+      this.value = this.value.slice(0, start) + value + this.value.slice(end);
+      this.selectionStart = this.selectionEnd = start + value.length;
+    }
+    focus() { this.focused = true; }
+  }
+  const editor = new Editor();
+  let inputCount = 0;
+  editor.addEventListener("input", () => { inputCount += 1; });
+  assert.equal(insertReferenceAtCaret(editor, "<Subject 1>", editor.selectionStart), true);
+  assert.equal(editor.value, "keep <Subject 1>selected text");
+  assert.equal(editor.selectionStart, 16);
+  assert.equal(editor.selectionEnd, 16);
+  assert.equal(inputCount, 1);
+  assert.equal(editor.focused, true);
 });
 
 test("Audio added notice remains visible for six seconds", () => {
@@ -630,6 +675,24 @@ test("Settings owns a two-click restore for all mode draft defaults", () => {
   assert.doesNotMatch(mainSource, /Replace the modified prompt with a new generation/);
   assert.doesNotMatch(mainSource, /referenceDraft/);
   assert.match(stylesSource, /h3ps-draft-defaults-action/);
+});
+
+test("Reference mode exposes one contextual insert control across its three editors", () => {
+  assert.equal((mainSource.match(/data-reference-insert-toggle/g) || []).length >= 2, true);
+  assert.match(mainSource, /aria-label="Insert reference"/);
+  assert.match(mainSource, /data-reference-insert-toggle><\/button>/);
+  assert.doesNotMatch(mainSource, /data-reference-insert-toggle[^>]*>[\s\S]{0,120}<span>Insert<\/span>/);
+  assert.match(stylesSource, /assets\/icons\/insert-reference\.svg/);
+  assert.match(mainSource, /studio\.mode !== "Reference"/);
+  assert.match(mainSource, /querySelectorAll\("\[data-video-brief\], \[data-output\], \[data-refine-instruction\]"\)/);
+  assert.match(mainSource, /insertReferenceAtCaret\(target\.editor, reference, target\.caret\)/);
+  assert.match(mainSource, /\["focus", "click", "keyup", "select", "input"\]/);
+  assert.match(mainSource, /if \(!event\.target\.closest\("\[data-reference-insert\]"\)\) closeReferenceInsert\(\)/);
+  assert.match(stylesSource, /h3ps-output-panel\.is-refining \[data-refine-toggle\] \{ display: none; \}/);
+  assert.doesNotMatch(stylesSource, /h3ps-output-panel\.is-refining \.h3ps-output-actions \{ display: none; \}/);
+  for (const kind of ["subject", "image", "video", "audio"]) {
+    assert.match(stylesSource, new RegExp(`h3ps-editor-highlight mark\\.is-${kind}, \\.h3ps-reference-chip\\.is-${kind}`));
+  }
 });
 
 test("Music 3 drafts and payload keep lyrics separate from H3 state", () => {

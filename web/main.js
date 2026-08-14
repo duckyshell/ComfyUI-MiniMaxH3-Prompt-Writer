@@ -1,6 +1,6 @@
 import { app } from "/scripts/app.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
-import { createSessionId, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } from "./compat.js";
+import { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
@@ -158,6 +158,7 @@ N/A`;
 
 let studio;
 let ggufRuntimeDiagnosticsPromise = null;
+let referenceInsertTarget = null;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({
@@ -412,6 +413,70 @@ function renderMedia(mode) {
       </div>`;
   }
   bindMediaActions(mode);
+  syncReferenceInsertControl();
+}
+
+function referenceTagKind(reference) {
+  const type = reference.match(/^<(Subject|Picture|Video|Audio) /)?.[1] || "Subject";
+  return type === "Picture" ? "image" : type.toLowerCase();
+}
+
+function referenceTagsForCurrentDraft() {
+  if (!studio || studio.mode !== "Reference") return [];
+  return availableReferenceTags(studio.assets, studio.root.querySelector("[data-output]").value);
+}
+
+function closeReferenceInsert() {
+  if (!studio) return;
+  const popover = studio.root.querySelector("[data-reference-insert-popover]");
+  const toggle = studio.root.querySelector("[data-reference-insert-toggle]");
+  if (popover) popover.hidden = true;
+  if (toggle) toggle.setAttribute("aria-expanded", "false");
+}
+
+function syncReferenceInsertControl() {
+  if (!studio) return;
+  const control = studio.root.querySelector("[data-reference-insert]");
+  const toggle = studio.root.querySelector("[data-reference-insert-toggle]");
+  if (!control || !toggle) return;
+  const referenceMode = studio.mode === "Reference";
+  const tags = referenceMode ? referenceTagsForCurrentDraft() : [];
+  control.hidden = !referenceMode;
+  toggle.disabled = !tags.length || studio.requestBusy;
+  toggle.title = tags.length ? "Insert reference" : "Add reference media first";
+  if (!referenceMode || !tags.length) closeReferenceInsert();
+}
+
+function rememberReferenceInsertTarget(editor) {
+  if (studio?.mode !== "Reference" || !editor) return;
+  referenceInsertTarget = { editor, caret: editor.selectionStart ?? editor.value.length };
+}
+
+function toggleReferenceInsert() {
+  const popover = studio.root.querySelector("[data-reference-insert-popover]");
+  const toggle = studio.root.querySelector("[data-reference-insert-toggle]");
+  const opening = popover.hidden;
+  if (!opening) {
+    closeReferenceInsert();
+    return;
+  }
+  const tags = referenceTagsForCurrentDraft();
+  if (!tags.length) return;
+  popover.innerHTML = tags.map((reference) => `<button type="button" class="h3ps-reference-chip is-${referenceTagKind(reference)}" data-insert-reference="${escapeHtml(reference)}" role="menuitem">${escapeHtml(reference)}</button>`).join("");
+  popover.hidden = false;
+  toggle.setAttribute("aria-expanded", "true");
+}
+
+function insertSelectedReference(reference) {
+  if (studio.mode !== "Reference") return;
+  const fallback = studio.root.querySelector("[data-output]");
+  const target = referenceInsertTarget?.editor?.isConnected ? referenceInsertTarget : { editor: fallback, caret: fallback.selectionStart };
+  target.editor.setSelectionRange(target.caret, target.caret);
+  if (insertReferenceAtCaret(target.editor, reference, target.caret)) {
+    rememberReferenceInsertTarget(target.editor);
+    syncReferenceInsertControl();
+  }
+  closeReferenceInsert();
 }
 
 function bindMediaActions(mode) {
@@ -783,6 +848,9 @@ function syncWorkspace() {
   studio.root.querySelector("[data-refine-instruction]").placeholder = music
     ? "For example: keep the verses sparse and let the final chorus open wider."
     : "For example: make the camera movement slower and keep the ending more ambiguous.";
+  if (studio.mode === "Reference") rememberReferenceInsertTarget(studio.root.querySelector("[data-output]"));
+  else referenceInsertTarget = null;
+  syncReferenceInsertControl();
   if (music) syncSystemPromptEditor("music3");
 }
 
@@ -2193,7 +2261,13 @@ function createStudio() {
             </div>
           </div>
           <div class="h3ps-output-actions">
-            <button class="h3ps-secondary-button" type="button" title="Refine with local LLM" data-refine-toggle>${icon("spark", 15)} Refine</button>
+            <span class="h3ps-output-primary-actions">
+              <button class="h3ps-secondary-button" type="button" title="Refine with local LLM" data-refine-toggle>${icon("spark", 15)} Refine</button>
+              <span class="h3ps-reference-insert" data-reference-insert hidden>
+                <button class="h3ps-reference-insert-toggle" type="button" title="Insert reference" aria-label="Insert reference" aria-haspopup="menu" aria-expanded="false" data-reference-insert-toggle></button>
+                <span class="h3ps-reference-insert-popover" data-reference-insert-popover role="menu" hidden></span>
+              </span>
+            </span>
             <button class="h3ps-secondary-button" type="button" data-copy>${icon("copy", 15)} <span data-copy-label>Copy prompt</span></button>
           </div>
         </section>
@@ -2270,6 +2344,7 @@ function createStudio() {
     if (!event.target.closest("[data-model-files-toggle], [data-model-files-menu]")) {
       root.querySelectorAll("[data-model-files-menu]").forEach((menu) => { menu.hidden = true; });
     }
+    if (!event.target.closest("[data-reference-insert]")) closeReferenceInsert();
   });
   root.querySelectorAll("[data-close-preview]").forEach((el) => el.addEventListener("click", closeVideoPreview));
   root.querySelectorAll("[data-close-image-preview]").forEach((el) => el.addEventListener("click", closeImagePreview));
@@ -2540,6 +2615,13 @@ function createStudio() {
   root.querySelector("[data-refine-toggle]").addEventListener("click", () => toggleRefine(root.querySelector("[data-refine-panel]").hidden));
   root.querySelector("[data-refine-cancel]").addEventListener("click", () => toggleRefine(false));
   root.querySelector("[data-refine-submit]").addEventListener("click", submitRefinement);
+  root.querySelector("[data-reference-insert-toggle]").addEventListener("pointerdown", (event) => event.preventDefault());
+  root.querySelector("[data-reference-insert-toggle]").addEventListener("click", toggleReferenceInsert);
+  root.querySelector("[data-reference-insert-popover]").addEventListener("pointerdown", (event) => event.preventDefault());
+  root.querySelector("[data-reference-insert-popover]").addEventListener("click", (event) => {
+    const option = event.target.closest("[data-insert-reference]");
+    if (option) insertSelectedReference(option.dataset.insertReference);
+  });
   root.querySelector("[data-refine-restore]").addEventListener("click", () => {
     if (studio.refineRestore == null) return;
     const output = root.querySelector("[data-output]");
@@ -2577,9 +2659,14 @@ function createStudio() {
     renderPromptHighlights();
     syncOutputLengthMeta();
     saveCurrentModeDraft();
+    syncReferenceInsertControl();
   });
   root.querySelector("[data-output]").addEventListener("scroll", renderPromptHighlights);
   const editor = root.querySelector("[data-output]");
+  const supportedReferenceEditors = root.querySelectorAll("[data-video-brief], [data-output], [data-refine-instruction]");
+  supportedReferenceEditors.forEach((field) => {
+    ["focus", "click", "keyup", "select", "input"].forEach((type) => field.addEventListener(type, () => rememberReferenceInsertTarget(field)));
+  });
   const editorWrap = root.querySelector(".h3ps-editor-wrap");
   const peek = root.querySelector("[data-reference-peek]");
   editor.addEventListener("focus", () => {

@@ -77,6 +77,19 @@ def _validated_generation_context(source: dict[str, Any]) -> tuple[float, str, s
     return duration, aspect_ratio, brief
 
 
+def _validated_music_caption_context(source: dict[str, Any]) -> tuple[str, str]:
+    brief = _required_text(source, "creative_brief", "Music brief")
+    if len(brief) > 2000:
+        raise AssemblyError("BRIEF_TOO_LONG", "Music brief cannot exceed 2,000 characters.")
+    lyrics = source.get("lyrics", "")
+    if not isinstance(lyrics, str):
+        raise AssemblyError("INVALID_REQUEST", "Lyrics must be text.", {"field": "lyrics"})
+    lyrics = lyrics.strip()
+    if len(lyrics) > 4000:
+        raise AssemblyError("LYRICS_TOO_LONG", "Lyrics cannot exceed 4,000 characters.")
+    return brief, lyrics
+
+
 def _guide_messages(mode: str, system_prompt: str) -> list[dict[str, str]]:
     if mode == MUSIC3_MODE:
         return ([{"role": "system", "name": "music3_caption_contract", "content": system_prompt}] if system_prompt else [])
@@ -142,15 +155,7 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     mode = _required_text(body, "mode", "Mode")
     if mode == MUSIC3_MODE:
         system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
-        brief = _required_text(body, "creative_brief", "Music brief")
-        if len(brief) > 2000:
-            raise AssemblyError("BRIEF_TOO_LONG", "Music brief cannot exceed 2,000 characters.")
-        lyrics = body.get("lyrics", "")
-        if not isinstance(lyrics, str):
-            raise AssemblyError("INVALID_REQUEST", "Lyrics must be text.", {"field": "lyrics"})
-        lyrics = lyrics.strip()
-        if len(lyrics) > 4000:
-            raise AssemblyError("LYRICS_TOO_LONG", "Lyrics cannot exceed 4,000 characters.")
+        brief, lyrics = _validated_music_caption_context(body)
         try:
             session_id = parse_session_id(body.get("session_id"))
         except ValueError as error:
@@ -261,10 +266,7 @@ def assemble_refinement(
             session_id = parse_session_id(body.get("session_id"))
         except ValueError as error:
             raise AssemblyError("INVALID_SESSION", "The session ID is invalid.") from error
-        context_source = cached_generation if cached_generation and cached_generation.get("mode") == mode else body
-        brief = _required_text(context_source, "creative_brief", "Music brief")
-        lyrics = context_source.get("lyrics", "")
-        lyrics = lyrics.strip() if isinstance(lyrics, str) else ""
+        brief, lyrics = _validated_music_caption_context(body)
         user_content = (
             f"Original music brief:\n{brief}\n\n"
             f"Lyrics:\n{lyrics or 'None provided.'}\n\n"
@@ -350,4 +352,75 @@ def assemble_refinement(
         }] if mode == "Reference" else []),
         "system_prompt": {"custom": system_prompt_custom, "content": system_prompt},
         "messages": _guide_messages(mode, system_prompt) + [{"role": "user", "content": user_content}],
+    }
+
+
+def assemble_lyrics_request(body: dict[str, Any]) -> dict[str, Any]:
+    mode = _required_text(body, "mode", "Mode")
+    if mode != MUSIC3_MODE:
+        raise AssemblyError("INVALID_MODE", "Lyrics rewriting is available only in Music 3.")
+    try:
+        system_prompt, system_prompt_custom = resolve_system_prompt(
+            "Music3Lyrics",
+            body.get("system_prompt_override"),
+        )
+    except SystemPromptError as error:
+        raise AssemblyError(error.code, error.message) from error
+
+    current_lyrics = body.get("current_lyrics", "")
+    instruction = body.get("instruction", "")
+    use_music_brief = body.get("use_music_brief", True)
+    brief = body.get("creative_brief", "")
+    if not isinstance(current_lyrics, str):
+        raise AssemblyError("INVALID_REQUEST", "Current Lyrics must be text.", {"field": "current_lyrics"})
+    if not isinstance(instruction, str):
+        raise AssemblyError("INVALID_REQUEST", "Revision instruction must be text.", {"field": "instruction"})
+    if not isinstance(use_music_brief, bool):
+        raise AssemblyError("INVALID_REQUEST", "Use Music Brief must be a boolean.", {"field": "use_music_brief"})
+    if not isinstance(brief, str):
+        raise AssemblyError("INVALID_REQUEST", "Music Brief must be text.", {"field": "creative_brief"})
+    current_lyrics = current_lyrics.strip()
+    instruction = instruction.strip()
+    brief = brief.strip() if use_music_brief else ""
+    if len(current_lyrics) > 4000:
+        raise AssemblyError("LYRICS_TOO_LONG", "Lyrics cannot exceed 4,000 characters.")
+    if len(instruction) > 2000:
+        raise AssemblyError("INSTRUCTION_TOO_LONG", "The revision instruction cannot exceed 2,000 characters.")
+    if len(brief) > 2000:
+        raise AssemblyError("BRIEF_TOO_LONG", "Music brief cannot exceed 2,000 characters.")
+    if current_lyrics and not instruction:
+        raise AssemblyError("INSTRUCTION_REQUIRED", "Describe how the existing Lyrics should change.")
+    if not current_lyrics and not instruction and not brief:
+        raise AssemblyError("LYRICS_REQUEST_EMPTY", "Add an instruction or include the Music Brief to create Lyrics.")
+    try:
+        session_id = parse_session_id(body.get("session_id"))
+    except ValueError as error:
+        raise AssemblyError("INVALID_SESSION", "The session ID is invalid.") from error
+
+    task = "Rewrite the Current Lyrics according to the revision instruction." if current_lyrics else "Create complete new Lyrics."
+    user_content = (
+        f"Task: {task}\n\n"
+        f"Music Brief:\n{brief or 'Not included.'}\n\n"
+        f"Current Lyrics:\n{current_lyrics or 'None provided.'}\n\n"
+        f"Revision instruction:\n{instruction or 'None provided.'}"
+    )
+    return {
+        "schema_version": 1,
+        "guide": {"id": "music3-lyrics-contract", "title": "MiniMax Music 3 Lyrics"},
+        "input": {
+            "mode": mode,
+            "target": "lyrics",
+            "duration_seconds": None,
+            "aspect_ratio": None,
+            "creative_brief": brief,
+            "current_lyrics": current_lyrics,
+            "instruction": instruction,
+            "use_music_brief": use_music_brief,
+            "media_manifest": {"session_id": session_id, "mode": mode, "assets": [], "valid": True},
+        },
+        "media_inputs": [],
+        "supporting_guides": [],
+        "system_prompt": {"custom": system_prompt_custom, "content": system_prompt},
+        "messages": ([{"role": "system", "name": "music3_lyrics_contract", "content": system_prompt}] if system_prompt else [])
+        + [{"role": "user", "content": user_content}],
     }

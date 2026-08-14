@@ -1,9 +1,10 @@
 import unittest
 from unittest.mock import patch
 
-from backend.assembly import AssemblyError, _final_contract, assemble_refinement, assemble_request
+from backend.assembly import AssemblyError, _final_contract, assemble_lyrics_request, assemble_refinement, assemble_request
 from backend.system_prompts import (
     MAX_SYSTEM_PROMPT_CHARS,
+    MUSIC3_LYRICS_SYSTEM_WRAPPER,
     MUSIC3_SYSTEM_WRAPPER,
     REFERENCE_SYSTEM_WRAPPER,
     SYSTEM_WRAPPER,
@@ -22,6 +23,12 @@ class SystemPromptTests(unittest.TestCase):
         self.assertIn("Explicit Music Brief requirements always override emotional inferences", MUSIC3_SYSTEM_WRAPPER)
         self.assertIn("Use lyric text only as secondary context", MUSIC3_SYSTEM_WRAPPER)
         self.assertIn("Do not transfer lyric-specific wording, imagery", MUSIC3_SYSTEM_WRAPPER)
+        self.assertIn("unless the user explicitly requests another language", MUSIC3_SYSTEM_WRAPPER)
+
+    def test_music_lyrics_has_a_separate_generate_and_rewrite_contract(self):
+        self.assertEqual(system_prompt_for_mode("Music3Lyrics"), MUSIC3_LYRICS_SYSTEM_WRAPPER)
+        self.assertIn("return only the complete lyrics text", MUSIC3_LYRICS_SYSTEM_WRAPPER)
+        self.assertIn("Do not automatically translate, add rhyme", MUSIC3_LYRICS_SYSTEM_WRAPPER)
 
     def test_standard_modes_share_one_default(self):
         self.assertEqual(system_prompt_for_mode("T2VA"), SYSTEM_WRAPPER)
@@ -227,7 +234,7 @@ class AssemblyMusic3Tests(unittest.TestCase):
         message = assembled["messages"][-1]["content"]
         self.assertIn("[Verse]\nFirst image\n[Chorus]\nSecond image\n[Verse]\nThird image\n[Outro - half time]\nLast image", message)
 
-    def test_music_refine_preserves_the_three_section_contract(self):
+    def test_music_refine_uses_current_context_and_preserves_the_three_section_contract(self):
         assembled = assemble_refinement({
             "session_id": self.session_id,
             "mode": "Music3",
@@ -235,11 +242,73 @@ class AssemblyMusic3Tests(unittest.TestCase):
             "lyrics": "[Verse]\nA silver train leaves town",
             "current_prompt": "### Global Metadata\n...\n### Vocal Details\n...\n### Arrangement\n...",
             "instruction": "Let the bridge narrow to voice and electric piano.",
-        }, None)
+        }, {
+            "mode": "Music3",
+            "creative_brief": "Old cached brief.",
+            "lyrics": "[Verse]\nOld cached Lyrics",
+            "prompt": "Old cached caption",
+        })
         content = assembled["messages"][-1]["content"]
+        self.assertIn("Airy synth soul with a low lead voice.", content)
         self.assertIn("Lyrics:\n[Verse]\nA silver train leaves town", content)
         self.assertIn("Current caption:\n### Global Metadata", content)
         self.assertIn("Revise the current caption according to the revision instruction.", content)
+        self.assertNotIn("Old cached", content)
+
+    def test_lyrics_request_creates_or_rewrites_with_optional_brief(self):
+        created = assemble_lyrics_request({
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "creative_brief": "Gentle folk with a restrained final chorus.",
+            "current_lyrics": "",
+            "instruction": "",
+            "use_music_brief": True,
+        })
+        self.assertEqual(created["input"]["target"], "lyrics")
+        self.assertIn("Task: Create complete new Lyrics.", created["messages"][-1]["content"])
+        self.assertIn("Gentle folk with a restrained final chorus.", created["messages"][-1]["content"])
+
+        rewritten = assemble_lyrics_request({
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "creative_brief": "This must not be sent.",
+            "current_lyrics": "[Verse]\nKeep this line",
+            "instruction": "Shorten the second section only.",
+            "use_music_brief": False,
+        })
+        content = rewritten["messages"][-1]["content"]
+        self.assertIn("Task: Rewrite the Current Lyrics", content)
+        self.assertIn("Current Lyrics:\n[Verse]\nKeep this line", content)
+        self.assertIn("Music Brief:\nNot included.", content)
+        self.assertNotIn("This must not be sent.", content)
+
+    def test_lyrics_request_requires_actionable_context(self):
+        cases = [
+            ({"current_lyrics": "[Verse]\nExisting", "instruction": "", "use_music_brief": True}, "INSTRUCTION_REQUIRED"),
+            ({"current_lyrics": "", "instruction": "", "use_music_brief": False}, "LYRICS_REQUEST_EMPTY"),
+        ]
+        for fields, expected in cases:
+            with self.subTest(code=expected), self.assertRaises(AssemblyError) as raised:
+                assemble_lyrics_request({
+                    "session_id": self.session_id,
+                    "mode": "Music3",
+                    "creative_brief": "Available brief.",
+                    **fields,
+                })
+            self.assertEqual(raised.exception.code, expected)
+
+    def test_custom_lyrics_prompt_fully_replaces_the_builtin_contract(self):
+        assembled = assemble_lyrics_request({
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "creative_brief": "",
+            "current_lyrics": "",
+            "instruction": "Create two short sections.",
+            "use_music_brief": False,
+            "system_prompt_override": "Return only custom-formatted Lyrics.",
+        })
+        self.assertEqual(assembled["messages"][0]["content"], "Return only custom-formatted Lyrics.")
+        self.assertNotIn(MUSIC3_LYRICS_SYSTEM_WRAPPER, "\n".join(message["content"] for message in assembled["messages"]))
 
 
 if __name__ == "__main__":

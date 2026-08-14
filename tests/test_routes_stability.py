@@ -338,6 +338,72 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(routes.STATE["phase"], "idle")
         self.assertIsNone(routes.STATE["active_request_id"])
 
+    async def test_lyrics_refine_uses_its_assembly_and_does_not_change_caption_cache(self):
+        body = {
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "target": "lyrics",
+            "model_id": "test-model",
+            "creative_brief": "A compact soul arrangement.",
+            "current_lyrics": "",
+            "instruction": "Create a verse and chorus.",
+            "use_music_brief": True,
+        }
+        cache_key = (self.session_id, "Music3")
+        routes.GENERATION_CACHE[cache_key] = {"prompt": "Existing caption"}
+        assembled = {"input": {"target": "lyrics"}}
+        model = {"id": "test-model", "name": "Test", "family": "test"}
+        backend = MagicMock(manages_gpu_memory=False)
+        backend.preflight.return_value = {"context_profile": "auto", "kv_cache": "auto"}
+        backend.generate.return_value = {"prompt": "[Verse]\nNew Lyrics"}
+        monitor = MagicMock()
+        monitor.stop.return_value = 0
+        with (
+            patch.object(routes, "assemble_lyrics_request", return_value=assembled) as assemble_lyrics,
+            patch.object(routes, "assemble_refinement") as assemble_caption,
+            patch.object(routes, "_resolve_model", new_callable=AsyncMock, return_value=model),
+            patch.dict(routes.BACKENDS, {"test": backend}),
+            patch.object(routes, "PeakVRAMMonitor", return_value=monitor),
+            patch.object(routes, "write_event"),
+        ):
+            response = await routes.refine(_Request(body=body))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.payload(response)["prompt"], "[Verse]\nNew Lyrics")
+        assemble_lyrics.assert_called_once_with(body)
+        assemble_caption.assert_not_called()
+        self.assertEqual(routes.GENERATION_CACHE[cache_key], {"prompt": "Existing caption"})
+
+    async def test_lyrics_refine_rejects_oversized_complete_output(self):
+        body = {
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "target": "lyrics",
+            "model_id": "test-model",
+            "creative_brief": "",
+            "current_lyrics": "",
+            "instruction": "Create Lyrics.",
+            "use_music_brief": False,
+        }
+        model = {"id": "test-model", "name": "Test", "family": "test"}
+        backend = MagicMock(manages_gpu_memory=False)
+        backend.preflight.return_value = {"context_profile": "auto", "kv_cache": "auto"}
+        backend.generate.return_value = {"prompt": "x" * 4001}
+        monitor = MagicMock()
+        monitor.stop.return_value = 0
+        with (
+            patch.object(routes, "assemble_lyrics_request", return_value={"input": {"target": "lyrics"}}),
+            patch.object(routes, "_resolve_model", new_callable=AsyncMock, return_value=model),
+            patch.dict(routes.BACKENDS, {"test": backend}),
+            patch.object(routes, "PeakVRAMMonitor", return_value=monitor),
+            patch.object(routes, "write_event"),
+        ):
+            response = await routes.refine(_Request(body=body))
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(self.payload(response)["error"]["code"], "LYRICS_TOO_LONG")
+        self.assertEqual(routes.STATE["phase"], "idle")
+
     async def test_successful_media_mutations_return_updated_assets(self):
         assets = [{"id": "second"}, {"id": "first"}]
         reference_key = (self.session_id, "Reference")

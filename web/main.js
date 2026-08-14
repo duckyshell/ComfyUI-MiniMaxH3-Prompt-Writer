@@ -4,6 +4,7 @@ import { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoi
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
+  buildLyricsRefinePayload,
   buildRefinePayload,
   audioWasAdded,
   createStudioState,
@@ -217,6 +218,16 @@ function resizeSystemPromptEditor(textarea) {
   textarea.style.overflowY = "auto";
 }
 
+function syncMusicSystemPromptSummary() {
+  if (!studio) return;
+  const summary = studio.root.querySelector("[data-music-system-prompt-summary]");
+  if (!summary) return;
+  summary.textContent = Object.hasOwn(studio.customSystemPrompts, "music3")
+    || Object.hasOwn(studio.customSystemPrompts, "music3_lyrics")
+    ? "Custom"
+    : "Default";
+}
+
 async function syncSystemPromptEditor(profile) {
   if (!studio) return;
   const textarea = studio.root.querySelector(`[data-system-prompt="${profile}"]`);
@@ -225,7 +236,7 @@ async function syncSystemPromptEditor(profile) {
   const summaryStatus = studio.root.querySelector(`[data-system-prompt-summary-status="${profile}"]`);
   const reset = studio.root.querySelector(`[data-system-prompt-reset="${profile}"]`);
   const count = studio.root.querySelector(`[data-system-prompt-count="${profile}"]`);
-  const requestMode = profile === "music3" ? "Music3" : profile === "reference" ? "Reference" : "T2VA";
+  const requestMode = profile === "music3_lyrics" ? "Music3Lyrics" : profile === "music3" ? "Music3" : profile === "reference" ? "Reference" : "T2VA";
   textarea.disabled = true;
   if (!studio.systemPromptDefaults[profile]) {
     try {
@@ -247,10 +258,16 @@ async function syncSystemPromptEditor(profile) {
   reset.hidden = !custom;
   count.textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
   resizeSystemPromptEditor(textarea);
+  syncMusicSystemPromptSummary();
 }
 
 function syncSystemPromptEditors() {
-  return Promise.all([syncSystemPromptEditor("standard"), syncSystemPromptEditor("reference"), syncSystemPromptEditor("music3")]);
+  return Promise.all([
+    syncSystemPromptEditor("standard"),
+    syncSystemPromptEditor("reference"),
+    syncSystemPromptEditor("music3"),
+    syncSystemPromptEditor("music3_lyrics"),
+  ]);
 }
 
 function setSystemPromptProfile(profile) {
@@ -414,6 +431,36 @@ function renderMedia(mode) {
   }
   bindMediaActions(mode);
   syncReferenceInsertControl();
+}
+
+function setMusicSystemPromptProfile(profile) {
+  if (!studio) return;
+  studio.musicSystemPromptProfile = profile === "music3_lyrics" ? "music3_lyrics" : "music3";
+  studio.root.querySelectorAll("[data-music-system-prompt-profile]").forEach((button) => {
+    const selected = button.dataset.musicSystemPromptProfile === studio.musicSystemPromptProfile;
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  studio.root.querySelectorAll("[data-music-system-prompt-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.musicSystemPromptPanel !== studio.musicSystemPromptProfile;
+  });
+  syncSystemPromptEditor(studio.musicSystemPromptProfile);
+}
+
+function setMusicSystemPromptEditorOpen(open) {
+  if (!studio) return;
+  studio.root.querySelector("[data-music-system-prompt-overview]").hidden = open;
+  studio.root.querySelector("[data-music-system-prompt-editor]").hidden = !open;
+}
+
+function setMusicSystemPromptExpanded(open) {
+  if (!studio) return;
+  studio.musicSystemPromptExpanded = open;
+  const toggle = studio.root.querySelector("[data-music-system-prompt-toggle]");
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.classList.toggle("is-open", open);
+  studio.root.querySelector("[data-music-system-prompt-details]").hidden = !open;
+  if (!open) setMusicSystemPromptEditorOpen(false);
 }
 
 function referenceTagKind(reference) {
@@ -820,6 +867,8 @@ function restoreModeDraft(mode) {
   studio.lastModelMeta = promptLengthMeta(draft.prompt);
   studio.refineRestore = null;
   studio.root.querySelector("[data-refine-restore]").hidden = true;
+  studio.lyricsRestore = null;
+  studio.root.querySelector("[data-lyrics-refine-restore]").hidden = true;
   studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = promptLengthMeta(output.value);
   updateBriefLayout();
   updateMusicLyricsCount();
@@ -851,7 +900,13 @@ function syncWorkspace() {
   if (studio.mode === "Reference") rememberReferenceInsertTarget(studio.root.querySelector("[data-output]"));
   else referenceInsertTarget = null;
   syncReferenceInsertControl();
-  if (music) syncSystemPromptEditor("music3");
+  if (music) {
+    syncSystemPromptEditor("music3");
+    syncSystemPromptEditor("music3_lyrics");
+  } else {
+    toggleLyricsRefine(false);
+    setMusicSystemPromptExpanded(false);
+  }
 }
 
 function disarmDraftDefaults() {
@@ -910,6 +965,7 @@ function setGenerationState(state, label, detail) {
   studio.root.querySelector("[data-clear-media]").disabled = busy;
   studio.root.querySelectorAll("[data-mode]").forEach((control) => { control.disabled = busy; });
   studio.root.querySelectorAll("[data-workspace]").forEach((control) => { control.disabled = busy; });
+  studio.root.querySelector("[data-lyrics-refine-toggle]").disabled = busy;
   const comfyMemory = studio.root.querySelector("[data-comfy-memory-action]");
   comfyMemory.disabled = busy;
   comfyMemory.title = busy
@@ -2067,9 +2123,102 @@ async function refreshOllama({ automatic = false } = {}) {
 function toggleRefine(open) {
   const panel = studio.root.querySelector("[data-refine-panel]");
   const outputPanel = studio.root.querySelector(".h3ps-output-panel");
+  if (open && studio.mode === "Music3") toggleLyricsRefine(false);
   panel.hidden = !open;
   outputPanel.classList.toggle("is-refining", open);
   if (open) requestAnimationFrame(() => panel.querySelector("textarea").focus({ preventScroll: true }));
+}
+
+function toggleLyricsRefine(open) {
+  if (!studio) return;
+  const panel = studio.root.querySelector("[data-lyrics-refine-panel]");
+  if (open) toggleRefine(false);
+  panel.hidden = !open;
+  if (open) requestAnimationFrame(() => panel.querySelector("textarea").focus({ preventScroll: true }));
+}
+
+async function cancelLyricsRefinement() {
+  if (!studio.lyricsRequestBusy) {
+    toggleLyricsRefine(false);
+    return;
+  }
+  const submit = studio.root.querySelector("[data-lyrics-refine-submit]");
+  submit.innerHTML = `<span class="h3ps-spinner"></span>Cancelling…`;
+  try {
+    await cancel();
+  } catch (error) {
+    showToast(error.code || "Cancel failed", error.message, error.details);
+  }
+}
+
+async function submitLyricsRefinement() {
+  const panel = studio.root.querySelector("[data-lyrics-refine-panel]");
+  const submit = panel.querySelector("[data-lyrics-refine-submit]");
+  const instruction = panel.querySelector("[data-lyrics-refine-instruction]").value.trim();
+  const lyrics = studio.root.querySelector("[data-music-lyrics]");
+  const currentLyrics = lyrics.value;
+  const useMusicBrief = panel.querySelector("[data-lyrics-use-brief]").checked;
+  const musicBrief = studio.root.querySelector("[data-music-brief]").value.trim();
+  if (submit.disabled || studio.requestBusy) return;
+  if (currentLyrics.trim() && !instruction) {
+    showToast("Add a revision note", "Describe how the existing Lyrics should change.");
+    return;
+  }
+  if (!currentLyrics.trim() && !instruction && (!useMusicBrief || !musicBrief)) {
+    showToast("Describe the Lyrics", "Add an instruction or include a Music Brief to create new Lyrics.");
+    return;
+  }
+  if (!studio.selectedModel) {
+    showToast("No prompt model selected", "Choose a local model, connect llama.cpp, or configure an API provider.");
+    return;
+  }
+  if (!studio.selectedModel.runtime_ready) {
+    showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}.`);
+    return;
+  }
+  if (!await inspectDirectRuntime()) return;
+
+  studio.activeRequestFamily = studio.selectedModel.family;
+  studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
+  studio.lyricsRequestBusy = true;
+  submit.disabled = true;
+  submit.innerHTML = `<span class="h3ps-spinner"></span>${currentLyrics.trim() ? "Refining…" : "Creating…"}`;
+  setGenerationState("busy", currentLyrics.trim() ? "Refining lyrics" : "Creating lyrics", studio.selectedModel.name.split("/").pop());
+  try {
+    const result = await refine(buildLyricsRefinePayload(studio, {
+      currentLyrics,
+      instruction,
+      useMusicBrief,
+      creativeBrief: musicBrief,
+      seed: newGenerationSeed(),
+    }));
+    studio.lyricsRestore = { lyrics: currentLyrics };
+    lyrics.value = result.prompt;
+    const restore = panel.querySelector("[data-lyrics-refine-restore]");
+    restore.textContent = currentLyrics.trim() ? "Restore previous" : "Remove generated";
+    restore.hidden = false;
+    updateMusicLyricsCount();
+    saveCurrentModeDraft();
+    showToast(
+      currentLyrics.trim() ? "Lyrics rewritten" : "Lyrics created",
+      `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s`,
+    );
+  } catch (error) {
+    if (error.code === "GENERATION_CANCELLED") showToast("Lyrics request cancelled", "The previous Lyrics were kept.");
+    else if (error.code === "INSUFFICIENT_FREE_VRAM") showVramRetry(error, submitLyricsRefinement);
+    else showToast(error.code || "Lyrics request failed", error.message, error.details);
+  } finally {
+    studio.lyricsRequestBusy = false;
+    submit.disabled = false;
+    submit.innerHTML = `${icon("spark", 13)} Refine`;
+    try {
+      const status = await getStatus();
+      updatePromptResidency(status);
+    } catch {}
+    studio.activeRequestFamily = null;
+    studio.activeRequestModelId = null;
+    setGenerationState("idle", "", "");
+  }
 }
 
 async function submitRefinement() {
@@ -2097,7 +2246,7 @@ async function submitRefinement() {
   studio.activeRequestFamily = studio.selectedModel.family;
   studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
   submit.disabled = true;
-  submit.innerHTML = `<span class="h3ps-spinner"></span>Rewriting…`;
+  submit.innerHTML = `<span class="h3ps-spinner"></span>Refining…`;
   setGenerationState("busy", "Refining prompt", studio.selectedModel.name.split("/").pop());
   try {
     const result = await refine(buildRefinePayload(studio, {
@@ -2140,7 +2289,7 @@ async function submitRefinement() {
     else showToast(error.code || "Refinement failed", error.message, error.details);
   } finally {
     submit.disabled = false;
-    submit.innerHTML = `${icon("spark", 13)} Rewrite`;
+    submit.innerHTML = `${icon("spark", 13)} Refine`;
     try {
       const status = await getStatus();
       updatePromptResidency(status);
@@ -2149,6 +2298,20 @@ async function submitRefinement() {
     studio.activeRequestModelId = null;
     setGenerationState("idle", "", "");
   }
+}
+
+function musicSystemPromptPanelMarkup(profile, label, description, hidden = false) {
+  return `
+    <div class="h3ps-system-prompt-panel" data-music-system-prompt-panel="${profile}" ${hidden ? "hidden" : ""}>
+      <header class="h3ps-system-prompt-editor-heading">
+        <button type="button" data-music-system-prompt-back>${icon("chevron", 12)} Back</button>
+        <span><small>System prompt</small><strong>${label}</strong></span>
+        <span class="h3ps-system-prompt-panel-status"><em data-system-prompt-status="${profile}">Default</em>${icon("check", 13)}</span>
+      </header>
+      <p>${description}</p>
+      <textarea data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
+      <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden>Restore default</button></footer>
+    </div>`;
 }
 
 function createStudio() {
@@ -2225,14 +2388,42 @@ function createStudio() {
               <textarea spellcheck="true" maxlength="4000" data-music-lyrics placeholder="[Verse 1]&#10;...&#10;&#10;[Chorus]&#10;..."></textarea>
               <small class="h3ps-char-count">0 / 4,000</small>
             </label>
-            <section class="h3ps-music-prompt-rules">
-              <header>
-                <span><strong>Prompt rules</strong><small data-system-prompt-status="music3">Default</small></span>
-                <button type="button" data-music-prompt-toggle>Edit</button>
-              </header>
-              <div data-music-prompt-editor hidden>
-                <textarea data-system-prompt="music3" maxlength="8000" spellcheck="true" disabled></textarea>
-                <footer><small data-system-prompt-count="music3">0 / 8,000</small><button type="button" data-system-prompt-reset="music3" hidden>Restore default</button></footer>
+            <div class="h3ps-lyrics-refine-tools">
+              <button class="h3ps-secondary-button" type="button" title="Refine Lyrics with the selected prompt model" data-lyrics-refine-toggle>${icon("spark", 15)} Refine</button>
+            </div>
+            <section class="h3ps-refine h3ps-lyrics-refine" data-lyrics-refine-panel hidden>
+              <div class="h3ps-refine-heading">
+                <span><strong>Refine lyrics</strong><small>Create new Lyrics or rewrite the current text</small></span>
+                <label class="h3ps-lyrics-brief-option"><input type="checkbox" data-lyrics-use-brief checked>Use Music Brief</label>
+              </div>
+              <textarea rows="2" data-lyrics-refine-instruction placeholder="Leave Lyrics empty to create new lyrics, or describe how to rewrite the existing lyrics."></textarea>
+              <div class="h3ps-refine-actions">
+                <button type="button" class="h3ps-text-button" data-lyrics-refine-restore hidden>Restore previous</button>
+                <span></span>
+                <button type="button" class="h3ps-text-button" data-lyrics-refine-cancel>Cancel</button>
+                <button type="button" class="h3ps-refine-submit" data-lyrics-refine-submit>${icon("spark", 13)} Refine</button>
+              </div>
+            </section>
+            <section class="h3ps-music-system-prompt">
+              <button class="h3ps-music-system-prompt-toggle" type="button" data-music-system-prompt-toggle aria-expanded="false">
+                <strong>System prompt</strong>
+                <span><em data-music-system-prompt-summary>Default</em>${icon("chevron", 12)}</span>
+              </button>
+              <div data-music-system-prompt-details hidden>
+                <div class="h3ps-system-prompt-overview" data-music-system-prompt-overview>
+                  <button type="button" data-music-system-prompt-profile="music3">
+                    <span><strong>Caption</strong><small>Generated Caption</small></span>
+                    <span><em data-system-prompt-summary-status="music3">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+                  </button>
+                  <button type="button" data-music-system-prompt-profile="music3_lyrics">
+                    <span><strong>Lyrics</strong><small>Create and refine Lyrics</small></span>
+                    <span><em data-system-prompt-summary-status="music3_lyrics">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+                  </button>
+                </div>
+                <div class="h3ps-system-prompt-editor" data-music-system-prompt-editor hidden>
+                  ${musicSystemPromptPanelMarkup("music3", "Caption", "Instructions used to create and refine the structured Music 3 caption.")}
+                  ${musicSystemPromptPanelMarkup("music3_lyrics", "Lyrics", "Instructions used to create new Lyrics or rewrite the current Lyrics.", true)}
+                </div>
               </div>
             </section>
           </div>
@@ -2257,7 +2448,7 @@ function createStudio() {
               <button type="button" class="h3ps-text-button" data-refine-restore hidden>Restore original</button>
               <span></span>
               <button type="button" class="h3ps-text-button" data-refine-cancel>Cancel</button>
-              <button type="button" class="h3ps-refine-submit" data-refine-submit>${icon("spark", 13)} Rewrite</button>
+              <button type="button" class="h3ps-refine-submit" data-refine-submit>${icon("spark", 13)} Refine</button>
             </div>
           </div>
           <div class="h3ps-output-actions">
@@ -2317,6 +2508,7 @@ function createStudio() {
   document.body.appendChild(root);
 
   studio = { root, ...createStudioState({ sessionId: createSessionId(), storage: localStorage }) };
+  root.querySelector("[data-lyrics-use-brief]").checked = studio.musicLyricsUseBrief;
   const durationSlider = root.querySelector("[data-duration-slider]");
   durationSlider.value = String(studio.durationSeconds);
   durationSlider.style.setProperty("--h3ps-range", `${(studio.durationSeconds - 1) / 19 * 100}%`);
@@ -2441,13 +2633,15 @@ function createStudio() {
   root.querySelectorAll("[data-system-prompt-back]").forEach((button) => button.addEventListener("click", () => {
     setSystemPromptEditorOpen(false);
   }));
-  root.querySelector("[data-music-prompt-toggle]").addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    const editor = root.querySelector("[data-music-prompt-editor]");
-    const opening = editor.hidden;
-    if (opening) await syncSystemPromptEditor("music3");
-    editor.hidden = !opening;
-    button.textContent = opening ? "Done" : "Edit";
+  root.querySelectorAll("[data-music-system-prompt-profile]").forEach((button) => button.addEventListener("click", () => {
+    setMusicSystemPromptProfile(button.dataset.musicSystemPromptProfile);
+    setMusicSystemPromptEditorOpen(true);
+  }));
+  root.querySelectorAll("[data-music-system-prompt-back]").forEach((button) => button.addEventListener("click", () => {
+    setMusicSystemPromptEditorOpen(false);
+  }));
+  root.querySelector("[data-music-system-prompt-toggle]").addEventListener("click", () => {
+    setMusicSystemPromptExpanded(!studio.musicSystemPromptExpanded);
   });
   root.querySelectorAll("[data-system-prompt]").forEach((textarea) => textarea.addEventListener("input", () => {
     const profile = textarea.dataset.systemPrompt;
@@ -2463,6 +2657,7 @@ function createStudio() {
     root.querySelector(`[data-system-prompt-reset="${profile}"]`).hidden = !custom;
     root.querySelector(`[data-system-prompt-count="${profile}"]`).textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
     resizeSystemPromptEditor(textarea);
+    syncMusicSystemPromptSummary();
   }));
   root.querySelectorAll("[data-system-prompt-reset]").forEach((button) => button.addEventListener("click", () => {
     const profile = button.dataset.systemPromptReset;
@@ -2470,7 +2665,9 @@ function createStudio() {
     saveCustomSystemPrompts(localStorage, studio.customSystemPrompts);
     syncSystemPromptEditor(profile);
     showToast("System Prompt reset", profile === "music3"
-      ? "Music 3 is using its complete built-in prompt rules."
+      ? "Music 3 Caption is using its built-in system prompt."
+      : profile === "music3_lyrics"
+      ? "Music 3 Lyrics is using its built-in system prompt."
       : `H3 Prompt Writer is using its default ${profile} instructions.`);
   }));
   root.querySelector("[data-thinking]").addEventListener("change", (event) => {
@@ -2487,6 +2684,10 @@ function createStudio() {
   root.querySelector("[data-music-lyrics]").addEventListener("input", () => {
     updateMusicLyricsCount();
     saveCurrentModeDraft();
+  });
+  root.querySelector("[data-lyrics-use-brief]").addEventListener("change", (event) => {
+    studio.musicLyricsUseBrief = event.target.checked;
+    saveUserPreferences(localStorage, studio);
   });
   root.querySelectorAll("[data-aspect]").forEach((button) => button.addEventListener("click", () => {
     studio.aspectRatio = button.dataset.aspect;
@@ -2615,6 +2816,25 @@ function createStudio() {
   root.querySelector("[data-refine-toggle]").addEventListener("click", () => toggleRefine(root.querySelector("[data-refine-panel]").hidden));
   root.querySelector("[data-refine-cancel]").addEventListener("click", () => toggleRefine(false));
   root.querySelector("[data-refine-submit]").addEventListener("click", submitRefinement);
+  root.querySelector("[data-lyrics-refine-toggle]").addEventListener("click", () => {
+    toggleLyricsRefine(root.querySelector("[data-lyrics-refine-panel]").hidden);
+  });
+  root.querySelector("[data-lyrics-refine-cancel]").addEventListener("click", cancelLyricsRefinement);
+  root.querySelector("[data-lyrics-refine-submit]").addEventListener("click", submitLyricsRefinement);
+  root.querySelector("[data-lyrics-refine-restore]").addEventListener("click", () => {
+    if (studio.lyricsRestore == null) return;
+    const lyrics = root.querySelector("[data-music-lyrics]");
+    const previousLyrics = studio.lyricsRestore.lyrics;
+    lyrics.value = previousLyrics;
+    studio.lyricsRestore = null;
+    root.querySelector("[data-lyrics-refine-restore]").hidden = true;
+    updateMusicLyricsCount();
+    saveCurrentModeDraft();
+    showToast(
+      previousLyrics.trim() ? "Previous Lyrics restored" : "Generated Lyrics removed",
+      "The AI Lyrics change was discarded.",
+    );
+  });
   root.querySelector("[data-reference-insert-toggle]").addEventListener("pointerdown", (event) => event.preventDefault());
   root.querySelector("[data-reference-insert-toggle]").addEventListener("click", toggleReferenceInsert);
   root.querySelector("[data-reference-insert-popover]").addEventListener("pointerdown", (event) => event.preventDefault());
@@ -2708,12 +2928,15 @@ function createStudio() {
   renderMedia(studio.mode);
   renderPromptHighlights();
   syncSystemPromptEditors();
+  setMusicSystemPromptProfile(studio.musicSystemPromptProfile);
   refreshModels();
   return studio;
 }
 
 function openStudio() {
   const current = createStudio();
+  setMusicSystemPromptExpanded(false);
+  syncMusicSystemPromptSummary();
   current.root.classList.add("is-open");
   current.root.setAttribute("aria-hidden", "false");
   document.body.classList.add("h3ps-modal-open");
@@ -2829,7 +3052,8 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
-    if (event.target.closest("[data-refine-panel]")) submitRefinement();
+    if (event.target.closest("[data-lyrics-refine-panel]")) submitLyricsRefinement();
+    else if (event.target.closest("[data-refine-panel]")) submitRefinement();
     else startGenerationPreview();
   }
 });

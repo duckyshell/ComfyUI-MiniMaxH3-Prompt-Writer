@@ -15,6 +15,7 @@ const {
   SYSTEM_PROMPT_STORAGE_KEY,
   USER_PREFERENCES_STORAGE_KEY,
   buildGeneratePayload,
+  buildLyricsRefinePayload,
   buildRefinePayload,
   audioWasAdded,
   createStudioState,
@@ -179,6 +180,7 @@ test("user preferences persist only stable non-secret settings", () => {
     preferredDirectModelId: "direct-model.gguf",
     directContextProfile: "extended",
     directKvCache: "q8",
+    musicLyricsUseBrief: false,
     selectedModel: { id: "api::secret-connection::model", api_connection_id: "secret-connection" },
     apiProviderConfig: { api_key: "must-not-be-stored" },
     creativeBrief: "must-not-be-stored",
@@ -197,6 +199,7 @@ test("user preferences persist only stable non-secret settings", () => {
     direct_model_id: "direct-model.gguf",
     direct_context_profile: "extended",
     direct_kv_cache: "q8",
+    music_lyrics_use_brief: false,
   });
 });
 
@@ -225,6 +228,7 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     direct_model_id: null,
     direct_context_profile: "auto",
     direct_kv_cache: "auto",
+    music_lyrics_use_brief: true,
   });
 });
 
@@ -250,6 +254,7 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
   assert.equal(state.preferredDirectModelId, "direct-model.gguf");
   assert.equal(state.directContextProfile, "extended");
   assert.equal(state.directKvCache, "q8");
+  assert.equal(state.musicLyricsUseBrief, true);
   assert.equal(state.ollamaContextProfile, undefined);
   assert.equal(state.keepModelLoaded, false);
   assert.equal(state.thinking, false);
@@ -360,6 +365,7 @@ test("draft dirty state covers every mode", () => {
   assert.equal(isModeDraftDirty("T2VA", defaults, defaults), false);
   assert.equal(isModeDraftDirty("FL2VA", { ...defaults, brief: "Changed" }, defaults), true);
   assert.equal(isModeDraftDirty("Reference", { brief: "Changed", prompt: "Changed" }, defaults), true);
+  assert.equal(isModeDraftDirty("Music3", { ...defaults, lyrics: "Changed" }, { ...defaults, lyrics: "Default" }), true);
   assert.equal(isPersistedDraftMode("L2VA"), true);
   assert.equal(isPersistedDraftMode("Reference"), true);
 });
@@ -424,9 +430,11 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(state.audioSupported, false);
   assert.equal(state.settingsProvider, "external");
   assert.equal(state.settingsPromptProfile, "standard");
+  assert.equal(state.musicSystemPromptExpanded, false);
   assert.equal(systemPromptProfile("Reference"), "reference");
   assert.equal(systemPromptProfile("T2VA"), "standard");
   assert.equal(systemPromptProfile("Music3"), "music3");
+  assert.equal(systemPromptProfile("Music3Lyrics"), "music3_lyrics");
   assert.equal(currentSystemPromptOverride(state, "Reference"), "Custom reference");
 
   selectModelState(state, { id: "direct-model", family: "gguf", capabilities: { audio: true } });
@@ -708,24 +716,65 @@ test("Music 3 drafts and payload keep lyrics separate from H3 state", () => {
   const state = createStudioState({ sessionId: "music-session", storage });
   state.mode = "Music3";
   state.customSystemPrompts.music3 = "Return the requested custom music format.";
+  state.customSystemPrompts.music3_lyrics = "Return only the revised lyrics.";
   selectModelState(state, { id: "music-model", family: "gguf", capabilities: { audio: false } });
   const payload = buildGeneratePayload(state, { creativeBrief: "Dry funk at precisely 111 BPM without claps", lyrics: "[Chorus]\nOpen the gate", seed: 7 });
   assert.equal(payload.mode, "Music3");
   assert.equal(payload.lyrics, "[Chorus]\nOpen the gate");
   assert.equal(payload.creative_brief, "Dry funk at precisely 111 BPM without claps");
   assert.equal(payload.system_prompt_override, "Return the requested custom music format.");
+  const lyricsWithBrief = buildLyricsRefinePayload(state, {
+    currentLyrics: "[Verse]\nOld line",
+    instruction: "Make the line quieter",
+    useMusicBrief: true,
+    creativeBrief: "Quiet acoustic folk",
+    seed: 9,
+  });
+  assert.equal(lyricsWithBrief.target, "lyrics");
+  assert.equal(lyricsWithBrief.current_lyrics, "[Verse]\nOld line");
+  assert.equal(lyricsWithBrief.creative_brief, "Quiet acoustic folk");
+  assert.equal(lyricsWithBrief.use_music_brief, true);
+  assert.equal(lyricsWithBrief.system_prompt_override, "Return only the revised lyrics.");
+  const lyricsWithoutBrief = buildLyricsRefinePayload(state, {
+    currentLyrics: "",
+    instruction: "Write a compact hook",
+    useMusicBrief: false,
+    creativeBrief: "Must not be sent",
+    seed: 10,
+  });
+  assert.equal(lyricsWithoutBrief.creative_brief, "");
+  assert.equal(lyricsWithoutBrief.use_music_brief, false);
   assert.match(mainSource, /data-workspace="video"/);
   assert.match(mainSource, /data-workspace="music"/);
   assert.match(mainSource, /data-music-brief/);
   assert.match(mainSource, /data-music-lyrics/);
-  assert.match(mainSource, /data-music-prompt-toggle/);
-  assert.match(mainSource, /data-music-prompt-toggle[\s\S]{0,500}const button = event\.currentTarget[\s\S]{0,500}button\.textContent = opening \? "Done" : "Edit"/);
-  assert.match(mainSource, /data-system-prompt="music3"/);
-  assert.match(mainSource, /data-system-prompt-reset="music3"[^>]*hidden>Restore default/);
+  assert.doesNotMatch(mainSource, /data-music-prompt-toggle/);
+  assert.match(mainSource, /data-music-system-prompt-profile="music3"/);
+  assert.match(mainSource, /data-music-system-prompt-profile="music3_lyrics"/);
+  assert.match(mainSource, /data-music-system-prompt-toggle aria-expanded="false"/);
+  assert.match(mainSource, /data-music-system-prompt-summary>Default/);
+  assert.match(mainSource, /data-music-system-prompt-details hidden/);
+  assert.doesNotMatch(mainSource, /Prompt behavior · shared by all providers/);
+  assert.match(mainSource, /Object\.hasOwn\(studio\.customSystemPrompts, "music3"\)[\s\S]{0,140}Object\.hasOwn\(studio\.customSystemPrompts, "music3_lyrics"\)[\s\S]{0,100}"Custom"/);
+  assert.match(mainSource, /data-system-prompt="\$\{profile\}"/);
+  assert.match(mainSource, /musicSystemPromptPanelMarkup\("music3", "Caption"/);
+  assert.match(mainSource, /musicSystemPromptPanelMarkup\("music3_lyrics", "Lyrics"/);
+  assert.match(mainSource, /data-system-prompt-reset="\$\{profile\}" hidden>Restore default/);
   assert.match(mainSource, /### Global Metadata[\s\S]*### Vocal Details[\s\S]*### Arrangement/);
   assert.doesNotMatch(mainSource, /global_metadata:/);
   assert.match(mainSource, /Refine caption/);
   assert.match(mainSource, /Generated caption/);
+  assert.match(mainSource, /data-lyrics-refine-toggle>[\s\S]{0,80}Refine<\/button>/);
+  assert.match(mainSource, /Leave Lyrics empty to create new lyrics, or describe how to rewrite the existing lyrics\./);
+  assert.match(mainSource, /data-lyrics-use-brief checked/);
+  assert.doesNotMatch(mainSource, /data-(?:lyrics-)?refine-submit[^>]*>[\s\S]{0,80}Rewrite<\/button>/);
+  const requestIndex = mainSource.indexOf("const result = await refine(buildLyricsRefinePayload");
+  const lyricsAssignmentIndex = mainSource.indexOf("lyrics.value = result.prompt", requestIndex);
+  assert.ok(requestIndex >= 0 && lyricsAssignmentIndex > requestIndex);
+  assert.match(mainSource, /studio\.lyricsRestore = \{ lyrics: currentLyrics \}[\s\S]{0,180}lyrics\.value = result\.prompt/);
+  assert.doesNotMatch(mainSource.slice(requestIndex, lyricsAssignmentIndex + 500), /lyrics-refine-instruction[^\n]*\.value = ""/);
+  assert.match(mainSource, /restore\.textContent = currentLyrics\.trim\(\) \? "Restore previous" : "Remove generated"/);
+  assert.match(mainSource, /data-lyrics-refine-restore[\s\S]{0,700}const previousLyrics = studio\.lyricsRestore\.lyrics;[\s\S]{0,80}lyrics\.value = previousLyrics/);
 });
 
 test("active requests block add, reorder, and mode switching", () => {

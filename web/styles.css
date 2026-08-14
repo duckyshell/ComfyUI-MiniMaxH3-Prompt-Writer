@@ -416,6 +416,10 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-refine-submit { display: inline-flex; align-items: center; gap: 6px; height: 29px; padding: 0 9px; border: 1px solid #545a65; border-radius: 6px; background: #2b2f36; color: #e5e7ea !important; font-size: 9.5px; font-weight: 620; cursor: pointer; }
 .h3ps-refine-submit:hover { border-color: rgba(255,115,86,.58); background: #333740; }
 .h3ps-refine-submit:disabled { opacity: .62; cursor: wait; }
+.h3ps-lyrics-refine-tools { display:flex; align-items:center; margin-top:8px; }
+.h3ps-lyrics-refine-tools .h3ps-secondary-button { height:30px; padding-inline:10px; font-size:10px; }
+.h3ps-lyrics-brief-option { display:inline-flex; align-items:center; gap:6px; color:var(--h3ps-muted); font-size:9px; cursor:pointer; }
+.h3ps-lyrics-brief-option input { width:13px; height:13px; margin:0; accent-color:var(--h3ps-accent); }
 
 .h3ps-footer { display: flex; align-items: center; justify-content: space-between; padding: 0 19px 0 21px; border-top: 1px solid var(--h3ps-border); background: #17191e; }
 .h3ps-footer-memory-actions, .h3ps-prompt-lifecycle-actions { display:flex; align-items:center; gap:6px; }

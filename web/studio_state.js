@@ -24,7 +24,9 @@ export function audioWasAdded(previousAssets, nextAssets) {
 export function isModeDraftDirty(mode, draft, defaults) {
   return isPersistedDraftMode(mode)
     && Boolean(draft)
-    && (draft.brief !== defaults.brief || draft.prompt !== defaults.prompt);
+    && (draft.brief !== defaults.brief
+      || draft.prompt !== defaults.prompt
+      || (mode === "Music3" && draft.lyrics !== defaults.lyrics));
 }
 
 export function resetModeDraft(drafts, mode) {
@@ -74,6 +76,7 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       direct_model_id: typeof value.direct_model_id === "string" && value.direct_model_id ? value.direct_model_id : null,
       direct_context_profile: CONTEXT_PROFILES.includes(value.direct_context_profile) ? value.direct_context_profile : "auto",
       direct_kv_cache: KV_CACHES.includes(value.direct_kv_cache) ? value.direct_kv_cache : "auto",
+      music_lyrics_use_brief: value.music_lyrics_use_brief !== false,
     };
   } catch {
     return null;
@@ -90,6 +93,7 @@ export function saveUserPreferences(storage, state) {
     direct_model_id: typeof state.preferredDirectModelId === "string" && state.preferredDirectModelId ? state.preferredDirectModelId : null,
     direct_context_profile: CONTEXT_PROFILES.includes(state.directContextProfile) ? state.directContextProfile : "auto",
     direct_kv_cache: KV_CACHES.includes(state.directKvCache) ? state.directKvCache : "auto",
+    music_lyrics_use_brief: state.musicLyricsUseBrief !== false,
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -166,12 +170,17 @@ export function saveCustomSystemPrompts(storage, prompts) {
 }
 
 export function systemPromptProfile(mode) {
+  if (mode === "Music3Lyrics") return "music3_lyrics";
   if (mode === "Music3") return "music3";
   return mode === "Reference" || mode === "reference" ? "reference" : "standard";
 }
 
 export function currentSystemPromptOverride(state, mode = state.mode) {
   const profile = systemPromptProfile(mode);
+  return systemPromptOverride(state, profile);
+}
+
+export function systemPromptOverride(state, profile) {
   return Object.hasOwn(state.customSystemPrompts, profile)
     ? state.customSystemPrompts[profile]
     : null;
@@ -282,6 +291,25 @@ export function buildRefinePayload(state, { currentPrompt, instruction, creative
   return payload;
 }
 
+export function buildLyricsRefinePayload(state, {
+  currentLyrics,
+  instruction,
+  useMusicBrief,
+  creativeBrief,
+  seed,
+}) {
+  return {
+    ...sharedInferencePayload(state),
+    target: "lyrics",
+    current_lyrics: currentLyrics,
+    instruction,
+    use_music_brief: useMusicBrief,
+    creative_brief: useMusicBrief ? creativeBrief : "",
+    system_prompt_override: systemPromptOverride(state, "music3_lyrics"),
+    seed,
+  };
+}
+
 export function createStudioState({ sessionId, storage = globalThis.localStorage }) {
   const preferences = loadUserPreferences(storage);
   return {
@@ -300,12 +328,16 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     preferredDirectModelId: preferences?.direct_model_id || null,
     directContextProfile: preferences?.direct_context_profile || "auto",
     directKvCache: preferences?.direct_kv_cache || "auto",
+    musicLyricsUseBrief: preferences?.music_lyrics_use_brief !== false,
     settingsPromptProfile: "standard",
+    musicSystemPromptProfile: "music3",
+    musicSystemPromptExpanded: false,
     ollamaAddModelOpen: false,
     promptResidency: { direct: null, ollama: [] },
     activeRequestFamily: null,
     activeRequestModelId: null,
     requestBusy: false,
+    lyricsRequestBusy: false,
     toastTimer: null,
     statusTimer: null,
     lifecycleDotCount: 0,
@@ -344,6 +376,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     ggufRuntimeDiagnosticsLoading: false,
     runtimeWarningShown: false,
     refineRestore: null,
+    lyricsRestore: null,
     lastModelPrompt: null,
     lastModelMeta: null,
     guides: [],

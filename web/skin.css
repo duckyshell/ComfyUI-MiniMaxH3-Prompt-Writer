@@ -1196,59 +1196,69 @@
 .h3ps-music-inputs .h3ps-brief textarea { min-height: 150px; max-height: 240px; }
 .h3ps-music-inputs .h3ps-lyrics { margin-top: 20px; }
 .h3ps-music-inputs .h3ps-lyrics textarea { min-height: 190px; max-height: 330px; }
-.h3ps-music-prompt-rules {
-  margin-top: 18px;
+.h3ps-lyrics-refine { margin-top: 8px; }
+.h3ps-music-system-prompt {
+  margin-top: 22px;
   border-top: 1px solid #202025;
   border-bottom: 1px solid #202025;
 }
-.h3ps-music-prompt-rules > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 48px;
+.h3ps-music-system-prompt-toggle {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  width:100%;
+  min-height:48px;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--h3ps-text);
+  cursor:pointer;
 }
-.h3ps-music-prompt-rules > header span { display: flex; align-items: center; gap: 10px; }
-.h3ps-music-prompt-rules > header strong { color: var(--h3ps-text); font-size: 11px; font-weight: 550; }
-.h3ps-music-prompt-rules > header small {
-  color: var(--h3ps-dim);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 9px;
+.h3ps-music-system-prompt-toggle > strong { font-size:11px; font-weight:580; }
+.h3ps-music-system-prompt-toggle > span { display:flex; align-items:center; gap:9px; }
+.h3ps-music-system-prompt-toggle em {
+  color:var(--h3ps-dim);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:9px;
+  font-style:normal;
 }
-.h3ps-music-prompt-rules > header button,
-.h3ps-music-prompt-rules footer button {
-  border: 0;
-  background: transparent;
-  color: var(--h3ps-muted);
-  font-size: 10px;
-  cursor: pointer;
+.h3ps-music-system-prompt-toggle svg { color:#595961; transition:transform .16s ease; }
+.h3ps-music-system-prompt-toggle.is-open svg { transform:rotate(90deg); }
+.h3ps-music-system-prompt-toggle:hover > strong { color:#fff; }
+.h3ps-music-system-prompt > [data-music-system-prompt-details] { padding:0 0 12px; }
+.h3ps-music-system-prompt > [data-music-system-prompt-details][hidden] { display:none; }
+.h3ps-music-system-prompt .h3ps-system-prompt-overview { max-width:none; }
+.h3ps-music-system-prompt .h3ps-system-prompt-editor { max-width:none; }
+.h3ps-music-system-prompt .h3ps-system-prompt-panel > p {
+  margin-bottom:10px;
+  color:var(--h3ps-dim);
+  font-size:10px;
+  line-height:1.5;
 }
-.h3ps-music-prompt-rules > header button:hover,
-.h3ps-music-prompt-rules footer button:hover { color: var(--h3ps-text); }
-.h3ps-music-prompt-rules > div[hidden] { display: none; }
-.h3ps-music-prompt-rules textarea {
-  width: 100%;
-  min-height: 230px;
-  max-height: 360px;
-  padding: 12px 13px;
-  border-color: #26262b;
-  border-radius: 8px;
-  background: #0c0c0e;
-  color: #d5d5da;
-  font-size: 10.5px;
-  line-height: 1.55;
-  resize: vertical;
+.h3ps-music-system-prompt textarea {
+  width:100%;
+  min-height:170px;
+  height:170px;
+  max-height:280px;
+  resize:vertical;
+  overflow-y:auto;
+  padding:12px 13px;
+  border:1px solid #26262b;
+  border-radius:8px;
+  outline:none;
+  background:#0c0c0e;
+  color:#d5d5da;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:10.5px;
+  line-height:1.55;
+  scrollbar-width:thin;
+  scrollbar-color:#34343a transparent;
 }
-.h3ps-music-prompt-rules textarea:focus { border-color: rgba(232, 97, 60, .4); box-shadow: none; }
-.h3ps-music-prompt-rules footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 38px;
-}
-.h3ps-music-prompt-rules footer small {
-  color: #494951;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 9px;
+.h3ps-music-system-prompt textarea:focus { border-color:rgba(232,97,60,.4); box-shadow:none; }
+.h3ps-music-system-prompt textarea:disabled { opacity:.45; }
+.h3ps-system-prompt-card textarea::-webkit-resizer,
+.h3ps-music-system-prompt textarea::-webkit-resizer {
+  background:linear-gradient(135deg, transparent 0 58%, #44444b 59% 66%, transparent 67% 74%, #55555d 75% 82%, transparent 83%) bottom 2px right 2px / 7px 7px no-repeat;
 }
 
 @media (max-width: 760px) {

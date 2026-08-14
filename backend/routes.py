@@ -10,7 +10,7 @@ from uuid import uuid4
 from aiohttp import web
 from server import PromptServer
 
-from .assembly import AssemblyError, assemble_refinement, assemble_request
+from .assembly import AssemblyError, assemble_lyrics_request, assemble_refinement, assemble_request
 from .catalog import discover_models_with_diagnostics, find_model, model_setup_catalog
 from .devlog import DEVELOPER_MODE, LOG_PATH, PeakVRAMMonitor, gpu_memory_snapshot, write_event
 from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
@@ -316,7 +316,7 @@ async def get_system_prompt(request: web.Request) -> web.Response:
         return _error(error.code, error.message, status=404)
     return web.json_response({
         "mode": mode,
-        "profile": "music3" if mode == "Music3" else "reference" if mode == "Reference" else "standard",
+        "profile": "music3_lyrics" if mode == "Music3Lyrics" else "music3" if mode == "Music3" else "reference" if mode == "Reference" else "standard",
         "system_prompt": prompt,
     })
 
@@ -506,13 +506,18 @@ async def refine(request: web.Request) -> web.Response:
     body = await _json_body(request)
     if body is None:
         return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
-    missing = [key for key in ("current_prompt", "instruction", "model_id", "session_id", "mode") if not body.get(key)]
+    lyrics_request = body.get("mode") == "Music3" and body.get("target") == "lyrics"
+    required = ("model_id", "session_id", "mode") if lyrics_request else ("current_prompt", "instruction", "model_id", "session_id", "mode")
+    missing = [key for key in required if not body.get(key)]
     if missing:
         return _error("INVALID_REQUEST", "Required fields are missing.", status=400, details={"fields": missing})
     if STATE["active_request_id"] is not None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
     try:
-        assembled = assemble_refinement(body, GENERATION_CACHE.get(_cache_key(body["session_id"], body["mode"])))
+        assembled = assemble_lyrics_request(body) if lyrics_request else assemble_refinement(
+            body,
+            GENERATION_CACHE.get(_cache_key(body["session_id"], body["mode"])),
+        )
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
     try:
@@ -547,10 +552,11 @@ async def refine(request: web.Request) -> web.Response:
     vram_monitor = PeakVRAMMonitor()
     vram_monitor.start()
     STATE.update({"phase": "loading_model", "active_request_id": request_id, "selected_model_id": model["id"], "selected_model_family": model["family"]})
+    operation = "refine_lyrics" if lyrics_request else "refine"
     write_event(
         "request_started",
         request_id=request_id,
-        operation="refine",
+        operation=operation,
         model={"id": model["id"], "name": model["name"], "family": model["family"], "format": model.get("format")},
         thinking=body.get("thinking", False),
         seed=body.get("seed"),
@@ -562,7 +568,7 @@ async def refine(request: web.Request) -> web.Response:
 
     def on_phase(phase: str) -> None:
         STATE.update({"phase": phase})
-        write_event("phase", request_id=request_id, operation="refine", phase=phase, elapsed_seconds=round(time.perf_counter() - request_started, 3))
+        write_event("phase", request_id=request_id, operation=operation, phase=phase, elapsed_seconds=round(time.perf_counter() - request_started, 3))
 
     try:
         result = await asyncio.to_thread(
@@ -578,13 +584,15 @@ async def refine(request: web.Request) -> web.Response:
             runtime_plan=runtime_plan,
             on_phase=on_phase,
         )
+        if lyrics_request and len(result["prompt"]) > 4000:
+            raise ModelError("LYRICS_TOO_LONG", "The generated Lyrics exceed 4,000 characters. Shorten the request and try again.")
         total_seconds = round(time.perf_counter() - request_started, 3)
         peak_vram_mb = vram_monitor.stop()
         debug_input_sequence = result.pop("debug_input_sequence", None)
         write_event(
             "request_succeeded",
             request_id=request_id,
-            operation="refine",
+            operation=operation,
             total_seconds=total_seconds,
             peak_vram_mb=peak_vram_mb,
             metrics={key: result[key] for key in ("input_tokens", "output_tokens", "generation_seconds", "media_processing_seconds", "visual_input_count", "video_frame_count", "video_sheet_count", "estimated_input_tokens", "reserved_output_tokens", "vision_budget_applied", "thinking_fallback", "thinking_attempt_tokens", "primary_finish_reason", "format_repair_attempted", "format_repair_applied", "format_repair_reason", "format_repair_failure", "format_repair_method", "format_repair_multimodal", "format_repair_tokens", "tokens_per_second", "cold_start", "model_load_seconds", "context_profile", "context_tokens", "kv_cache", "max_output_tokens", "thinking_budget_reduced", "prompt_audit", "api_provider", "provider_request_count", "usage_source", "provider_request_ids", "provider_cost_usd", "upstream_providers") if key in result},
@@ -604,7 +612,7 @@ async def refine(request: web.Request) -> web.Response:
         write_event(
             "request_failed",
             request_id=request_id,
-            operation="refine",
+            operation=operation,
             total_seconds=round(time.perf_counter() - request_started, 3),
             peak_vram_mb=peak_vram_mb,
             error={"code": error.code, "message": error.message, "details": error.details},

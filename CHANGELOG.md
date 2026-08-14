@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2 - 2026-08-14
+
+### Features
+
+- Added an optional Music 3 workspace for writing structured captions for the separate MiniMax Music 3 model.
+- Added saved Music Brief, optional Lyrics, editable generated captions, and separate Music 3 Prompt rules.
+- Added a Reference mode control for inserting current reference tags at the caret in the Creative Brief, Generated Prompt, or Refine instruction.
+
 ## 0.3.1 - 2026-08-13
 
 ### Fixes

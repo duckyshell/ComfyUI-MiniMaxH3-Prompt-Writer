@@ -27,6 +27,14 @@ Prompt Writer creates text. It does not add nodes, modify the graph, or queue a 
 
 Duration and aspect ratio become part of the request. The generated text remains editable before you copy it.
 
+## Music 3
+
+Music 3 is a separate workspace for the MiniMax Music 3 model. It writes structured music captions and does not generate H3 video prompts.
+
+Describe the intended sound, vocals, mood, arrangement, and production in **Music Brief**. **Lyrics** is optional. After generation, copy **Generated Caption** to the workflow **Caption** input and pass the original **Lyrics** to the workflow **Lyrics** input.
+
+Music 3 keeps its own saved Music Brief, Lyrics, and edited caption. **Prompt rules** edits the complete Music 3 system prompt. A custom value replaces the built-in default, and **Restore default** returns to the built-in rules.
+
 ## Writing a useful Creative Brief
 
 Write what should happen in ordinary language. You do not need to reproduce the official H3 prompt format. Writer builds that structure for you.
@@ -102,6 +110,8 @@ Uploading audio alone does not require its tag in the generated prompt. Only an 
 
 Every active picture and video is expected to be accounted for with its exact `<Picture N>` or `<Video N>` tag. An uploaded `<Audio N>` is active and allowed, but required only when the user explicitly uses that exact tag in the Creative Brief, current prompt, or Refine instruction.
 
+Use **Insert reference** beside **Refine** to add a current subject, picture, video, or audio tag at the caret in the Creative Brief, Generated Prompt, or Refine instruction.
+
 After generation, Writer checks the required format and exact media tags. A valid prompt is returned without being rewritten. If a visual reference tag is missing, Writer can make one correction using the same prepared media. If the correction does not pass the check, Writer keeps the original prompt and shows a warning instead of hiding the problem.
 
 ## Refine
@@ -130,22 +140,24 @@ Writer saves stable preferences in the browser used to open ComfyUI:
 - Ollama model tag;
 - External URL and optional Model ID;
 - API preset, URL, model ID, Gemini Thinking level, and Custom capabilities;
-- custom Standard and Reference system-prompt overrides.
+- custom Standard, Reference, and Music 3 system-prompt overrides.
 
 It never saves API keys. If a saved model no longer exists, discovery falls back without treating the missing model as a fatal error.
 
-Every mode, including Reference, keeps its own Creative Brief and editable prompt draft across a page reload. Uploaded media is session content and is not restored after reload.
+Every H3 mode keeps its own Creative Brief and editable prompt draft across a page reload. Music 3 separately keeps its Music Brief, Lyrics, and edited caption. Uploaded media is session content and is not restored after reload.
 
 In **Settings > Prompt behavior**, select **Restore default drafts**. The button changes to **Click again to confirm** for five seconds. Select it again to delete every saved mode draft. The current mode immediately returns to its current built-in Creative Brief and prompt; the other modes use their current built-in defaults when opened. This includes Reference. Media, provider settings, custom system prompts, and API credentials are not changed.
 
 ## System prompts
 
-Prompt behavior is shared by all providers and has two profiles:
+H3 prompt behavior is shared by all providers and has two profiles:
 
 - **Standard** for T2VA, I2VA, FL2VA, and L2VA;
 - **Reference** for Reference mode.
 
 Editing a profile creates an override of the built-in H3 instruction. It does not replace the separate official MiniMax guide for the selected mode. Resetting an override returns to the current built-in system prompt; there are no separate Standard system prompts for each mode.
+
+Music 3 has separate **Prompt rules** in its workspace. These rules apply through the selected provider in the same way as the H3 profiles.
 
 ## Lifecycle controls
 

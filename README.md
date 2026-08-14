@@ -10,6 +10,11 @@ H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. St
 
 It is a ComfyUI UI extension, not a workflow node. It writes prompt text for your existing H3 workflow. It does not run MiniMax H3, change the graph, or queue a video.
 
+## What's new in v0.3.2
+
+- Added an optional Music 3 workspace for writing structured captions for the separate MiniMax Music 3 model.
+- Added a small Reference mode control for inserting current reference tags at the caret.
+
 ## What's new in v0.3
 
 - Redesigned Writer and Settings interface.

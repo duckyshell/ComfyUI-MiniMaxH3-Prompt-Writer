@@ -165,18 +165,41 @@ class ApiProviderBackendTests(unittest.TestCase):
             compatibility_profile=kwargs.get("compatibility_profile", "generic"),
         )
 
-    def test_custom_url_accepts_loopback_http_and_rejects_remote_http_or_metadata(self):
+    def test_custom_url_accepts_loopback_and_private_lan_http_but_requires_https_for_public_hosts(self):
         self.assertEqual(normalize_api_base_url("custom", self.base_url), self.base_url)
+        private_urls = (
+            "http://10.0.0.25:8000/v1",
+            "http://172.16.0.25:8000/v1",
+            "http://172.31.255.254:8000/v1",
+            "http://192.168.1.25:8000/v1",
+            "http://[fd12:3456:789a::25]:8000/v1",
+        )
+        for url in private_urls:
+            with self.subTest(url=url):
+                self.assertEqual(normalize_api_base_url("custom", url), url)
         self.assertEqual(normalize_api_base_url("custom", "https://example.com/v1/"), "https://example.com/v1")
-        with self.assertRaises(ModelError) as insecure:
-            normalize_api_base_url("custom", "http://example.com/v1")
-        self.assertEqual(insecure.exception.code, "API_BASE_URL_INSECURE")
-        with self.assertRaises(ModelError) as metadata:
-            normalize_api_base_url("custom", "https://169.254.169.254/latest")
-        self.assertEqual(metadata.exception.code, "API_BASE_URL_BLOCKED")
+        for url in ("http://example.com/v1", "http://172.32.0.1/v1", "http://192.0.2.25/v1"):
+            with self.subTest(url=url), self.assertRaises(ModelError) as insecure:
+                normalize_api_base_url("custom", url)
+            self.assertEqual(insecure.exception.code, "API_BASE_URL_INSECURE")
         with self.assertRaises(ModelError) as malformed_port:
             normalize_api_base_url("custom", "https://example.com:not-a-port/v1")
         self.assertEqual(malformed_port.exception.code, "API_BASE_URL_INVALID")
+
+    def test_custom_url_keeps_special_network_addresses_blocked(self):
+        blocked_urls = (
+            "https://169.254.169.254/latest",
+            "https://0.0.0.0/v1",
+            "https://224.0.0.1/v1",
+            "https://[fe80::1]/v1",
+            "https://[ff02::1]/v1",
+            "https://[::]/v1",
+            "https://metadata.google.internal/latest",
+        )
+        for url in blocked_urls:
+            with self.subTest(url=url), self.assertRaises(ModelError) as blocked:
+                normalize_api_base_url("custom", url)
+            self.assertEqual(blocked.exception.code, "API_BASE_URL_BLOCKED")
 
     def test_probe_keeps_key_server_side_and_normalizes_rich_model_metadata(self):
         result = self.backend.probe({

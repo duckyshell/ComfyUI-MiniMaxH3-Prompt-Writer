@@ -30,6 +30,12 @@ DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024
 GEMINI_MAX_REQUEST_BYTES = 20 * 1024 * 1024
 MAX_API_CONNECTIONS = 32
 GEMINI_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
+PRIVATE_LAN_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "fc00::/7",
+))
 
 PRESETS: dict[str, dict[str, Any]] = {
     "openai": {
@@ -80,6 +86,16 @@ def _is_loopback(hostname: str) -> bool:
         return False
 
 
+def _is_private_lan(hostname: str) -> bool:
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return any(address.version == network.version and address in network for network in PRIVATE_LAN_NETWORKS)
+
+
 def normalize_api_base_url(preset: str, value: str | None = None) -> str:
     if preset not in PRESETS:
         raise ModelError("API_PRESET_INVALID", "Choose OpenAI, Gemini, OpenRouter, or Custom.")
@@ -95,10 +111,12 @@ def normalize_api_base_url(preset: str, value: str | None = None) -> str:
             "API_BASE_URL_INVALID",
             "The API base URL cannot contain credentials, a query, or a fragment.",
         )
-    if preset == "custom" and parsed.scheme == "http" and not _is_loopback(parsed.hostname):
+    if preset == "custom" and parsed.scheme == "http" and not (
+        _is_loopback(parsed.hostname) or _is_private_lan(parsed.hostname)
+    ):
         raise ModelError(
             "API_BASE_URL_INSECURE",
-            "Custom HTTP endpoints must use localhost. Use HTTPS for remote API providers.",
+            "Custom HTTP endpoints must use loopback or a private LAN address. Use HTTPS for public remote API providers.",
         )
     lowered_host = parsed.hostname.lower()
     if lowered_host in {"metadata.google.internal", "instance-data", "instance-data.ec2.internal"}:

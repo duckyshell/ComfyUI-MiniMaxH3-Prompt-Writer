@@ -173,6 +173,15 @@ def validate_media_capabilities(model_info: dict[str, Any], assembled: dict[str,
     required = {item["requires_capability"] for item in assembled["media_inputs"]}
     unsupported = sorted(name for name in required if model_info["capabilities"].get(name) is not True)
     if unsupported:
+        if model_info.get("family") == "external" and {"images", "video_frames"}.intersection(unsupported):
+            raise ModelError(
+                "EXTERNAL_VISION_REQUIRED",
+                "The External llama.cpp model is running in text-only mode and cannot analyze the attached images or video.",
+                {
+                    "capabilities": unsupported,
+                    "suggestion": "Restart llama-server with the matching mmproj, remove visual references, or select a vision-capable prompt model.",
+                },
+            )
         raise ModelError(
             "UNSUPPORTED_MEDIA",
             "The selected prompt model cannot analyze all media in the current manifest.",

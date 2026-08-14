@@ -328,12 +328,6 @@ class ExternalServerBackend:
         ) or (
             isinstance(capabilities, list) and "multimodal" in capabilities
         )
-        if not has_multimodal:
-            raise ModelError(
-                "EXTERNAL_VISION_UNAVAILABLE",
-                "The llama.cpp server does not report multimodal vision support. Start it with the matching mmproj.",
-                {"url": endpoint, "model": remote_model},
-            )
         context_tokens = self._context_tokens(props)
         name = remote_model.replace("\\", "/").rsplit("/", 1)[-1]
         return {
@@ -344,7 +338,7 @@ class ExternalServerBackend:
             "role": "external-server",
             "runtime_ready": True,
             "missing_dependencies": [],
-            "capabilities": {"images": True, "video_frames": True, "audio": False},
+            "capabilities": {"images": has_multimodal, "video_frames": has_multimodal, "audio": False},
             "thinking": True,
             "recommended_context": "external",
             "endpoint": endpoint,

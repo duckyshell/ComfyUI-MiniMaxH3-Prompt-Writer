@@ -778,6 +778,7 @@ test("Music 3 drafts and payload keep lyrics separate from H3 state", () => {
 });
 
 test("active requests block add, reorder, and mode switching", () => {
+  assert.match(mainSource, /error\.code === "EXTERNAL_VISION_REQUIRED"[\s\S]{0,160}showToast\("Vision model required"/);
   assert.match(mainSource, /data-add-media \$\{studio\.requestBusy \? "disabled" : ""\}/);
   assert.match(mainSource, /const draggable = studio\.requestBusy \? "false" : "true"/);
   assert.match(mainSource, /dragstart[\s\S]{0,180}if \(studio\.requestBusy\)/);

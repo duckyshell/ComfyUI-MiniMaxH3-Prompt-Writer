@@ -1176,6 +1176,8 @@ async function startGenerationPreview() {
       showToast("Generation cancelled", "The active request stopped.");
     } else if (error.code === "INSUFFICIENT_FREE_VRAM") {
       showVramRetry(error, startGenerationPreview);
+    } else if (error.code === "EXTERNAL_VISION_REQUIRED") {
+      showToast("Vision model required", `${error.message} ${error.details?.suggestion || ""}`.trim());
     } else if (error.code === "CONTEXT_BUDGET_EXCEEDED" && error.details?.suggested_context_profile && studio.selectedModel?.family === "gguf") {
       const target = error.details.suggested_context_profile;
       const targetLabel = CONTEXT_LABELS[target] || target;

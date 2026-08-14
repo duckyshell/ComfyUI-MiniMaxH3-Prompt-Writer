@@ -18,6 +18,7 @@ class _FakeLlamaHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     last_completion = None
     slow_started = threading.Event()
+    vision = True
 
     def log_message(self, *_args):
         return
@@ -34,9 +35,10 @@ class _FakeLlamaHandler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._json({"status": "ok"})
         elif self.path == "/props":
-            self._json({"n_ctx": 16384, "modalities": {"vision": True, "audio": False}})
+            self._json({"n_ctx": 16384, "modalities": {"vision": type(self).vision, "audio": False}})
         elif self.path == "/v1/models":
-            self._json({"data": [{"id": "gemma-test.gguf", "capabilities": ["completion", "multimodal"]}]})
+            capabilities = ["completion", "multimodal"] if type(self).vision else ["completion"]
+            self._json({"data": [{"id": "gemma-test.gguf", "capabilities": capabilities}]})
         else:
             self._json({"error": {"message": "not found"}}, 404)
 
@@ -110,6 +112,7 @@ class ExternalServerBackendTests(unittest.TestCase):
     def setUp(self):
         _FakeLlamaHandler.last_completion = None
         _FakeLlamaHandler.slow_started.clear()
+        _FakeLlamaHandler.vision = True
         self.backend = ExternalServerBackend()
 
     def test_only_loopback_root_urls_are_accepted(self):
@@ -127,6 +130,66 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertEqual(model["server_context_tokens"], 16384)
         self.assertTrue(model["capabilities"]["images"])
         self.assertTrue(model["externally_managed"])
+
+    def test_probe_accepts_external_text_only_model(self):
+        _FakeLlamaHandler.vision = False
+
+        model = self.backend.probe_model({"url": self.url})
+
+        self.assertTrue(model["runtime_ready"])
+        self.assertFalse(model["capabilities"]["images"])
+        self.assertFalse(model["capabilities"]["video_frames"])
+
+    def test_text_only_external_model_generates_without_media(self):
+        _FakeLlamaHandler.vision = False
+        model = self.backend.probe_model({"url": self.url})
+        assembled = {
+            "messages": [{"role": "system", "content": "guide"}, {"role": "user", "content": "brief"}],
+            "media_inputs": [],
+            "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "brief"},
+        }
+        plan = self.backend.preflight(
+            model,
+            assembled,
+            context_profile="auto",
+            kv_cache="auto",
+            thinking=False,
+        )
+
+        self.backend.prepare_request()
+        result = self.backend.generate(
+            model,
+            assembled,
+            "external-text-test-session",
+            thinking=False,
+            seed=42,
+            unload_after=True,
+            runtime_plan=plan,
+        )
+
+        self.assertEqual(result["prompt"], "SERVER_OK")
+
+    def test_text_only_external_model_rejects_visual_media_with_actionable_error(self):
+        _FakeLlamaHandler.vision = False
+        model = self.backend.probe_model({"url": self.url})
+        assembled = {
+            "messages": [{"role": "user", "content": "brief"}],
+            "media_inputs": [{"requires_capability": "images"}],
+        }
+
+        with self.assertRaises(ModelError) as raised:
+            self.backend.generate(
+                model,
+                assembled,
+                "external-vision-test-session",
+                thinking=False,
+                seed=42,
+                unload_after=True,
+            )
+
+        self.assertEqual(raised.exception.code, "EXTERNAL_VISION_REQUIRED")
+        self.assertIn("text-only mode", raised.exception.message)
+        self.assertIn("matching mmproj", raised.exception.details["suggestion"])
 
     def test_remote_handler_uses_openai_multimodal_messages_and_thinking_flag(self):
         handler = _RemoteChatHandler(self.backend, self.url, "gemma-test.gguf")

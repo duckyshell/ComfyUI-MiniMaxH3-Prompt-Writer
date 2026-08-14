@@ -16,7 +16,7 @@ class GGUFBackend:
         self.model = None
         self.chat_handler = None
         self.model_id: str | None = None
-        self.runtime_signature: tuple[str, int, str] | None = None
+        self.runtime_signature: tuple[str, int, str, str] | None = None
         self.cancel_event = threading.Event()
         self.force_unload_event = threading.Event()
         self.lock = threading.RLock()
@@ -66,8 +66,15 @@ class GGUFBackend:
         except ContextPlanError as error:
             raise ModelError(error.code, error.message, error.details) from error
 
-    def load(self, model_info: dict[str, Any], runtime_plan: dict[str, Any]) -> None:
-        signature = (model_info["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"])
+    def load(
+        self,
+        model_info: dict[str, Any],
+        runtime_plan: dict[str, Any],
+        *,
+        text_only: bool = False,
+    ) -> None:
+        runtime_kind = "text" if text_only else "multimodal"
+        signature = (model_info["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"], runtime_kind)
         if self.model is not None and self.runtime_signature == signature:
             return
         if not model_info.get("runtime_ready", True):
@@ -79,27 +86,29 @@ class GGUFBackend:
         self.unload()
         try:
             from llama_cpp import GGML_TYPE_F16, GGML_TYPE_Q8_0, Llama
-            from llama_cpp.llama_chat_format import Gemma4ChatHandler
 
             kv_types = {"q8": GGML_TYPE_Q8_0, "f16": GGML_TYPE_F16}
             kv_type = kv_types[runtime_plan["kv_cache"]]
+            llama_options = {
+                "model_path": model_info["path"],
+                "n_gpu_layers": -1,
+                "n_ctx": runtime_plan["context_tokens"],
+                "n_batch": 512,
+                "flash_attn": True,
+                "type_k": kv_type,
+                "type_v": kv_type,
+                "verbose": False,
+            }
+            if not text_only:
+                from llama_cpp.llama_chat_format import Gemma4ChatHandler
 
-            self.chat_handler = Gemma4ChatHandler(
-                clip_model_path=model_info["projector"],
-                verbose=False,
-                use_gpu=True,
-            )
-            self.model = Llama(
-                model_path=model_info["path"],
-                chat_handler=self.chat_handler,
-                n_gpu_layers=-1,
-                n_ctx=runtime_plan["context_tokens"],
-                n_batch=512,
-                flash_attn=True,
-                type_k=kv_type,
-                type_v=kv_type,
-                verbose=False,
-            )
+                self.chat_handler = Gemma4ChatHandler(
+                    clip_model_path=model_info["projector"],
+                    verbose=False,
+                    use_gpu=True,
+                )
+                llama_options["chat_handler"] = self.chat_handler
+            self.model = Llama(**llama_options)
             self.model_id = model_info["id"]
             self.runtime_signature = signature
         except MemoryError as error:
@@ -148,12 +157,14 @@ class GGUFBackend:
                     kv_cache=kv_cache,
                     thinking=thinking,
                 )
-                signature = (model_info["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"])
+                text_only = assembled.get("input", {}).get("mode") == "Music3"
+                runtime_kind = "text" if text_only else "multimodal"
+                signature = (model_info["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"], runtime_kind)
                 cold_start = self.model is None or self.runtime_signature != signature
                 if on_phase:
                     on_phase("loading_model")
                 load_started = time.perf_counter()
-                self.load(model_info, runtime_plan)
+                self.load(model_info, runtime_plan, text_only=text_only)
                 load_seconds = time.perf_counter() - load_started
                 if self.cancel_event.is_set():
                     raise ModelError("GENERATION_CANCELLED", "Generation was cancelled after model loading.")
@@ -175,16 +186,21 @@ class GGUFBackend:
                     seed: int | None,
                     thinking: bool,
                 ) -> dict[str, Any]:
+                    options = {
+                        "messages": messages,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "top_k": top_k,
+                        "max_tokens": max_tokens,
+                        "seed": seed,
+                        "logits_processor": logits_processors,
+                    }
+                    if text_only:
+                        return self.model.create_chat_completion(**options)
                     return self.chat_handler(
                         llama=self.model,
-                        messages=messages,
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        max_tokens=max_tokens,
-                        seed=seed,
-                        logits_processor=logits_processors,
                         enable_thinking=thinking,
+                        **options,
                     )
 
                 result = run_h3_pipeline(

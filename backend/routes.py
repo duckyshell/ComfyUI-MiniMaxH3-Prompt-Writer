@@ -27,7 +27,7 @@ from .version import VERSION
 
 
 ROUTE_PREFIX = "/h3studio"
-MODES = {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference"}
+MODES = {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"}
 STATE: dict[str, Any] = {
     "phase": "idle",
     "active_request_id": None,
@@ -316,7 +316,7 @@ async def get_system_prompt(request: web.Request) -> web.Response:
         return _error(error.code, error.message, status=404)
     return web.json_response({
         "mode": mode,
-        "profile": "reference" if mode == "Reference" else "standard",
+        "profile": "music3" if mode == "Music3" else "reference" if mode == "Reference" else "standard",
         "system_prompt": prompt,
     })
 
@@ -342,7 +342,8 @@ async def generate(request: web.Request) -> web.Response:
     if body is None:
         return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
 
-    missing = [key for key in ("mode", "creative_brief", "model_id", "session_id", "aspect_ratio", "duration_seconds") if not body.get(key)]
+    required = ("mode", "creative_brief", "model_id", "session_id") if body.get("mode") == "Music3" else ("mode", "creative_brief", "model_id", "session_id", "aspect_ratio", "duration_seconds")
+    missing = [key for key in required if not body.get(key)]
     if missing:
         return _error("INVALID_REQUEST", "Required fields are missing.", status=400, details={"fields": missing})
     if body["mode"] not in MODES:
@@ -426,6 +427,7 @@ async def generate(request: web.Request) -> web.Response:
             "duration_seconds": assembled["input"]["duration_seconds"],
             "aspect_ratio": assembled["input"]["aspect_ratio"],
             "creative_brief": assembled["input"]["creative_brief"],
+            "lyrics": assembled["input"].get("lyrics", ""),
         }
         write_event(
             "request_succeeded",

@@ -1136,3 +1136,111 @@
   .h3ps-settings-heading em { display: none; }
   .h3ps-system-prompt-overview { max-width: none; }
 }
+
+/* Music 3 workspace */
+.h3ps-workspaces {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 34px;
+  margin-left: 28px;
+  padding: 3px;
+  border: 1px solid #242429;
+  border-radius: 8px;
+  background: #0b0b0d;
+}
+.h3ps-workspaces button {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #777780;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.h3ps-workspaces button:hover { color: #bdbdc3; background: #121215; }
+.h3ps-workspaces button.is-active {
+  border-color: #34343a;
+  background: #17171b;
+  color: var(--h3ps-text);
+  box-shadow: inset 0 -2px var(--h3ps-accent);
+}
+.h3ps-header-meta { margin-left: auto; }
+.h3ps-root.is-music .h3ps-workspace-toolbar::before {
+  content: "Music 3";
+  display: flex;
+  align-items: center;
+  padding: 0 22px;
+  border-right: 1px solid #1c1c20;
+  color: #6d6d76;
+  font-size: 9.5px;
+  font-weight: 680;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+.h3ps-music-inputs { padding-top: 1px; }
+.h3ps-music-inputs .h3ps-brief:first-of-type { margin-top: 20px; }
+.h3ps-music-inputs .h3ps-brief textarea { min-height: 150px; max-height: 240px; }
+.h3ps-music-inputs .h3ps-lyrics { margin-top: 20px; }
+.h3ps-music-inputs .h3ps-lyrics textarea { min-height: 190px; max-height: 330px; }
+.h3ps-music-prompt-rules {
+  margin-top: 18px;
+  border-top: 1px solid #202025;
+  border-bottom: 1px solid #202025;
+}
+.h3ps-music-prompt-rules > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+}
+.h3ps-music-prompt-rules > header span { display: flex; align-items: center; gap: 10px; }
+.h3ps-music-prompt-rules > header strong { color: var(--h3ps-text); font-size: 11px; font-weight: 550; }
+.h3ps-music-prompt-rules > header small {
+  color: var(--h3ps-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+}
+.h3ps-music-prompt-rules > header button,
+.h3ps-music-prompt-rules footer button {
+  border: 0;
+  background: transparent;
+  color: var(--h3ps-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.h3ps-music-prompt-rules > header button:hover,
+.h3ps-music-prompt-rules footer button:hover { color: var(--h3ps-text); }
+.h3ps-music-prompt-rules > div[hidden] { display: none; }
+.h3ps-music-prompt-rules textarea {
+  width: 100%;
+  min-height: 230px;
+  max-height: 360px;
+  padding: 12px 13px;
+  border-color: #26262b;
+  border-radius: 8px;
+  background: #0c0c0e;
+  color: #d5d5da;
+  font-size: 10.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+.h3ps-music-prompt-rules textarea:focus { border-color: rgba(232, 97, 60, .4); box-shadow: none; }
+.h3ps-music-prompt-rules footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+}
+.h3ps-music-prompt-rules footer small {
+  color: #494951;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+}
+
+@media (max-width: 760px) {
+  .h3ps-workspaces { margin-left: 10px; }
+  .h3ps-workspaces button { padding-inline: 8px; }
+}

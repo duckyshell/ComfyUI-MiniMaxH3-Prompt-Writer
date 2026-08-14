@@ -4,6 +4,7 @@ from unittest.mock import patch
 from backend.assembly import AssemblyError, _final_contract, assemble_refinement, assemble_request
 from backend.system_prompts import (
     MAX_SYSTEM_PROMPT_CHARS,
+    MUSIC3_SYSTEM_WRAPPER,
     REFERENCE_SYSTEM_WRAPPER,
     SYSTEM_WRAPPER,
     SystemPromptError,
@@ -13,6 +14,15 @@ from backend.system_prompts import (
 
 
 class SystemPromptTests(unittest.TestCase):
+    def test_music_mode_has_a_dedicated_caption_contract(self):
+        self.assertEqual(system_prompt_for_mode("Music3"), MUSIC3_SYSTEM_WRAPPER)
+        self.assertIn("### Global Metadata, ### Vocal Details, ### Arrangement", MUSIC3_SYSTEM_WRAPPER)
+        self.assertIn("clear natural prose, not YAML", MUSIC3_SYSTEM_WRAPPER)
+        self.assertIn("Never quote, paraphrase, summarize, rewrite", MUSIC3_SYSTEM_WRAPPER)
+        self.assertIn("Explicit Music Brief requirements always override emotional inferences", MUSIC3_SYSTEM_WRAPPER)
+        self.assertIn("Use lyric text only as secondary context", MUSIC3_SYSTEM_WRAPPER)
+        self.assertIn("Do not transfer lyric-specific wording, imagery", MUSIC3_SYSTEM_WRAPPER)
+
     def test_standard_modes_share_one_default(self):
         self.assertEqual(system_prompt_for_mode("T2VA"), SYSTEM_WRAPPER)
         self.assertEqual(system_prompt_for_mode("FL2VA"), SYSTEM_WRAPPER)
@@ -34,6 +44,18 @@ class SystemPromptTests(unittest.TestCase):
         prompt, custom = resolve_system_prompt("Reference", "  Custom instruction.  ")
         self.assertEqual(prompt, "Custom instruction.")
         self.assertTrue(custom)
+
+    def test_custom_music_prompt_fully_replaces_the_builtin_contract(self):
+        assembled = assemble_request({
+            "session_id": "11111111-2222-4333-8444-555555555555",
+            "mode": "Music3",
+            "creative_brief": "A compact acoustic quartet with dry room sound.",
+            "system_prompt_override": "Return a concise custom music response.",
+        })
+        system_messages = [message["content"] for message in assembled["messages"] if message["role"] == "system"]
+        self.assertEqual(system_messages, ["Return a concise custom music response."])
+        self.assertNotIn("### Global Metadata", assembled["messages"][-1]["content"])
+        self.assertNotIn(MUSIC3_SYSTEM_WRAPPER, "\n".join(message["content"] for message in assembled["messages"]))
 
     def test_oversized_custom_prompt_is_rejected(self):
         with self.assertRaises(SystemPromptError) as raised:
@@ -168,6 +190,56 @@ class AssemblyReferenceManifestTests(unittest.TestCase):
             raised.exception.message,
             "<Audio 1> doesn't exist. Add the reference or remove the tag from the Revision instruction.",
         )
+
+
+class AssemblyMusic3Tests(unittest.TestCase):
+    session_id = "11111111-2222-4333-8444-555555555555"
+
+    def test_music_request_sends_full_lyrics_and_preserves_constraints(self):
+        assembled = assemble_request({
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "creative_brief": "Instrumental desert blues at precisely 103 BPM; omit handclaps.",
+            "lyrics": "[Verse]\nCopper light across the road\n[Chorus]\nThe horizon answers slowly",
+        })
+        self.assertEqual(assembled["input"]["lyrics"], "[Verse]\nCopper light across the road\n[Chorus]\nThe horizon answers slowly")
+        self.assertEqual(assembled["media_inputs"], [])
+        self.assertIn("precisely 103 BPM; omit handclaps", assembled["messages"][-1]["content"])
+        self.assertIn("Lyrics:\n[Verse]\nCopper light across the road", assembled["messages"][-1]["content"])
+        self.assertIn("[Chorus]\nThe horizon answers slowly", assembled["messages"][-1]["content"])
+
+    def test_music_request_represents_empty_lyrics_without_extra_policy(self):
+        assembled = assemble_request({
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "creative_brief": "Slow chamber pop with muted brass and close vocals.",
+        })
+        self.assertIn("Lyrics:\nNone provided.", assembled["messages"][-1]["content"])
+        self.assertNotIn("do not infer vocals", assembled["messages"][-1]["content"])
+
+    def test_music_request_preserves_full_lyrics_and_repeated_tag_order(self):
+        assembled = assemble_request({
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "creative_brief": "Tense art pop that opens into a quiet ending.",
+            "lyrics": "[Verse]\nFirst image\n[Chorus]\nSecond image\n[Verse]\nThird image\n[Outro - half time]\nLast image",
+        })
+        message = assembled["messages"][-1]["content"]
+        self.assertIn("[Verse]\nFirst image\n[Chorus]\nSecond image\n[Verse]\nThird image\n[Outro - half time]\nLast image", message)
+
+    def test_music_refine_preserves_the_three_section_contract(self):
+        assembled = assemble_refinement({
+            "session_id": self.session_id,
+            "mode": "Music3",
+            "creative_brief": "Airy synth soul with a low lead voice.",
+            "lyrics": "[Verse]\nA silver train leaves town",
+            "current_prompt": "### Global Metadata\n...\n### Vocal Details\n...\n### Arrangement\n...",
+            "instruction": "Let the bridge narrow to voice and electric piano.",
+        }, None)
+        content = assembled["messages"][-1]["content"]
+        self.assertIn("Lyrics:\n[Verse]\nA silver train leaves town", content)
+        self.assertIn("Current caption:\n### Global Metadata", content)
+        self.assertIn("Revise the current caption according to the revision instruction.", content)
 
 
 if __name__ == "__main__":

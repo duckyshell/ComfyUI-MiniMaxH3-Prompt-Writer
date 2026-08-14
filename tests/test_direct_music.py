@@ -1,0 +1,135 @@
+import sys
+import types
+import unittest
+from unittest.mock import patch
+
+from backend.models.contract import ModelError
+from backend.models.gguf_backend import GGUFBackend
+
+
+def runtime_plan():
+    return {
+        "context_profile": "standard",
+        "context_tokens": 16_384,
+        "kv_cache": "q8",
+        "max_output_tokens": 1_536,
+        "thinking_budget_reduced": False,
+    }
+
+
+def model_info(*, ready=True):
+    return {
+        "id": "verified-gemma4",
+        "path": "model.gguf",
+        "projector": "mmproj.gguf",
+        "runtime_ready": ready,
+        "missing_dependencies": [],
+        "capabilities": {"images": True, "video_frames": True, "audio": False},
+    }
+
+
+class _FakeModel:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.closed = False
+        self.__class__.instances.append(self)
+
+    def close(self):
+        self.closed = True
+
+
+class _Closer:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeVisionHandler:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self._exit_stack = _Closer()
+        self.__class__.instances.append(self)
+
+
+class DirectMusicRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        _FakeModel.instances = []
+        _FakeVisionHandler.instances = []
+
+    def fake_modules(self):
+        llama_cpp = types.ModuleType("llama_cpp")
+        llama_cpp.GGML_TYPE_F16 = 1
+        llama_cpp.GGML_TYPE_Q8_0 = 2
+        llama_cpp.Llama = _FakeModel
+        chat_format = types.ModuleType("llama_cpp.llama_chat_format")
+        chat_format.Gemma4ChatHandler = _FakeVisionHandler
+        return {"llama_cpp": llama_cpp, "llama_cpp.llama_chat_format": chat_format}
+
+    def test_text_only_load_skips_projector_but_h3_load_keeps_it(self):
+        backend = GGUFBackend()
+        with patch.dict(sys.modules, self.fake_modules()):
+            backend.load(model_info(), runtime_plan(), text_only=True)
+            text_model = _FakeModel.instances[-1]
+            self.assertNotIn("chat_handler", text_model.kwargs)
+            self.assertIsNone(backend.chat_handler)
+            self.assertEqual(_FakeVisionHandler.instances, [])
+            self.assertEqual(backend.runtime_signature[-1], "text")
+
+            backend.load(model_info(), runtime_plan(), text_only=False)
+            multimodal_model = _FakeModel.instances[-1]
+            self.assertTrue(text_model.closed)
+            self.assertIs(multimodal_model.kwargs["chat_handler"], backend.chat_handler)
+            self.assertEqual(len(_FakeVisionHandler.instances), 1)
+            self.assertEqual(backend.chat_handler.kwargs["clip_model_path"], "mmproj.gguf")
+            self.assertEqual(backend.runtime_signature[-1], "multimodal")
+
+    def test_text_only_load_keeps_verified_runtime_validation(self):
+        backend = GGUFBackend()
+        with self.assertRaises(ModelError) as raised:
+            backend.load(model_info(ready=False), runtime_plan(), text_only=True)
+        self.assertEqual(raised.exception.code, "MODEL_DEPENDENCY_MISSING")
+        self.assertIsNone(backend.model)
+
+    def test_generate_selects_text_only_only_for_music(self):
+        selections = []
+
+        def exercise(mode):
+            backend = GGUFBackend()
+
+            def fake_load(info, plan, *, text_only=False):
+                selections.append((mode, text_only))
+                backend.model = _FakeModel()
+                backend.model_id = info["id"]
+                backend.runtime_signature = (
+                    info["id"], plan["context_tokens"], plan["kv_cache"],
+                    "text" if text_only else "multimodal",
+                )
+
+            assembled = {
+                "messages": [{"role": "user", "content": "brief"}],
+                "media_inputs": [],
+                "input": {"mode": mode, "duration_seconds": None, "creative_brief": "brief"},
+            }
+            with (
+                patch.object(backend, "load", side_effect=fake_load),
+                patch.object(backend, "_logits_processors", return_value=[]),
+                patch("backend.models.gguf_backend.run_h3_pipeline", return_value={"prompt": "result"}),
+            ):
+                backend.generate(
+                    model_info(), assembled, "session",
+                    thinking=False, seed=1, unload_after=False, runtime_plan=runtime_plan(),
+                )
+
+        exercise("Music3")
+        exercise("T2VA")
+        self.assertEqual(selections, [("Music3", True), ("T2VA", False)])
+
+
+if __name__ == "__main__":
+    unittest.main()

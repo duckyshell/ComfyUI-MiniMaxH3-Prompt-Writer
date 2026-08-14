@@ -5,12 +5,12 @@ export const API_PROVIDER_STORAGE_KEY = "h3ps-api-provider-v1";
 export const USER_PREFERENCES_STORAGE_KEY = "h3ps-preferences-v1";
 export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
 
-const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference"];
+const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
 const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
 const PROVIDERS = ["direct", "external", "ollama", "api"];
 const CONTEXT_PROFILES = ["auto", "low", "standard", "extended"];
 const KV_CACHES = ["auto", "f16", "q8"];
-const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference"];
+const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
 
 export function isPersistedDraftMode(mode) {
   return DRAFT_MODES.includes(mode);
@@ -41,7 +41,9 @@ export function loadModeDrafts(storage = globalThis.localStorage) {
     return Object.fromEntries(DRAFT_MODES.flatMap((mode) => {
       const draft = value.drafts[mode];
       if (!draft || typeof draft.brief !== "string" || typeof draft.prompt !== "string") return [];
-      return [[mode, { brief: draft.brief.slice(0, 2000), prompt: draft.prompt.slice(0, 16000) }]];
+      const safeDraft = { brief: draft.brief.slice(0, 2000), prompt: draft.prompt.slice(0, 16000) };
+      if (mode === "Music3") safeDraft.lyrics = typeof draft.lyrics === "string" ? draft.lyrics.slice(0, 4000) : "";
+      return [[mode, safeDraft]];
     }));
   } catch {
     return {};
@@ -52,7 +54,9 @@ export function saveModeDrafts(storage, drafts) {
   const safeDrafts = Object.fromEntries(DRAFT_MODES.flatMap((mode) => {
     const draft = drafts?.[mode];
     if (!draft || typeof draft.brief !== "string" || typeof draft.prompt !== "string") return [];
-    return [[mode, { brief: draft.brief.slice(0, 2000), prompt: draft.prompt.slice(0, 16000) }]];
+    const safeDraft = { brief: draft.brief.slice(0, 2000), prompt: draft.prompt.slice(0, 16000) };
+    if (mode === "Music3") safeDraft.lyrics = typeof draft.lyrics === "string" ? draft.lyrics.slice(0, 4000) : "";
+    return [[mode, safeDraft]];
   }));
   storage?.setItem(MODE_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: safeDrafts }));
 }
@@ -162,6 +166,7 @@ export function saveCustomSystemPrompts(storage, prompts) {
 }
 
 export function systemPromptProfile(mode) {
+  if (mode === "Music3") return "music3";
   return mode === "Reference" || mode === "reference" ? "reference" : "standard";
 }
 
@@ -240,9 +245,9 @@ function sharedInferencePayload(state) {
   };
 }
 
-export function buildGeneratePayload(state, { creativeBrief, seed }) {
+export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }) {
   const directRuntime = state.selectedModel?.family === "gguf";
-  return {
+  const payload = {
     session_id: state.sessionId,
     mode: state.mode,
     duration_seconds: state.durationSeconds,
@@ -259,10 +264,12 @@ export function buildGeneratePayload(state, { creativeBrief, seed }) {
     seed,
     unload_after: !state.keepModelLoaded,
   };
+  if (state.mode === "Music3") payload.lyrics = lyrics;
+  return payload;
 }
 
-export function buildRefinePayload(state, { currentPrompt, instruction, creativeBrief, seed }) {
-  return {
+export function buildRefinePayload(state, { currentPrompt, instruction, creativeBrief, lyrics = "", seed }) {
+  const payload = {
     ...sharedInferencePayload(state),
     current_prompt: currentPrompt,
     instruction,
@@ -271,12 +278,15 @@ export function buildRefinePayload(state, { currentPrompt, instruction, creative
     creative_brief: creativeBrief,
     seed,
   };
+  if (state.mode === "Music3") payload.lyrics = lyrics;
+  return payload;
 }
 
 export function createStudioState({ sessionId, storage = globalThis.localStorage }) {
   const preferences = loadUserPreferences(storage);
   return {
     mode: preferences?.mode || "Reference",
+    lastVideoMode: preferences?.mode && preferences.mode !== "Music3" ? preferences.mode : "Reference",
     mediaFilter: "all",
     durationSeconds: preferences?.duration_seconds || 10,
     aspectRatio: preferences?.aspect_ratio || "16:9",

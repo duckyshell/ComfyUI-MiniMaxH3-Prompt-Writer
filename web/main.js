@@ -21,6 +21,7 @@ import {
 const EXTENSION_NAME = "minimax.h3.prompt.studio";
 const INSTALLATION_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/blob/main/docs/INSTALLATION.md";
 const TROUBLESHOOTING_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/blob/main/docs/TROUBLESHOOTING.md";
+const MUSIC3_GUIDE_URL = "https://github.com/MiniMax-AI/MiniMax-Music3/tree/main/skills/music-caption-rewriter";
 const ASPECT_RATIOS = [
   ["1:1", "Square"], ["2:3", "Portrait"], ["3:2", "Landscape"], ["3:4", "Portrait"],
   ["4:3", "Landscape"], ["9:16", "Vertical"], ["16:9", "Widescreen"], ["21:9", "Ultrawide"],
@@ -98,6 +99,33 @@ non_diegetic_music: A low electronic pulse at a slow tempo stops immediately whe
   },
 };
 const REFERENCE_DEFAULT_BRIEF = "Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.";
+const MUSIC3_DEFAULT_DRAFT = {
+  brief: "A reflective indie pop song that grows from close, fragile verses into a bright final chorus. Use warm piano, clean electric guitar, restrained drums, subtle analog texture, an intimate lead vocal and natural modern production.",
+  lyrics: `[Verse]
+Streetlights soften before dawn
+I breathe in and carry on
+
+[Chorus]
+A quiet spark becomes a flame
+I step ahead and speak my name`,
+  prompt: `### Global Metadata
+
+A reflective indie pop song at a steady mid-tempo pace, moving from tender uncertainty toward clear-eyed optimism. The production is modern and natural, led by warm piano, clean electric guitar, restrained live-feeling drums, rounded bass, and subtle analog texture. Dynamics should remain open and human rather than heavily compressed, with the final chorus providing the widest and brightest moment.
+
+### Vocal Details
+
+An intimate lead vocal begins close and lightly breathy in the verses, with precise phrasing and a vulnerable tone. The delivery gains confidence as the song develops without becoming theatrical. Soft doubles may reinforce selected phrases, while compact harmony layers open around the chorus and expand modestly in the final repeat. Reverb stays warm and controlled so the words remain present.
+
+### Arrangement
+
+[Intro] Warm piano establishes the harmony alone before a faint analog pad and clean guitar harmonics enter at the edges.
+
+[Verse] The lead vocal arrives over piano and sparse guitar arpeggios. Bass enters gradually, while percussion is limited to quiet pulse and texture.
+
+[Chorus] Restrained drums settle into a complete groove as bass, wider guitar voicings, and vocal harmonies lift the arrangement. The transition should feel earned rather than abrupt.
+
+[Final Chorus] The same core palette reaches its fullest scale with brighter piano octaves, broader harmonies, and a subtle sustained texture behind the band. End by letting the drums and bass fall away, leaving the opening piano color to resolve naturally.`,
+};
 
 const SAMPLE_PROMPT = `subject_definitions:
 <Subject 1> is the coffee shop in <Picture 1>, with a brick wall, orange sofa, neon sign, and wooden table.
@@ -191,11 +219,12 @@ function resizeSystemPromptEditor(textarea) {
 async function syncSystemPromptEditor(profile) {
   if (!studio) return;
   const textarea = studio.root.querySelector(`[data-system-prompt="${profile}"]`);
+  if (!textarea) return;
   const status = studio.root.querySelector(`[data-system-prompt-status="${profile}"]`);
   const summaryStatus = studio.root.querySelector(`[data-system-prompt-summary-status="${profile}"]`);
   const reset = studio.root.querySelector(`[data-system-prompt-reset="${profile}"]`);
   const count = studio.root.querySelector(`[data-system-prompt-count="${profile}"]`);
-  const requestMode = profile === "reference" ? "Reference" : "T2VA";
+  const requestMode = profile === "music3" ? "Music3" : profile === "reference" ? "Reference" : "T2VA";
   textarea.disabled = true;
   if (!studio.systemPromptDefaults[profile]) {
     try {
@@ -203,8 +232,8 @@ async function syncSystemPromptEditor(profile) {
       studio.systemPromptDefaults[result.profile] = result.system_prompt;
     } catch (error) {
       textarea.value = "";
-      status.textContent = "Unavailable";
-      summaryStatus.textContent = "Unavailable";
+      if (status) status.textContent = "Unavailable";
+      if (summaryStatus) summaryStatus.textContent = "Unavailable";
       showToast(error.code || "System Prompt unavailable", error.message, error.details);
       return;
     }
@@ -212,15 +241,15 @@ async function syncSystemPromptEditor(profile) {
   const custom = Object.hasOwn(studio.customSystemPrompts, profile);
   textarea.value = custom ? studio.customSystemPrompts[profile] : studio.systemPromptDefaults[profile];
   textarea.disabled = false;
-  status.textContent = custom ? "Custom" : "Default";
-  summaryStatus.textContent = custom ? "Custom" : "Default";
+  if (status) status.textContent = custom ? "Custom" : "Default";
+  if (summaryStatus) summaryStatus.textContent = custom ? "Custom" : "Default";
   reset.hidden = !custom;
   count.textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
   resizeSystemPromptEditor(textarea);
 }
 
 function syncSystemPromptEditors() {
-  return Promise.all([syncSystemPromptEditor("standard"), syncSystemPromptEditor("reference")]);
+  return Promise.all([syncSystemPromptEditor("standard"), syncSystemPromptEditor("reference"), syncSystemPromptEditor("music3")]);
 }
 
 function setSystemPromptProfile(profile) {
@@ -248,7 +277,7 @@ function renderPromptHighlights() {
   const editor = studio.root.querySelector("[data-output]");
   const layer = studio.root.querySelector("[data-prompt-highlights]");
   if (!editor || !layer) return;
-  const tokens = /(?<dialogue>&lt;d&gt;[\s\S]*?&lt;\/d&gt;)|(?<media>@(?:Image|Video|Audio)\d+|&lt;(?:Picture|Video|Audio)\s+\d+&gt;)|(?<subject>&lt;Subject\s+\d+&gt;)|(?<section>^(?:subject_definitions|summary|retention_analysis|detailed_description|integrated_multimodal_description|overall_soundscape|non_diegetic_music):)|(?<shot>\[Shot\s+\d+\])|(?<time>\b(?:\d{1,2}:\d{2}(?:\.\d{1,3})?|\d+(?:\.\d+)?\s+seconds?)\b)/gim;
+  const tokens = /(?<dialogue>&lt;d&gt;[\s\S]*?&lt;\/d&gt;)|(?<media>@(?:Image|Video|Audio)\d+|&lt;(?:Picture|Video|Audio)\s+\d+&gt;)|(?<subject>&lt;Subject\s+\d+&gt;)|(?<section>^(?:(?:subject_definitions|summary|retention_analysis|detailed_description|integrated_multimodal_description|overall_soundscape|non_diegetic_music):|###\s+(?:Global Metadata|Vocal Details|Arrangement)\s*$))|(?<shot>\[(?:Shot\s+\d+|Intro|Verse(?:\s+\d+)?|Pre-Chorus|Chorus(?:\s+\d+)?|Bridge|Instrumental|Final Chorus|Outro)\])|(?<time>\b(?:\d{1,2}:\d{2}(?:\.\d{1,3})?|\d+(?:\.\d+)?\s+seconds?)\b)/gim;
   layer.innerHTML = escapeHtml(editor.value).replace(tokens, (match, ...args) => {
     const groups = args.at(-1);
     if (groups.media) {
@@ -340,6 +369,10 @@ function renderAsset(asset, index) {
 }
 
 function renderMedia(mode) {
+  if (mode === "Music3") {
+    studio.root.querySelectorAll("[data-mode]").forEach((button) => button.classList.remove("is-active"));
+    return;
+  }
   const data = MODES[mode];
   const assets = studio.assets.filter((asset) => asset.mode === mode);
   const media = studio.root.querySelector("[data-h3ps-media]");
@@ -662,6 +695,7 @@ function showToast(title, message, details = null, action = null, options = {}) 
 }
 
 function defaultModeDraft(mode) {
+  if (mode === "Music3") return MUSIC3_DEFAULT_DRAFT;
   if (mode === "Reference") {
     return { brief: REFERENCE_DEFAULT_BRIEF, prompt: SAMPLE_PROMPT };
   }
@@ -670,9 +704,14 @@ function defaultModeDraft(mode) {
 
 function currentDraftFields() {
   return {
-    brief: studio.root.querySelector(".h3ps-brief textarea").value,
+    brief: currentBriefTextarea().value,
+    lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
     prompt: studio.root.querySelector("[data-output]").value,
   };
+}
+
+function currentBriefTextarea() {
+  return studio.root.querySelector(studio.mode === "Music3" ? "[data-music-brief]" : "[data-video-brief]");
 }
 
 function saveCurrentModeDraft() {
@@ -688,22 +727,29 @@ function stashCurrentModeDraft() {
 
 function updateBriefLayout() {
   if (!studio) return;
-  const brief = studio.root.querySelector(".h3ps-brief textarea");
+  const brief = currentBriefTextarea();
   const compactHeight = window.innerHeight <= 800;
   const largeCanvas = window.innerWidth >= 3000 && window.innerHeight >= 1600;
   const minimumHeight = compactHeight ? 80 : largeCanvas ? 125 : 105;
   const maximumHeight = compactHeight ? 130 : largeCanvas ? 230 : 190;
-  studio.root.querySelector(".h3ps-char-count").textContent = `${brief.value.length.toLocaleString()} / 2,000`;
+  brief.closest(".h3ps-brief").querySelector(".h3ps-char-count").textContent = `${brief.value.length.toLocaleString()} / 2,000`;
   brief.style.height = "auto";
   brief.style.height = `${Math.min(maximumHeight, Math.max(minimumHeight, brief.scrollHeight))}px`;
   brief.style.overflowY = brief.scrollHeight > maximumHeight ? "auto" : "hidden";
+}
+
+function updateMusicLyricsCount() {
+  if (!studio) return;
+  const lyrics = studio.root.querySelector("[data-music-lyrics]");
+  lyrics.closest(".h3ps-brief").querySelector(".h3ps-char-count").textContent = `${lyrics.value.length.toLocaleString()} / 4,000`;
 }
 
 function restoreModeDraft(mode) {
   if (!studio) return;
   const draft = studio.modeDrafts[mode] || defaultModeDraft(mode);
   const output = studio.root.querySelector("[data-output]");
-  studio.root.querySelector(".h3ps-brief textarea").value = draft.brief;
+  currentBriefTextarea().value = draft.brief;
+  if (mode === "Music3") studio.root.querySelector("[data-music-lyrics]").value = draft.lyrics || "";
   output.value = draft.prompt;
   studio.lastModelPrompt = draft.prompt;
   studio.lastModelMeta = promptLengthMeta(draft.prompt);
@@ -711,8 +757,33 @@ function restoreModeDraft(mode) {
   studio.root.querySelector("[data-refine-restore]").hidden = true;
   studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = promptLengthMeta(output.value);
   updateBriefLayout();
+  updateMusicLyricsCount();
   renderPromptHighlights();
   syncModifiedState();
+}
+
+function syncWorkspace() {
+  if (!studio) return;
+  const music = studio.mode === "Music3";
+  studio.root.classList.toggle("is-music", music);
+  studio.root.querySelectorAll("[data-workspace]").forEach((button) => {
+    const selected = button.dataset.workspace === (music ? "music" : "video");
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  studio.root.querySelector("[data-video-modes]").hidden = music;
+  studio.root.querySelector("[data-video-inputs]").hidden = music;
+  studio.root.querySelector("[data-music-inputs]").hidden = !music;
+  studio.root.querySelector("[data-output-label]").textContent = music ? "Generated caption" : "Generated prompt";
+  studio.root.querySelector("[data-copy-label]").textContent = music ? "Copy caption" : "Copy prompt";
+  studio.root.querySelector("[data-generate-label]").textContent = music ? "Generate caption" : "Generate prompt";
+  studio.root.querySelector("[data-refine-media-note]").textContent = music ? "Lyrics stay separate" : "No media re-upload";
+  studio.root.querySelector("[data-refine-title]").textContent = music ? "Refine caption" : "Refine prompt";
+  studio.root.querySelector("[data-refine-helper]").textContent = music ? "Describe the musical change" : "Describe only what should change";
+  studio.root.querySelector("[data-refine-instruction]").placeholder = music
+    ? "For example: keep the verses sparse and let the final chorus open wider."
+    : "For example: make the camera movement slower and keep the ending more ambiguous.";
+  if (music) syncSystemPromptEditor("music3");
 }
 
 function disarmDraftDefaults() {
@@ -770,13 +841,14 @@ function setGenerationState(state, label, detail) {
   studio.requestBusy = busy;
   studio.root.querySelector("[data-clear-media]").disabled = busy;
   studio.root.querySelectorAll("[data-mode]").forEach((control) => { control.disabled = busy; });
+  studio.root.querySelectorAll("[data-workspace]").forEach((control) => { control.disabled = busy; });
   const comfyMemory = studio.root.querySelector("[data-comfy-memory-action]");
   comfyMemory.disabled = busy;
   comfyMemory.title = busy
     ? "Available after the active Writer request finishes"
     : "Unload models held by ComfyUI without clearing cached workflow results";
   button.classList.toggle("is-cancel", busy);
-  button.innerHTML = busy ? `<span class="h3ps-spinner"></span>Cancel` : `${icon("spark", 16)}Generate prompt`;
+  button.innerHTML = busy ? `<span class="h3ps-spinner"></span>Cancel` : `${icon("spark", 16)}<span data-generate-label>${studio.mode === "Music3" ? "Generate caption" : "Generate prompt"}</span>`;
   renderMedia(studio.mode);
   setSheetUpdating(false);
   syncLifecycleActions();
@@ -947,7 +1019,8 @@ async function startGenerationPreview() {
   }, 650);
   try {
     const result = await generate(buildGeneratePayload(studio, {
-      creativeBrief: studio.root.querySelector(".h3ps-brief textarea").value,
+      creativeBrief: currentBriefTextarea().value,
+      lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
       seed: newGenerationSeed(),
     }));
     const output = studio.root.querySelector("[data-output]");
@@ -972,7 +1045,7 @@ async function startGenerationPreview() {
       showToast("Prompt generated with a format warning", `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`, null, null, { dismissOnWorkspaceClick: true });
     } else {
       const reasoning = result.api_provider ? "Reasoning provider managed" : `Thinking ${result.thinking ? "on" : "off"}`;
-      showToast("Prompt generated", `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · ${reasoning}`);
+      showToast(studio.mode === "Music3" ? "Caption generated" : "Prompt generated", `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · ${reasoning}`);
     }
   } catch (error) {
     if (error.code === "GENERATION_CANCELLED") {
@@ -1962,7 +2035,8 @@ async function submitRefinement() {
     const result = await refine(buildRefinePayload(studio, {
       currentPrompt: previousPrompt,
       instruction,
-      creativeBrief: studio.root.querySelector(".h3ps-brief textarea").value.trim(),
+      creativeBrief: currentBriefTextarea().value.trim(),
+      lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
       seed: newGenerationSeed(),
     }));
     studio.refineRestore = {
@@ -2024,6 +2098,10 @@ function createStudio() {
           <img class="h3ps-brandmark" src="${studioBrandIcon}" alt="H3 Prompt Writer">
           <span><strong>H3 Prompt Writer</strong></span>
         </div>
+        <nav class="h3ps-workspaces" aria-label="Writer workspace">
+          <button type="button" data-workspace="video">H3 Video</button>
+          <button type="button" data-workspace="music">Music 3</button>
+        </nav>
         <div class="h3ps-header-meta">
           <div class="h3ps-guide-picker">
             <button class="h3ps-guide-button" type="button" data-guide-toggle>Official guides ${icon("chevron", 13)}</button>
@@ -2037,17 +2115,18 @@ function createStudio() {
       ${settingsMarkup(icon)}
 
       <div class="h3ps-workspace-toolbar" data-generate-view>
-        <nav class="h3ps-modes" aria-label="Generation mode">
+        <nav class="h3ps-modes" aria-label="Generation mode" data-video-modes>
           ${Object.keys(MODES).map((mode) => `<button type="button" role="tab" data-mode="${mode}">${mode}</button>`).join("")}
         </nav>
         <div class="h3ps-output-toolbar">
-          <span>Generated prompt</span>
+          <span data-output-label>Generated prompt</span>
           <div class="h3ps-output-badges"><button type="button" data-undo-edits hidden>Undo</button></div>
         </div>
       </div>
 
       <div class="h3ps-workspace" data-generate-view>
         <section class="h3ps-input-panel">
+          <div data-video-inputs>
           <div class="h3ps-section-heading">
             <span><small>Media</small><strong data-h3ps-mode-title></strong></span>
             <button class="h3ps-quiet-button" type="button" data-clear-media>Clear</button>
@@ -2062,9 +2141,33 @@ function createStudio() {
 
           <label class="h3ps-brief">
             <span><strong>Creative brief</strong><small>Describe what should happen in the video</small></span>
-            <textarea spellcheck="true">Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
+            <textarea spellcheck="true" data-video-brief>Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
             <small class="h3ps-char-count">0 / 2,000</small>
           </label>
+          </div>
+
+          <div class="h3ps-music-inputs" data-music-inputs hidden>
+            <label class="h3ps-brief">
+              <span><strong>Music brief</strong><small>Describe the sound, vocals, mood, arrangement or production</small></span>
+              <textarea spellcheck="true" data-music-brief>${MUSIC3_DEFAULT_DRAFT.brief}</textarea>
+              <small class="h3ps-char-count">0 / 2,000</small>
+            </label>
+            <label class="h3ps-brief h3ps-lyrics">
+              <span><strong>Lyrics</strong><small>Optional</small></span>
+              <textarea spellcheck="true" maxlength="4000" data-music-lyrics placeholder="[Verse 1]&#10;...&#10;&#10;[Chorus]&#10;..."></textarea>
+              <small class="h3ps-char-count">0 / 4,000</small>
+            </label>
+            <section class="h3ps-music-prompt-rules">
+              <header>
+                <span><strong>Prompt rules</strong><small data-system-prompt-status="music3">Default</small></span>
+                <button type="button" data-music-prompt-toggle>Edit</button>
+              </header>
+              <div data-music-prompt-editor hidden>
+                <textarea data-system-prompt="music3" maxlength="8000" spellcheck="true" disabled></textarea>
+                <footer><small data-system-prompt-count="music3">0 / 8,000</small><button type="button" data-system-prompt-reset="music3" hidden>Restore default</button></footer>
+              </div>
+            </section>
+          </div>
 
           ${generateModelSummaryMarkup(icon)}
         </section>
@@ -2078,10 +2181,10 @@ function createStudio() {
           </div>
           <div class="h3ps-refine" data-refine-panel hidden>
             <div class="h3ps-refine-heading">
-              <span><strong>Refine prompt</strong><small>Describe only what should change</small></span>
-              <em>No media re-upload</em>
+              <span><strong data-refine-title>Refine prompt</strong><small data-refine-helper>Describe only what should change</small></span>
+              <em data-refine-media-note>No media re-upload</em>
             </div>
-            <textarea rows="2" placeholder="For example: make the camera movement slower and keep the ending more ambiguous."></textarea>
+            <textarea rows="2" data-refine-instruction placeholder="For example: make the camera movement slower and keep the ending more ambiguous."></textarea>
             <div class="h3ps-refine-actions">
               <button type="button" class="h3ps-text-button" data-refine-restore hidden>Restore original</button>
               <span></span>
@@ -2091,7 +2194,7 @@ function createStudio() {
           </div>
           <div class="h3ps-output-actions">
             <button class="h3ps-secondary-button" type="button" title="Refine with local LLM" data-refine-toggle>${icon("spark", 15)} Refine</button>
-            <button class="h3ps-secondary-button" type="button" data-copy>${icon("copy", 15)} Copy prompt</button>
+            <button class="h3ps-secondary-button" type="button" data-copy>${icon("copy", 15)} <span data-copy-label>Copy prompt</span></button>
           </div>
         </section>
       </div>
@@ -2107,7 +2210,7 @@ function createStudio() {
             <label class="h3ps-toggle-control"><input type="checkbox" data-thinking><span></span>Thinking</label>
             <label class="h3ps-toggle-control" data-keep-loaded-control title="Keep the prompt model in VRAM for the next prompt"><input type="checkbox" data-keep-loaded><span></span>Keep model loaded</label>
           </span>
-          <button class="h3ps-primary-button" type="button" data-generate>${icon("spark", 16)}Generate prompt</button>
+          <button class="h3ps-primary-button" type="button" data-generate>${icon("spark", 16)}<span data-generate-label>Generate prompt</span></button>
         </div>
       </footer>
     </section>
@@ -2170,10 +2273,24 @@ function createStudio() {
   });
   root.querySelectorAll("[data-close-preview]").forEach((el) => el.addEventListener("click", closeVideoPreview));
   root.querySelectorAll("[data-close-image-preview]").forEach((el) => el.addEventListener("click", closeImagePreview));
+  root.querySelectorAll("[data-workspace]").forEach((button) => button.addEventListener("click", () => {
+    const nextMode = button.dataset.workspace === "music" ? "Music3" : studio.lastVideoMode;
+    if (nextMode === studio.mode) return;
+    stashCurrentModeDraft();
+    if (studio.mode !== "Music3") studio.lastVideoMode = studio.mode;
+    studio.mode = nextMode;
+    syncWorkspace();
+    restoreModeDraft(studio.mode);
+    renderMedia(studio.mode);
+    syncRuntimeSummary();
+    saveUserPreferences(localStorage, studio);
+  }));
   root.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
     if (button.dataset.mode === studio.mode) return;
     stashCurrentModeDraft();
     studio.mode = button.dataset.mode;
+    studio.lastVideoMode = studio.mode;
+    syncWorkspace();
     restoreModeDraft(studio.mode);
     renderMedia(studio.mode);
     syncRuntimeSummary();
@@ -2199,10 +2316,16 @@ function createStudio() {
   root.querySelector("[data-guide-toggle]").addEventListener("click", async () => {
     const menu = root.querySelector("[data-guide-menu]");
     menu.hidden = !menu.hidden;
-    if (menu.hidden || studio.guides.length) return;
+    if (menu.hidden) return;
+    if (studio.mode === "Music3") {
+      menu.innerHTML = `<a href="${MUSIC3_GUIDE_URL}" target="_blank" rel="noopener noreferrer"><strong>Music Caption Rewriter</strong><small>Official MiniMax Music 3 guide</small></a>`;
+      return;
+    }
     try {
-      const result = await getGuides();
-      studio.guides = result.guides;
+      if (!studio.guides.length) {
+        const result = await getGuides();
+        studio.guides = result.guides;
+      }
       menu.innerHTML = studio.guides.map((guide) => `<a href="${escapeHtml(guide.source_url)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(guide.filename)}</strong><small>${escapeHtml(guide.modes.join(" · "))}</small></a>`).join("");
     } catch (error) {
       showToast(error.code || "Guide unavailable", error.message, error.details);
@@ -2243,6 +2366,14 @@ function createStudio() {
   root.querySelectorAll("[data-system-prompt-back]").forEach((button) => button.addEventListener("click", () => {
     setSystemPromptEditorOpen(false);
   }));
+  root.querySelector("[data-music-prompt-toggle]").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const editor = root.querySelector("[data-music-prompt-editor]");
+    const opening = editor.hidden;
+    if (opening) await syncSystemPromptEditor("music3");
+    editor.hidden = !opening;
+    button.textContent = opening ? "Done" : "Edit";
+  });
   root.querySelectorAll("[data-system-prompt]").forEach((textarea) => textarea.addEventListener("input", () => {
     const profile = textarea.dataset.systemPrompt;
     const defaultPrompt = studio.systemPromptDefaults[profile] || "";
@@ -2250,8 +2381,10 @@ function createStudio() {
     else studio.customSystemPrompts[profile] = textarea.value;
     saveCustomSystemPrompts(localStorage, studio.customSystemPrompts);
     const custom = Object.hasOwn(studio.customSystemPrompts, profile);
-    root.querySelector(`[data-system-prompt-status="${profile}"]`).textContent = custom ? "Custom" : "Default";
-    root.querySelector(`[data-system-prompt-summary-status="${profile}"]`).textContent = custom ? "Custom" : "Default";
+    const status = root.querySelector(`[data-system-prompt-status="${profile}"]`);
+    const summaryStatus = root.querySelector(`[data-system-prompt-summary-status="${profile}"]`);
+    if (status) status.textContent = custom ? "Custom" : "Default";
+    if (summaryStatus) summaryStatus.textContent = custom ? "Custom" : "Default";
     root.querySelector(`[data-system-prompt-reset="${profile}"]`).hidden = !custom;
     root.querySelector(`[data-system-prompt-count="${profile}"]`).textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
     resizeSystemPromptEditor(textarea);
@@ -2261,7 +2394,9 @@ function createStudio() {
     delete studio.customSystemPrompts[profile];
     saveCustomSystemPrompts(localStorage, studio.customSystemPrompts);
     syncSystemPromptEditor(profile);
-    showToast("System Prompt reset", `H3 Prompt Writer is using its default ${profile} instructions.`);
+    showToast("System Prompt reset", profile === "music3"
+      ? "Music 3 is using its complete built-in prompt rules."
+      : `H3 Prompt Writer is using its default ${profile} instructions.`);
   }));
   root.querySelector("[data-thinking]").addEventListener("change", (event) => {
     studio.thinking = event.target.checked;
@@ -2269,13 +2404,15 @@ function createStudio() {
   root.querySelector("[data-keep-loaded]").addEventListener("change", (event) => {
     studio.keepModelLoaded = event.target.checked;
   });
-  const brief = root.querySelector(".h3ps-brief textarea");
   const updateBriefCount = () => {
     updateBriefLayout();
     saveCurrentModeDraft();
   };
-  brief.addEventListener("input", updateBriefCount);
-  updateBriefLayout();
+  root.querySelectorAll("[data-video-brief], [data-music-brief]").forEach((brief) => brief.addEventListener("input", updateBriefCount));
+  root.querySelector("[data-music-lyrics]").addEventListener("input", () => {
+    updateMusicLyricsCount();
+    saveCurrentModeDraft();
+  });
   root.querySelectorAll("[data-aspect]").forEach((button) => button.addEventListener("click", () => {
     studio.aspectRatio = button.dataset.aspect;
     const option = ASPECT_RATIOS.find(([value]) => value === studio.aspectRatio);
@@ -2430,7 +2567,7 @@ function createStudio() {
   root.querySelector("[data-copy]").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(root.querySelector("[data-output]").value);
-      showToast("Prompt copied", "The generated H3 prompt is on your clipboard.");
+      showToast(studio.mode === "Music3" ? "Caption copied" : "Prompt copied", studio.mode === "Music3" ? "The generated Music 3 caption is on your clipboard." : "The generated H3 prompt is on your clipboard.");
     } catch (error) {
       showToast("Copy failed", "Clipboard access was denied.", error.message);
     }
@@ -2479,6 +2616,7 @@ function createStudio() {
   root.querySelector("[data-include-endpoints]").addEventListener("change", (event) => {
     resampleCurrentVideo({ include_endpoints: event.target.checked });
   });
+  syncWorkspace();
   restoreModeDraft(studio.mode);
   renderMedia(studio.mode);
   renderPromptHighlights();

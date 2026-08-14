@@ -74,7 +74,7 @@ class _CharacterizedBackend(GGUFBackend):
         self.responses = responses
         self.unload_count = 0
 
-    def load(self, model_info, runtime_plan):
+    def load(self, model_info, runtime_plan, *, text_only=False):
         if self.model is None:
             self.model = _Tokenizer()
             self.chat_handler = _ChatHandler(self.responses)
@@ -83,6 +83,7 @@ class _CharacterizedBackend(GGUFBackend):
                 model_info["id"],
                 runtime_plan["context_tokens"],
                 runtime_plan["kv_cache"],
+                "text" if text_only else "multimodal",
             )
 
     def unload(self):

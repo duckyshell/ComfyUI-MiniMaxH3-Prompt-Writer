@@ -11,6 +11,7 @@ from .system_prompts import SystemPromptError, resolve_system_prompt
 
 ASPECT_RATIOS = {"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"}
 CAPABILITY_BY_TYPE = {"image": "images", "video": "video_frames", "audio": "audio"}
+MUSIC3_MODE = "Music3"
 
 
 class AssemblyError(Exception):
@@ -77,6 +78,8 @@ def _validated_generation_context(source: dict[str, Any]) -> tuple[float, str, s
 
 
 def _guide_messages(mode: str, system_prompt: str) -> list[dict[str, str]]:
+    if mode == MUSIC3_MODE:
+        return ([{"role": "system", "name": "music3_caption_contract", "content": system_prompt}] if system_prompt else [])
     guide = guide_for_mode(mode)
     messages = []
     if system_prompt:
@@ -137,6 +140,41 @@ def _final_contract(mode: str, task_text: str) -> str:
 
 def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     mode = _required_text(body, "mode", "Mode")
+    if mode == MUSIC3_MODE:
+        system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
+        brief = _required_text(body, "creative_brief", "Music brief")
+        if len(brief) > 2000:
+            raise AssemblyError("BRIEF_TOO_LONG", "Music brief cannot exceed 2,000 characters.")
+        lyrics = body.get("lyrics", "")
+        if not isinstance(lyrics, str):
+            raise AssemblyError("INVALID_REQUEST", "Lyrics must be text.", {"field": "lyrics"})
+        lyrics = lyrics.strip()
+        if len(lyrics) > 4000:
+            raise AssemblyError("LYRICS_TOO_LONG", "Lyrics cannot exceed 4,000 characters.")
+        try:
+            session_id = parse_session_id(body.get("session_id"))
+        except ValueError as error:
+            raise AssemblyError("INVALID_SESSION", "The session ID is invalid.") from error
+        user_content = (
+            f"Music brief:\n{brief}\n\n"
+            f"Lyrics:\n{lyrics or 'None provided.'}"
+        )
+        return {
+            "schema_version": 1,
+            "guide": {"id": "music3-caption-contract", "title": "MiniMax Music 3 Structured Caption"},
+            "input": {
+                "mode": mode,
+                "duration_seconds": None,
+                "aspect_ratio": None,
+                "creative_brief": brief,
+                "lyrics": lyrics,
+                "media_manifest": {"session_id": session_id, "mode": mode, "assets": [], "valid": True},
+            },
+            "media_inputs": [],
+            "supporting_guides": [],
+            "system_prompt": {"custom": system_prompt_custom, "content": system_prompt},
+            "messages": _guide_messages(mode, system_prompt) + [{"role": "user", "content": user_content}],
+        }
     if mode not in MODE_GUIDES:
         raise AssemblyError("INVALID_MODE", "The selected MiniMax mode is not supported.")
     system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
@@ -211,6 +249,47 @@ def assemble_refinement(
     cached_generation: dict[str, Any] | None,
 ) -> dict[str, Any]:
     mode = _required_text(body, "mode", "Mode")
+    if mode == MUSIC3_MODE:
+        system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
+        current_prompt = _required_text(body, "current_prompt", "Current caption")
+        instruction = _required_text(body, "instruction", "Revision instruction")
+        if len(current_prompt) > 20_000:
+            raise AssemblyError("PROMPT_TOO_LONG", "The current caption cannot exceed 20,000 characters.")
+        if len(instruction) > 2_000:
+            raise AssemblyError("INSTRUCTION_TOO_LONG", "The revision instruction cannot exceed 2,000 characters.")
+        try:
+            session_id = parse_session_id(body.get("session_id"))
+        except ValueError as error:
+            raise AssemblyError("INVALID_SESSION", "The session ID is invalid.") from error
+        context_source = cached_generation if cached_generation and cached_generation.get("mode") == mode else body
+        brief = _required_text(context_source, "creative_brief", "Music brief")
+        lyrics = context_source.get("lyrics", "")
+        lyrics = lyrics.strip() if isinstance(lyrics, str) else ""
+        user_content = (
+            f"Original music brief:\n{brief}\n\n"
+            f"Lyrics:\n{lyrics or 'None provided.'}\n\n"
+            f"Current caption:\n{current_prompt}\n\n"
+            f"Revision instruction:\n{instruction}\n\n"
+            "Revise the current caption according to the revision instruction."
+        )
+        return {
+            "schema_version": 1,
+            "guide": {"id": "music3-caption-contract", "title": "MiniMax Music 3 Structured Caption"},
+            "input": {
+                "mode": mode,
+                "duration_seconds": None,
+                "aspect_ratio": None,
+                "creative_brief": brief,
+                "lyrics": lyrics,
+                "current_prompt": current_prompt,
+                "instruction": instruction,
+                "media_manifest": {"session_id": session_id, "mode": mode, "assets": [], "valid": True},
+            },
+            "media_inputs": [],
+            "supporting_guides": [],
+            "system_prompt": {"custom": system_prompt_custom, "content": system_prompt},
+            "messages": _guide_messages(mode, system_prompt) + [{"role": "user", "content": user_content}],
+        }
     if mode not in MODE_GUIDES:
         raise AssemblyError("INVALID_MODE", "The selected MiniMax mode is not supported.")
     system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)

@@ -112,12 +112,12 @@ test("the first click outside the guides control closes its menu", () => {
 test("settings storage preserves the existing keys and schemas", () => {
   const storage = memoryStorage({
     [EXTERNAL_SERVER_STORAGE_KEY]: JSON.stringify({ url: "http://127.0.0.1:8080", model: "gemma.gguf" }),
-    [SYSTEM_PROMPT_STORAGE_KEY]: JSON.stringify({ standard: "Standard custom", reference: "Reference custom" }),
+    [SYSTEM_PROMPT_STORAGE_KEY]: JSON.stringify({ standard: "Standard custom", reference: "Reference custom", music3: "Music custom" }),
     [OLLAMA_MODEL_STORAGE_KEY]: "gemma4:12b",
   });
 
   assert.deepEqual(loadExternalServerConfig(storage), { url: "http://127.0.0.1:8080", model: "gemma.gguf" });
-  assert.deepEqual(loadCustomSystemPrompts(storage), { standard: "Standard custom", reference: "Reference custom" });
+  assert.deepEqual(loadCustomSystemPrompts(storage), { standard: "Standard custom", reference: "Reference custom", music3: "Music custom" });
   assert.equal(loadOllamaModel(storage), "gemma4:12b");
   saveExternalServerConfig(storage, { url: "http://localhost:8081", model: "other.gguf" });
   saveCustomSystemPrompts(storage, { standard: "Updated" });
@@ -381,6 +381,7 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(state.settingsPromptProfile, "standard");
   assert.equal(systemPromptProfile("Reference"), "reference");
   assert.equal(systemPromptProfile("T2VA"), "standard");
+  assert.equal(systemPromptProfile("Music3"), "music3");
   assert.equal(currentSystemPromptOverride(state, "Reference"), "Custom reference");
 
   selectModelState(state, { id: "direct-model", family: "gguf", capabilities: { audio: true } });
@@ -629,6 +630,39 @@ test("Settings owns a two-click restore for all mode draft defaults", () => {
   assert.doesNotMatch(mainSource, /Replace the modified prompt with a new generation/);
   assert.doesNotMatch(mainSource, /referenceDraft/);
   assert.match(stylesSource, /h3ps-draft-defaults-action/);
+});
+
+test("Music 3 drafts and payload keep lyrics separate from H3 state", () => {
+  const storage = memoryStorage();
+  saveModeDrafts(storage, {
+    Music3: { brief: "Oboe chamber pop", lyrics: "[Verse]\nWindows glow", prompt: "### Global Metadata\n..." },
+  });
+  assert.deepEqual(loadModeDrafts(storage).Music3, {
+    brief: "Oboe chamber pop",
+    lyrics: "[Verse]\nWindows glow",
+    prompt: "### Global Metadata\n...",
+  });
+  const state = createStudioState({ sessionId: "music-session", storage });
+  state.mode = "Music3";
+  state.customSystemPrompts.music3 = "Return the requested custom music format.";
+  selectModelState(state, { id: "music-model", family: "gguf", capabilities: { audio: false } });
+  const payload = buildGeneratePayload(state, { creativeBrief: "Dry funk at precisely 111 BPM without claps", lyrics: "[Chorus]\nOpen the gate", seed: 7 });
+  assert.equal(payload.mode, "Music3");
+  assert.equal(payload.lyrics, "[Chorus]\nOpen the gate");
+  assert.equal(payload.creative_brief, "Dry funk at precisely 111 BPM without claps");
+  assert.equal(payload.system_prompt_override, "Return the requested custom music format.");
+  assert.match(mainSource, /data-workspace="video"/);
+  assert.match(mainSource, /data-workspace="music"/);
+  assert.match(mainSource, /data-music-brief/);
+  assert.match(mainSource, /data-music-lyrics/);
+  assert.match(mainSource, /data-music-prompt-toggle/);
+  assert.match(mainSource, /data-music-prompt-toggle[\s\S]{0,500}const button = event\.currentTarget[\s\S]{0,500}button\.textContent = opening \? "Done" : "Edit"/);
+  assert.match(mainSource, /data-system-prompt="music3"/);
+  assert.match(mainSource, /data-system-prompt-reset="music3"[^>]*hidden>Restore default/);
+  assert.match(mainSource, /### Global Metadata[\s\S]*### Vocal Details[\s\S]*### Arrangement/);
+  assert.doesNotMatch(mainSource, /global_metadata:/);
+  assert.match(mainSource, /Refine caption/);
+  assert.match(mainSource, /Generated caption/);
 });
 
 test("active requests block add, reorder, and mode switching", () => {

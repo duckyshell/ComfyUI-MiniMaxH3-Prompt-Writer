@@ -40,7 +40,13 @@ try:
     version = tuple(int(part) for part in re.findall(r"\\d+", result["package_version"])[:3])
     if version < (0, 3, 34) or version >= (0, 4, 0):
         raise RuntimeError("llama-cpp-python 0.3.34 or newer from the 0.3.x series is required")
-    from llama_cpp import GGML_TYPE_F16, GGML_TYPE_Q8_0, Llama, LogitsProcessorList
+    from llama_cpp import Llama, LogitsProcessorList
+    try:
+        from llama_cpp import GGML_TYPE_F16, GGML_TYPE_Q8_0
+    except ImportError:
+        from llama_cpp._ggml import GGMLType
+        GGML_TYPE_F16 = GGMLType.GGML_TYPE_F16.value
+        GGML_TYPE_Q8_0 = GGMLType.GGML_TYPE_Q8_0.value
     from llama_cpp.llama_chat_format import Gemma4ChatHandler
     from llama_cpp import llama_cpp as native
     result["gpu_offload"] = bool(native.llama_supports_gpu_offload())

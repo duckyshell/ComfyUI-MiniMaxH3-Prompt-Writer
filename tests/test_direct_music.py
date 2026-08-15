@@ -1,3 +1,4 @@
+from enum import IntEnum
 import sys
 import types
 import unittest
@@ -57,19 +58,31 @@ class _FakeVisionHandler:
         self.__class__.instances.append(self)
 
 
+class _FakeGGMLType(IntEnum):
+    GGML_TYPE_F16 = 1
+    GGML_TYPE_Q8_0 = 2
+
+
 class DirectMusicRuntimeTests(unittest.TestCase):
     def setUp(self):
         _FakeModel.instances = []
         _FakeVisionHandler.instances = []
 
-    def fake_modules(self):
+    def fake_modules(self, *, top_level_ggml_types=True):
         llama_cpp = types.ModuleType("llama_cpp")
-        llama_cpp.GGML_TYPE_F16 = 1
-        llama_cpp.GGML_TYPE_Q8_0 = 2
         llama_cpp.Llama = _FakeModel
         chat_format = types.ModuleType("llama_cpp.llama_chat_format")
         chat_format.Gemma4ChatHandler = _FakeVisionHandler
-        return {"llama_cpp": llama_cpp, "llama_cpp.llama_chat_format": chat_format}
+        modules = {"llama_cpp": llama_cpp, "llama_cpp.llama_chat_format": chat_format}
+        if top_level_ggml_types:
+            llama_cpp.GGML_TYPE_F16 = _FakeGGMLType.GGML_TYPE_F16.value
+            llama_cpp.GGML_TYPE_Q8_0 = _FakeGGMLType.GGML_TYPE_Q8_0.value
+        else:
+            llama_cpp.__path__ = []
+            ggml = types.ModuleType("llama_cpp._ggml")
+            ggml.GGMLType = _FakeGGMLType
+            modules["llama_cpp._ggml"] = ggml
+        return modules
 
     def test_text_only_load_skips_projector_but_h3_load_keeps_it(self):
         backend = GGUFBackend()
@@ -95,6 +108,14 @@ class DirectMusicRuntimeTests(unittest.TestCase):
             backend.load(model_info(ready=False), runtime_plan(), text_only=True)
         self.assertEqual(raised.exception.code, "MODEL_DEPENDENCY_MISSING")
         self.assertIsNone(backend.model)
+
+    def test_load_accepts_ggml_types_from_newer_private_namespace(self):
+        backend = GGUFBackend()
+        with patch.dict(sys.modules, self.fake_modules(top_level_ggml_types=False)):
+            backend.load(model_info(), runtime_plan(), text_only=True)
+        model = _FakeModel.instances[-1]
+        self.assertEqual(model.kwargs["type_k"], _FakeGGMLType.GGML_TYPE_Q8_0.value)
+        self.assertEqual(model.kwargs["type_v"], _FakeGGMLType.GGML_TYPE_Q8_0.value)
 
     def test_generate_selects_text_only_only_for_music(self):
         selections = []

@@ -85,7 +85,13 @@ class GGUFBackend:
             )
         self.unload()
         try:
-            from llama_cpp import GGML_TYPE_F16, GGML_TYPE_Q8_0, Llama
+            from llama_cpp import Llama
+            try:
+                from llama_cpp import GGML_TYPE_F16, GGML_TYPE_Q8_0
+            except ImportError:
+                from llama_cpp._ggml import GGMLType
+                GGML_TYPE_F16 = GGMLType.GGML_TYPE_F16.value
+                GGML_TYPE_Q8_0 = GGMLType.GGML_TYPE_Q8_0.value
 
             kv_types = {"q8": GGML_TYPE_Q8_0, "f16": GGML_TYPE_F16}
             kv_type = kv_types[runtime_plan["kv_cache"]]

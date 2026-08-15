@@ -780,8 +780,20 @@ async function resampleCurrentVideo(options = null) {
 
 function showToast(title, message, details = null, action = null, options = {}) {
   const toast = studio.root.querySelector("[data-h3ps-toast]");
-  const dismissOnWorkspaceClick = options.dismissOnWorkspaceClick === true;
   const durationMs = Number.isFinite(options.durationMs) ? options.durationMs : null;
+  const dismissOnWorkspaceClick = options.dismissOnWorkspaceClick === true
+    || (details != null && durationMs == null);
+  const dismissGeneration = (studio.toastDismissGeneration || 0) + 1;
+  studio.toastDismissGeneration = dismissGeneration;
+  studio.toastDismissOnWorkspaceClick = false;
+  setTimeout(() => {
+    if (
+      studio.toastDismissGeneration === dismissGeneration
+      && toast.classList.contains("is-visible")
+    ) {
+      studio.toastDismissOnWorkspaceClick = dismissOnWorkspaceClick;
+    }
+  }, 0);
   toast.querySelector("[data-toast-title]").textContent = title;
   toast.querySelector("[data-toast-message]").textContent = message;
   const technical = toast.querySelector("[data-toast-details]");
@@ -796,7 +808,6 @@ function showToast(title, message, details = null, action = null, options = {}) 
   toast.classList.toggle("has-action", Boolean(action));
   toast.classList.toggle("is-persistent", dismissOnWorkspaceClick);
   toast.classList.add("is-visible");
-  studio.toastDismissOnWorkspaceClick = dismissOnWorkspaceClick;
   clearTimeout(studio.toastTimer);
   if (durationMs != null || !dismissOnWorkspaceClick) {
     studio.toastTimer = setTimeout(

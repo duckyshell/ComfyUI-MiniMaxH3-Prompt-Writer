@@ -386,9 +386,13 @@ class ApiProviderBackend:
         finally:
             http_connection.close()
         headers = {key.lower(): value for key, value in response.getheaders()}
+        data: Any = {}
         try:
-            data = json.loads(raw.decode("utf-8")) if raw else {}
+            if raw:
+                data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            if not 200 <= response.status < 300:
+                raise self._http_error(connection.preset, response.status, {}, headers) from error
             raise ModelError(
                 "API_RESPONSE_INVALID",
                 "The API provider returned invalid JSON.",
@@ -587,8 +591,11 @@ class ApiProviderBackend:
             custom_context_tokens=custom_context,
             reasoning_effort=reasoning_effort,
         )
-        models = self._fetch_models(connection, allow_missing=preset == "custom")
         requested_model = str(config.get("model_id") or "").strip()
+        models = self._fetch_models(
+            connection,
+            allow_missing=preset == "custom" and bool(requested_model),
+        )
         selected = next((model for model in models if model["remote_model"] == requested_model), None)
         if requested_model and selected is None:
             selected = self._model_info(connection, requested_model)

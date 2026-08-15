@@ -46,6 +46,8 @@ http://localhost:1234/v1
 
 Load a vision model in LM Studio, connect the Custom preset, and choose the model. Writer can read LM Studio's local capability metadata when the standard `/v1/models` response does not identify vision support.
 
+For Ollama through the Custom OpenAI-compatible preset, use a base URL such as `http://192.168.1.25:11434/v1`. The `/v1` prefix is required for Ollama's OpenAI-compatible routes.
+
 For another Custom endpoint, enable **Endpoint accepts image_url inputs** only when the server and model really accept OpenAI-style image content. You can also provide a known context size. Loopback and private LAN IP addresses may use HTTP; public remote endpoints must use HTTPS.
 
 Custom is a transport contract, not a claim that every OpenAI-compatible server or model is supported.

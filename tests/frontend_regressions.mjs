@@ -163,6 +163,14 @@ test("exceptional generation notices persist until a workspace click", () => {
   assert.match(mainSource, /format_repair_failure[\s\S]{0,500}dismissOnWorkspaceClick: true/);
 });
 
+test("technical errors reuse workspace-click dismissal without closing on the opening click", () => {
+  assert.match(mainSource, /details != null && durationMs == null/);
+  assert.match(mainSource, /studio\.toastDismissOnWorkspaceClick = false/);
+  assert.match(mainSource, /setTimeout\(\(\) => \{[\s\S]{0,300}studio\.toastDismissOnWorkspaceClick = dismissOnWorkspaceClick/);
+  assert.match(mainSource, /studio\.toastDismissOnWorkspaceClick && !event\.target\.closest\("\[data-h3ps-toast\]"\)/);
+  assert.doesNotMatch(mainSource, /data-toast-dismiss/);
+});
+
 test("Thinking fallback suggests more context only when Direct GGUF was context-limited", () => {
   assert.match(mainSource, /result\.thinking_budget_reduced[\s\S]{0,160}studio\.selectedModel\?\.family === "gguf"/);
   assert.match(mainSource, /A larger Context setting can give Thinking more room\./);

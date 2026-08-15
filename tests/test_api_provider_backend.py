@@ -36,6 +36,14 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _text(self, payload, status=200):
+        body = payload.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         type(self).requests.append(("GET", self.path, dict(self.headers), None))
         if self.path == "/v1/models":
@@ -74,6 +82,8 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
             })
         elif self.path == "/missing/v1/models":
             self._json({"error": {"message": "not found"}}, 404)
+        elif self.path == "/plain-404/v1/models":
+            self._text("not found", 404)
         else:
             self._json({"error": {"message": "not found"}}, 404)
 
@@ -234,6 +244,25 @@ class ApiProviderBackendTests(unittest.TestCase):
         self.assertEqual(result["model"]["remote_model"], "manual-vision-model")
         self.assertEqual(result["model"]["capability_source"], "user_declared")
         self.assertTrue(result["model"]["capabilities"]["images"])
+
+    def test_custom_missing_model_list_without_manual_model_is_an_endpoint_error(self):
+        with self.assertRaises(ModelError) as raised:
+            self.backend.probe({
+                "preset": "custom",
+                "base_url": f"http://127.0.0.1:{self.server.server_address[1]}/missing/v1",
+                "model_id": "",
+                "credential": {"source": "session", "value": ""},
+                "custom_capabilities": {"images": True, "context_tokens": 32768},
+            })
+        self.assertEqual(raised.exception.code, "API_MODEL_NOT_FOUND")
+
+    def test_non_json_http_error_keeps_http_status_instead_of_reporting_invalid_json(self):
+        connection = self._connection()
+        connection.base_url = f"http://127.0.0.1:{self.server.server_address[1]}/plain-404/v1"
+        with self.assertRaises(ModelError) as raised:
+            self.backend._fetch_models(connection)
+        self.assertEqual(raised.exception.code, "API_MODEL_NOT_FOUND")
+        self.assertEqual(raised.exception.details["status"], 404)
 
     def test_loopback_custom_enriches_lm_studio_vision_metadata(self):
         result = self.backend.probe({

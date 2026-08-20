@@ -284,7 +284,7 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.payload(response)["error"]["code"], "GENERATION_BUSY")
         add.assert_not_called()
 
-    async def test_generate_success_caches_prompt_and_always_returns_to_idle(self):
+    async def test_generate_success_caches_only_task_context_and_always_returns_to_idle(self):
         body = self.generation_body("Use <Video 1>.")
         assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
         model = {"id": "test-model", "name": "Test", "family": "test"}
@@ -304,7 +304,13 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(self.payload(response)["prompt"], "Generated prompt")
-        self.assertEqual(routes.GENERATION_CACHE[(self.session_id, "Reference")]["prompt"], "Generated prompt")
+        self.assertEqual(routes.GENERATION_CACHE[(self.session_id, "Reference")], {
+            "mode": "Reference",
+            "duration_seconds": 10,
+            "aspect_ratio": "16:9",
+            "creative_brief": "Use <Video 1>.",
+            "lyrics": "",
+        })
         self.assertEqual(routes.STATE["phase"], "idle")
         self.assertIsNone(routes.STATE["active_request_id"])
 

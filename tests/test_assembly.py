@@ -146,11 +146,12 @@ class AssemblyReferenceManifestTests(unittest.TestCase):
             unmentioned = assemble_request(self.body("A shot whose uploaded references need no explicit enumeration."))
         self.assertEqual([item["asset_id"] for item in unmentioned["media_inputs"]], ["p", "v"])
 
-    def test_refinement_prefers_matching_mode_cache_and_falls_back_to_current_context(self):
-        with patch("backend.assembly.STORE.manifest", return_value=self.manifest()):
+    def test_refinement_uses_cached_task_context_without_cached_generated_prompt(self):
+        picture = {"id": "p", "type": "image", "filename": "p.png", "reference": "<Picture 1>", "content_url": "/p", "frames": []}
+        with patch("backend.assembly.STORE.manifest", return_value=self.manifest(picture)):
             cached = assemble_refinement(
-                {**self.body("Current brief"), "current_prompt": "Current prompt", "instruction": "Make it slower."},
-                {"mode": "Reference", "duration_seconds": 12, "aspect_ratio": "9:16", "creative_brief": "Original brief", "prompt": "First pass"},
+                {**self.body("Current brief"), "current_prompt": "Manually edited prompt B", "instruction": "Make it slower."},
+                {"mode": "Reference", "duration_seconds": 12, "aspect_ratio": "9:16", "creative_brief": "Original brief", "prompt": "Generated prompt A"},
             )
             fallback = assemble_refinement(
                 {**self.body("Current brief"), "current_prompt": "Current prompt", "instruction": "Make it slower."},
@@ -161,7 +162,12 @@ class AssemblyReferenceManifestTests(unittest.TestCase):
                 {"mode": "T2VA", "duration_seconds": 19, "aspect_ratio": "1:1", "creative_brief": "Wrong mode", "prompt": "Wrong pass"},
             )
         self.assertEqual((cached["input"]["duration_seconds"], cached["input"]["aspect_ratio"], cached["input"]["creative_brief"]), (12, "9:16", "Original brief"))
-        self.assertIn("Cached first-pass observation:\nFirst pass", cached["messages"][-1]["content"])
+        self.assertEqual(cached["input"]["current_prompt"], "Manually edited prompt B")
+        self.assertEqual(cached["input"]["media_manifest"], self.manifest(picture))
+        self.assertEqual(cached["media_inputs"], [])
+        self.assertEqual(cached["messages"][-1]["content"].count("Manually edited prompt B"), 1)
+        self.assertNotIn("Generated prompt A", str(cached))
+        self.assertNotIn("Cached first-pass observation", str(cached))
         self.assertEqual((fallback["input"]["duration_seconds"], fallback["input"]["aspect_ratio"], fallback["input"]["creative_brief"]), (6, "16:9", "Current brief"))
         self.assertEqual((wrong_mode_cache["input"]["duration_seconds"], wrong_mode_cache["input"]["aspect_ratio"], wrong_mode_cache["input"]["creative_brief"]), (6, "16:9", "Current brief"))
 

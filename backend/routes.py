@@ -422,7 +422,6 @@ async def generate(request: web.Request) -> web.Response:
         peak_vram_mb = vram_monitor.stop()
         debug_input_sequence = result.pop("debug_input_sequence", None)
         GENERATION_CACHE[_cache_key(body["session_id"], body["mode"])] = {
-            "prompt": result["prompt"],
             "mode": body["mode"],
             "duration_seconds": assembled["input"]["duration_seconds"],
             "aspect_ratio": assembled["input"]["aspect_ratio"],

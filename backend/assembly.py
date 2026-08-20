@@ -314,8 +314,6 @@ def assemble_refinement(
     _validate_reference_tags(creative_brief, manifest, mode, "Creative Brief")
     _validate_reference_tags(instruction, manifest, mode, "Revision instruction")
     references = "\n".join(_media_line(asset) for asset in manifest["assets"]) or "None"
-    cached_prompt = cached_generation.get("prompt") if cached_generation else None
-    observation = cached_prompt.strip() if isinstance(cached_prompt, str) and cached_prompt.strip() else current_prompt
     guide = guide_for_mode(mode)
     user_content = (
         "Rewrite the current H3 prompt according to the revision instruction. "
@@ -325,7 +323,6 @@ def assemble_refinement(
         f"Original aspect ratio: {aspect_ratio}\n"
         f"Original Creative Brief:\n{creative_brief}\n\n"
         f"Reference manifest (text only; media is intentionally not attached):\n{references}\n\n"
-        f"Cached first-pass observation:\n{observation}\n\n"
         f"Current prompt:\n{current_prompt}\n\n"
         f"Revision instruction:\n{instruction}\n\n"
         "Reference revision rule: preserve each existing <Audio N> that is absent from the Revision instruction. "

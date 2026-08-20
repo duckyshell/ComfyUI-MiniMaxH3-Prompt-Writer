@@ -1079,6 +1079,7 @@ async function releaseComfyVram({ retry = null } = {}) {
     showToast("VRAM release failed", error.message);
   } finally {
     button.disabled = false;
+    button.innerHTML = `${icon("memory", 15)}Free ComfyUI VRAM`;
     syncLifecycleActions();
   }
   if (shouldRetry) await retry();

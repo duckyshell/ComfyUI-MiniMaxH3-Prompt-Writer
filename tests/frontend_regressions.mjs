@@ -658,6 +658,10 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.match(mainSource, /data-thinking/);
   assert.match(mainSource, /data-keep-loaded/);
   assert.match(mainSource, /data-comfy-memory-action/);
+  const freeVramStart = mainSource.indexOf("async function releaseComfyVram");
+  const freeVramEnd = mainSource.indexOf("function showVramRetry", freeVramStart);
+  const freeVramSource = mainSource.slice(freeVramStart, freeVramEnd);
+  assert.match(freeVramSource, /finally\s*\{[\s\S]*button\.disabled = false;[\s\S]*button\.innerHTML = `\$\{icon\("memory", 15\)\}Free ComfyUI VRAM`;/);
   assert.match(mainSource, /Unload Ollama/);
   assert.match(mainSource, /Unload Direct/);
   assert.match(mainSource, /Stop & unload/);

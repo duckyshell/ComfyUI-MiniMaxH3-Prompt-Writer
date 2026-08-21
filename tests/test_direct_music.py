@@ -1,9 +1,12 @@
 from enum import IntEnum
+from contextlib import redirect_stderr
+from io import StringIO
 import sys
 import types
 import unittest
 from unittest.mock import patch
 
+from backend.models import gguf_backend
 from backend.models.contract import ModelError
 from backend.models.gguf_backend import GGUFBackend
 
@@ -55,7 +58,20 @@ class _FakeVisionHandler:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self._exit_stack = _Closer()
+        self._mtmd_cpp = _FakeMTMD
         self.__class__.instances.append(self)
+
+
+class _FakeMTMD:
+    callbacks = {}
+
+    @classmethod
+    def mtmd_log_set(cls, callback, _user_data):
+        cls.callbacks["mtmd"] = callback
+
+    @classmethod
+    def mtmd_helper_log_set(cls, callback, _user_data):
+        cls.callbacks["helper"] = callback
 
 
 class _FakeGGMLType(IntEnum):
@@ -67,10 +83,12 @@ class DirectMusicRuntimeTests(unittest.TestCase):
     def setUp(self):
         _FakeModel.instances = []
         _FakeVisionHandler.instances = []
+        _FakeMTMD.callbacks = {}
 
     def fake_modules(self, *, top_level_ggml_types=True):
         llama_cpp = types.ModuleType("llama_cpp")
         llama_cpp.Llama = _FakeModel
+        llama_cpp.llama_log_callback = lambda callback: callback
         chat_format = types.ModuleType("llama_cpp.llama_chat_format")
         chat_format.Gemma4ChatHandler = _FakeVisionHandler
         modules = {"llama_cpp": llama_cpp, "llama_cpp.llama_chat_format": chat_format}
@@ -101,6 +119,31 @@ class DirectMusicRuntimeTests(unittest.TestCase):
             self.assertEqual(len(_FakeVisionHandler.instances), 1)
             self.assertEqual(backend.chat_handler.kwargs["clip_model_path"], "mmproj.gguf")
             self.assertEqual(backend.runtime_signature[-1], "multimodal")
+            self.assertEqual(set(_FakeMTMD.callbacks), {"mtmd", "helper"})
+
+    def test_mtmd_logging_suppresses_info_and_keeps_warnings_and_errors(self):
+        with (
+            patch.dict(sys.modules, self.fake_modules()),
+            patch.object(gguf_backend, "_MTMD_LOG_CALLBACK", None),
+            patch.object(gguf_backend, "_MTMD_LAST_LOG_LEVEL", 0),
+        ):
+            gguf_backend._configure_mtmd_logging(_FakeMTMD)
+            callback = _FakeMTMD.callbacks["mtmd"]
+            output = StringIO()
+            with redirect_stderr(output), gguf_backend._quiet_mtmd_info():
+                callback(2, b"PRIVATE_PROMPT_CONTENT\n", None)
+                callback(2, b"encoding image slice...\n", None)
+                callback(3, b"vision memory is low\n", None)
+                callback(4, b"vision evaluation failed\n", None)
+            with redirect_stderr(output):
+                callback(1, b"OTHER_NODE_INFO\n", None)
+
+        console = output.getvalue()
+        self.assertNotIn("PRIVATE_PROMPT_CONTENT", console)
+        self.assertNotIn("encoding image slice", console)
+        self.assertIn("[H3 Prompt Writer] MTMD warning: vision memory is low", console)
+        self.assertIn("[H3 Prompt Writer] MTMD error: vision evaluation failed", console)
+        self.assertIn("OTHER_NODE_INFO", console)
 
     def test_text_only_load_keeps_verified_runtime_validation(self):
         backend = GGUFBackend()
@@ -140,6 +183,7 @@ class DirectMusicRuntimeTests(unittest.TestCase):
             with (
                 patch.object(backend, "load", side_effect=fake_load),
                 patch.object(backend, "_logits_processors", return_value=[]),
+                patch.object(backend, "_console"),
                 patch("backend.models.gguf_backend.run_h3_pipeline", return_value={"prompt": "result"}),
             ):
                 backend.generate(
@@ -150,6 +194,121 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         exercise("Music3")
         exercise("T2VA")
         self.assertEqual(selections, [("Music3", True), ("T2VA", False)])
+
+    def test_direct_console_reports_lifecycle_without_prompt_content(self):
+        backend = GGUFBackend()
+        assembled = {
+            "messages": [{"role": "user", "content": "PRIVATE_PROMPT_CONTENT"}],
+            "media_inputs": [
+                {"type": "image", "asset_id": "one", "requires_capability": "images"},
+                {"type": "video", "asset_id": "two", "requires_capability": "video_frames"},
+            ],
+            "input": {"mode": "Reference", "creative_brief": "PRIVATE_PROMPT_CONTENT"},
+        }
+        plan = {**runtime_plan(), "context_tokens": 24_576, "max_output_tokens": 2_048}
+
+        def fake_load(info, active_plan, *, text_only=False):
+            backend.model = _FakeModel()
+            backend.model_id = info["id"]
+            backend.runtime_signature = (
+                info["id"], active_plan["context_tokens"], active_plan["kv_cache"],
+                "text" if text_only else "multimodal",
+            )
+
+        def fake_pipeline(*_args, on_phase, **_kwargs):
+            on_phase("processing_media")
+            on_phase("generating")
+            return {
+                "prompt": "PRIVATE_GENERATED_PROMPT",
+                "output_tokens": 781,
+                "tokens_per_second": 42.6,
+                "generation_seconds": 18.3,
+                "format_repair_attempted": True,
+                "format_repair_applied": True,
+                "format_repair_tokens": 412,
+            }
+
+        output = StringIO()
+        with (
+            patch.object(backend, "load", side_effect=fake_load),
+            patch.object(backend, "_logits_processors", return_value=[]),
+            patch("backend.models.gguf_backend.run_h3_pipeline", side_effect=fake_pipeline),
+            redirect_stderr(output),
+        ):
+            backend.generate(
+                {**model_info(), "name": "Gemma 4 26B Q4_K_M"},
+                assembled,
+                "session",
+                thinking=False,
+                seed=1,
+                unload_after=False,
+                runtime_plan=plan,
+            )
+
+        console = output.getvalue()
+        self.assertIn("Direct GGUF · Gemma 4 26B Q4_K_M", console)
+        self.assertIn("Loaded in", console)
+        self.assertIn("context 24K · KV Q8", console)
+        self.assertIn("Prepared 2 visual references", console)
+        self.assertIn("Generating · Thinking off · max output 2048", console)
+        self.assertIn("Reference correction applied · 412 tokens", console)
+        self.assertIn("Done · 781 tokens · 42.6 tok/s · 18.3s", console)
+        self.assertNotIn("PRIVATE_PROMPT_CONTENT", console)
+        self.assertNotIn("PRIVATE_GENERATED_PROMPT", console)
+
+    def test_direct_console_reports_output_limit_without_prompt_content(self):
+        backend = GGUFBackend()
+        assembled = {
+            "messages": [{"role": "user", "content": "PRIVATE_PROMPT_CONTENT"}],
+            "media_inputs": [],
+            "input": {"mode": "T2VA", "creative_brief": "PRIVATE_PROMPT_CONTENT"},
+        }
+
+        def fake_load(info, active_plan, *, text_only=False):
+            backend.model = _FakeModel()
+            backend.model_id = info["id"]
+            backend.runtime_signature = (
+                info["id"], active_plan["context_tokens"], active_plan["kv_cache"], "multimodal",
+            )
+
+        output = StringIO()
+        with (
+            patch.object(backend, "load", side_effect=fake_load),
+            patch.object(backend, "_logits_processors", return_value=[]),
+            patch(
+                "backend.models.gguf_backend.run_h3_pipeline",
+                side_effect=ModelError(
+                    "GENERATION_TRUNCATED",
+                    "PRIVATE_PROMPT_CONTENT",
+                    {"max_output_tokens": 2_048},
+                ),
+            ),
+            redirect_stderr(output),
+            self.assertRaises(ModelError),
+        ):
+            backend.generate(
+                model_info(), assembled, "session", thinking=False, seed=1,
+                unload_after=False, runtime_plan={**runtime_plan(), "max_output_tokens": 2_048},
+            )
+
+        console = output.getvalue()
+        self.assertIn("Error: output limit reached · 2048 tokens", console)
+        self.assertNotIn("PRIVATE_PROMPT_CONTENT", console)
+
+    def test_direct_console_does_not_print_arbitrary_error_details(self):
+        backend = GGUFBackend()
+        output = StringIO()
+
+        with redirect_stderr(output):
+            backend._console_error(
+                ModelError("GENERATION_FAILED", "PRIVATE_PROMPT_CONTENT", "PRIVATE_EXCEPTION_DETAIL"),
+                runtime_plan(),
+            )
+
+        console = output.getvalue()
+        self.assertIn("Error: generation failed", console)
+        self.assertNotIn("PRIVATE_PROMPT_CONTENT", console)
+        self.assertNotIn("PRIVATE_EXCEPTION_DETAIL", console)
 
 
 if __name__ == "__main__":

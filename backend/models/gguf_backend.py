@@ -1,14 +1,110 @@
 from __future__ import annotations
 
+import ctypes
 import gc
+import sys
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Callable
 
 from ..context import ContextPlanError, plan_context
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from ..runtime_diagnostics import cached_gguf_runtime_diagnostics
 from .contract import ModelError
+
+
+CONSOLE_PREFIX = "[H3 Prompt Writer]"
+_MTMD_LOG_CALLBACK = None
+_MTMD_LOG_LOCK = threading.Lock()
+_MTMD_LAST_LOG_LEVEL = 0
+_MTMD_QUIET_REQUESTS = 0
+_MTMD_WARNING_LEVEL = 3
+_MTMD_ERROR_LEVEL = 4
+_MTMD_CONTINUE_LEVEL = 5
+
+
+def _write_console(message: str) -> None:
+    print(f"{CONSOLE_PREFIX} {message}", file=sys.stderr, flush=True)
+
+
+def _configure_mtmd_logging(mtmd_cpp: Any) -> None:
+    """Keep native MTMD warnings and errors without exposing INFO prompt dumps."""
+    global _MTMD_LOG_CALLBACK
+    global _MTMD_LAST_LOG_LEVEL
+
+    with _MTMD_LOG_LOCK:
+        if _MTMD_LOG_CALLBACK is None:
+            from llama_cpp import llama_log_callback
+
+            @llama_log_callback
+            def mtmd_log_callback(level, text, _user_data):
+                global _MTMD_LAST_LOG_LEVEL
+                try:
+                    decoded = text.decode("utf-8", errors="replace") if text else ""
+                    with _MTMD_LOG_LOCK:
+                        previous_level = _MTMD_LAST_LOG_LEVEL
+                        if level != _MTMD_CONTINUE_LEVEL:
+                            _MTMD_LAST_LOG_LEVEL = level
+                        quiet = _MTMD_QUIET_REQUESTS > 0
+                    if not quiet:
+                        print(decoded, end="", file=sys.stderr, flush=True)
+                        return
+                    effective_level = previous_level if level == _MTMD_CONTINUE_LEVEL else level
+                    if effective_level not in {_MTMD_WARNING_LEVEL, _MTMD_ERROR_LEVEL}:
+                        return
+                    if level == _MTMD_CONTINUE_LEVEL:
+                        print(decoded, end="", file=sys.stderr, flush=True)
+                        return
+                    label = "Warning" if effective_level == _MTMD_WARNING_LEVEL else "Error"
+                    print(
+                        f"{CONSOLE_PREFIX} MTMD {label.lower()}: {decoded}",
+                        end="" if decoded.endswith("\n") else "\n",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                except Exception:
+                    return
+
+            _MTMD_LOG_CALLBACK = mtmd_log_callback
+        callback = _MTMD_LOG_CALLBACK
+
+    for setter_name in ("mtmd_log_set", "mtmd_helper_log_set"):
+        setter = getattr(mtmd_cpp, setter_name, None)
+        if callable(setter):
+            setter(callback, ctypes.c_void_p())
+
+
+@contextmanager
+def _quiet_mtmd_info():
+    global _MTMD_QUIET_REQUESTS
+    with _MTMD_LOG_LOCK:
+        _MTMD_QUIET_REQUESTS += 1
+    try:
+        yield
+    finally:
+        with _MTMD_LOG_LOCK:
+            _MTMD_QUIET_REQUESTS = max(0, _MTMD_QUIET_REQUESTS - 1)
+
+
+def _short_value(value: Any, fallback: str) -> str:
+    text = " ".join(str(value or fallback).split())
+    return text[:120]
+
+
+def _context_label(tokens: int) -> str:
+    return f"{tokens // 1024}K" if tokens > 0 and tokens % 1024 == 0 else str(tokens)
+
+
+def _visual_reference_label(assembled: dict[str, Any]) -> str | None:
+    count = sum(
+        item.get("type") in {"image", "video"}
+        for item in assembled.get("media_inputs", [])
+    )
+    if count == 0:
+        return None
+    noun = "visual reference" if count == 1 else "visual references"
+    return f"{count} {noun}"
 
 
 class GGUFBackend:
@@ -45,6 +141,32 @@ class GGUFBackend:
         from llama_cpp import LogitsProcessorList
 
         return LogitsProcessorList([stop_if_cancelled])
+
+    def _console(self, message: str) -> None:
+        _write_console(message)
+
+    def _console_error(self, error: ModelError, runtime_plan: dict[str, Any] | None) -> None:
+        if error.code == "GENERATION_CANCELLED":
+            self._console("Generation cancelled")
+        elif error.code == "GENERATION_TRUNCATED":
+            details = error.details if isinstance(error.details, dict) else {}
+            limit = details.get("max_output_tokens") or (runtime_plan or {}).get("max_output_tokens")
+            suffix = f" · {limit} tokens" if limit else ""
+            self._console(f"Error: output limit reached{suffix}")
+        elif error.code in {"MODEL_LOAD_OOM", "GENERATION_OOM"}:
+            stage = "loading the model" if error.code == "MODEL_LOAD_OOM" else "generating"
+            self._console(f"Error: out of VRAM while {stage}")
+        elif error.code == "MODEL_LOAD_FAILED":
+            self._console("Error: model failed to load")
+        else:
+            safe_messages = {
+                "EMPTY_GENERATION": "model returned an empty prompt",
+                "GENERATION_FAILED": "generation failed",
+                "MODEL_DEPENDENCY_MISSING": "Direct GGUF runtime is unavailable",
+                "THINKING_TRUNCATED": "Thinking ended before the final prompt",
+            }
+            message = safe_messages.get(error.code, f"request failed · {error.code}")
+            self._console(f"Error: {message}")
 
     def preflight(
         self,
@@ -113,6 +235,9 @@ class GGUFBackend:
                     verbose=False,
                     use_gpu=True,
                 )
+                mtmd_cpp = getattr(self.chat_handler, "_mtmd_cpp", None)
+                if mtmd_cpp is not None:
+                    _configure_mtmd_logging(mtmd_cpp)
                 llama_options["chat_handler"] = self.chat_handler
             self.model = Llama(**llama_options)
             self.model_id = model_info["id"]
@@ -169,11 +294,23 @@ class GGUFBackend:
                 runtime_kind = "text" if text_only else "multimodal"
                 signature = (model_info["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"], runtime_kind)
                 cold_start = self.model is None or self.runtime_signature != signature
+                model_name = _short_value(model_info.get("name"), model_info["id"])
+                context = _context_label(runtime_plan["context_tokens"])
+                kv_label = str(runtime_plan["kv_cache"]).upper()
+                if cold_start:
+                    self._console(f"Direct GGUF · {model_name}")
+                    self._console("Loading model...")
+                else:
+                    self._console(
+                        f"Direct GGUF · {model_name} · model already loaded · context {context} · KV {kv_label}"
+                    )
                 if on_phase:
                     on_phase("loading_model")
                 load_started = time.perf_counter()
                 self.load(model_info, runtime_plan, text_only=text_only)
                 load_seconds = time.perf_counter() - load_started
+                if cold_start:
+                    self._console(f"Loaded in {load_seconds:.1f}s · context {context} · KV {kv_label}")
                 if self.cancel_event.is_set():
                     raise ModelError("GENERATION_CANCELLED", "Generation was cancelled after model loading.")
 
@@ -183,6 +320,23 @@ class GGUFBackend:
                     return scores
 
                 logits_processors = self._logits_processors(stop_if_cancelled)
+                media_started: float | None = None
+                visual_references = _visual_reference_label(assembled)
+
+                def direct_phase(phase: str) -> None:
+                    nonlocal media_started
+                    if phase == "processing_media":
+                        media_started = time.perf_counter()
+                    elif phase == "generating":
+                        if visual_references and media_started is not None:
+                            elapsed = time.perf_counter() - media_started
+                            self._console(f"Prepared {visual_references} in {elapsed:.1f}s")
+                        thinking_label = "on" if thinking else "off"
+                        self._console(
+                            f"Generating · Thinking {thinking_label} · max output {runtime_plan['max_output_tokens']}"
+                        )
+                    if on_phase:
+                        on_phase(phase)
 
                 def complete(
                     *,
@@ -205,11 +359,13 @@ class GGUFBackend:
                     }
                     if text_only:
                         return self.model.create_chat_completion(**options)
-                    return self.chat_handler(
-                        llama=self.model,
-                        enable_thinking=thinking,
-                        **options,
-                    )
+                    self.chat_handler.verbose = False
+                    with _quiet_mtmd_info():
+                        return self.chat_handler(
+                            llama=self.model,
+                            enable_thinking=thinking,
+                            **options,
+                        )
 
                 result = run_h3_pipeline(
                     model_info,
@@ -221,7 +377,24 @@ class GGUFBackend:
                     is_cancelled=self.cancel_event.is_set,
                     thinking=thinking,
                     seed=seed,
-                    on_phase=on_phase,
+                    on_phase=direct_phase,
+                )
+                if result.get("format_repair_attempted"):
+                    if result.get("format_repair_applied"):
+                        self._console(
+                            f"Reference correction applied · {int(result.get('format_repair_tokens') or 0)} tokens"
+                        )
+                    else:
+                        failure = _short_value(
+                            result.get("format_repair_failure"),
+                            "prompt correction did not pass validation",
+                        )
+                        self._console(f"Warning: prompt correction failed · {failure}")
+                output_tokens = int(result.get("output_tokens") or 0)
+                tokens_per_second = float(result.get("tokens_per_second") or 0)
+                generation_seconds = float(result.get("generation_seconds") or 0)
+                self._console(
+                    f"Done · {output_tokens} tokens · {tokens_per_second:.1f} tok/s · {generation_seconds:.1f}s"
                 )
                 return {
                     **result,
@@ -233,12 +406,17 @@ class GGUFBackend:
                     "max_output_tokens": runtime_plan["max_output_tokens"],
                     "thinking_budget_reduced": runtime_plan["thinking_budget_reduced"],
                 }
-            except ModelError:
+            except ModelError as error:
+                self._console_error(error, runtime_plan)
                 raise
             except MemoryError as error:
-                raise ModelError("GENERATION_OOM", "GGUF generation ran out of memory.") from error
+                wrapped = ModelError("GENERATION_OOM", "GGUF generation ran out of memory.")
+                self._console_error(wrapped, runtime_plan)
+                raise wrapped from error
             except Exception as error:
-                raise ModelError("GENERATION_FAILED", "The GGUF model could not generate a prompt.", str(error)) from error
+                wrapped = ModelError("GENERATION_FAILED", "The GGUF model could not generate a prompt.", str(error))
+                self._console_error(wrapped, runtime_plan)
+                raise wrapped from error
             finally:
                 force_unload = self.force_unload_event.is_set()
                 if unload_after or force_unload:

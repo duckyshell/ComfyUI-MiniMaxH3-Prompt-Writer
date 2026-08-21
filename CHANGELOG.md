@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5 - 2026-08-21
+
+### Fixes
+
+- Cleaned up Direct GGUF console logging to prevent prompt contents and verbose MTMD output from being printed while preserving useful warnings, errors, and generation metrics.
+
 ## 0.3.4 - 2026-08-21
 
 ### Fixes

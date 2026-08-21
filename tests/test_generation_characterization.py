@@ -93,6 +93,9 @@ class _CharacterizedBackend(GGUFBackend):
     def _logits_processors(self, _stop_if_cancelled):
         return "cancel-sentinel"
 
+    def _console(self, _message):
+        return None
+
 
 def response(text, *, prompt_tokens, completion_tokens, finish_reason="stop"):
     return {

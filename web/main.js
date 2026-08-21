@@ -2475,16 +2475,14 @@ function createStudio() {
           </div>
           <div class="h3ps-refine" data-refine-panel hidden>
             <div class="h3ps-refine-heading">
-              <span><strong data-refine-title>Refine prompt</strong><small data-refine-helper>Describe only what should change</small></span>
-              <em data-refine-media-note>No media re-upload</em>
+              <span><strong data-refine-title>Refine prompt</strong><small><span data-refine-helper>Describe only what should change</span><em data-refine-media-note>No media re-upload</em></small></span>
+              <div class="h3ps-refine-heading-actions">
+                <button type="button" class="h3ps-text-button" data-refine-restore hidden>Restore original</button>
+                <button type="button" class="h3ps-text-button" data-refine-cancel>Cancel</button>
+                <button type="button" class="h3ps-refine-submit" data-refine-submit>${icon("spark", 13)} Refine</button>
+              </div>
             </div>
             <textarea rows="2" data-refine-instruction placeholder="For example: make the camera movement slower and keep the ending more ambiguous."></textarea>
-            <div class="h3ps-refine-actions">
-              <button type="button" class="h3ps-text-button" data-refine-restore hidden>Restore original</button>
-              <span></span>
-              <button type="button" class="h3ps-text-button" data-refine-cancel>Cancel</button>
-              <button type="button" class="h3ps-refine-submit" data-refine-submit>${icon("spark", 13)} Refine</button>
-            </div>
           </div>
           <div class="h3ps-output-actions">
             <span class="h3ps-output-primary-actions">

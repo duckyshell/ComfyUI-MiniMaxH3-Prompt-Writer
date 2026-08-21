@@ -814,3 +814,10 @@ test("fullscreen reuses the studio root and persists its UI state", () => {
   assert.match(mainSource, /const fullscreen = studio\.fullscreen && studio\.root\.classList\.contains\("is-open"\)/);
   assert.match(stylesSource, /\.h3ps-root\.is-fullscreen \.h3ps-brief textarea \{ max-height: none; \}/);
 });
+
+test("prompt refinement keeps actions above a vertically resizable editor", () => {
+  assert.match(mainSource, /h3ps-refine-heading-actions[\s\S]{0,500}data-refine-cancel[\s\S]{0,250}data-refine-submit/);
+  assert.match(mainSource, /data-refine-helper[\s\S]{0,160}data-refine-media-note/);
+  assert.doesNotMatch(mainSource, /refine_height|refineHeight/);
+  assert.match(stylesSource, /\.h3ps-refine\[data-refine-panel\] textarea \{[^}]*min-height: 72px;[^}]*resize: vertical;/);
+});

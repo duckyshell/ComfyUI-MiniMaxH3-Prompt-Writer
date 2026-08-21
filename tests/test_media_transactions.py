@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend import media
+from backend import h3_pipeline
 
 
 class MediaTransactionTests(unittest.TestCase):
@@ -163,6 +164,86 @@ class MediaTransactionTests(unittest.TestCase):
             self.assertFalse(old_sheet.exists())
             self.assertTrue(Path(video["_preview_path"]).exists())
             self.assertTrue(Path(video["_contact_sheet_path"]).exists())
+
+    def test_model_visual_reads_only_current_session_owned_asset_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_root = Path(directory)
+            session_root = cache_root / "session"
+            session_root.mkdir()
+            image = self.asset(session_root, "image", "Reference", "image", "<Picture 1>")
+            prepared = Path(image["_original_path"]).parent / "prepared.jpg"
+            prepared.write_bytes(b"prepared-image")
+            image["_prepared_path"] = str(prepared)
+            store = media.MediaStore()
+            store.sessions["session"] = [image]
+
+            with patch.object(media, "CACHE_ROOT", cache_root):
+                media_type, payload = store.read_model_visual("session", "image", "image")
+
+            self.assertEqual(media_type, "image/jpeg")
+            self.assertEqual(payload, b"prepared-image")
+
+    def test_model_visual_rejects_registered_paths_outside_writer_cache(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside_directory:
+            cache_root = Path(directory)
+            session_root = cache_root / "session"
+            session_root.mkdir()
+            image = self.asset(session_root, "image", "Reference", "image", "<Picture 1>")
+            outside = Path(outside_directory) / "prepared.jpg"
+            outside.write_bytes(b"outside")
+            image["_prepared_path"] = str(outside)
+            store = media.MediaStore()
+            store.sessions["session"] = [image]
+
+            with patch.object(media, "CACHE_ROOT", cache_root):
+                with self.assertRaises(media.MediaError) as raised:
+                    store.read_model_visual("session", "image", "image")
+
+            self.assertEqual(raised.exception.code, "MEDIA_PATH_INVALID")
+
+    def test_pipeline_requests_prepared_image_and_video_sheet_from_media_store(self):
+        assembled = {
+            "messages": [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "describe"},
+            ],
+            "media_inputs": [
+                {"type": "image", "asset_id": "image", "reference": "<Picture 1>"},
+                {"type": "video", "asset_id": "video", "reference": "<Video 1>"},
+            ],
+        }
+        assets = {
+            "image": {"id": "image", "type": "image"},
+            "video": {"id": "video", "type": "video", "_frames": [{"timestamp": 0.0}]},
+        }
+
+        with (
+            patch.object(h3_pipeline.STORE, "get", side_effect=lambda _session, asset_id: assets[asset_id]),
+            patch.object(
+                h3_pipeline.STORE,
+                "read_model_visual",
+                side_effect=[("image/jpeg", b"image-bytes"), ("image/jpeg", b"sheet-bytes")],
+            ) as read_visual,
+        ):
+            messages, metrics = h3_pipeline._messages(
+                assembled,
+                "session",
+                {"context_tokens": 16_384, "max_output_tokens": 1_536},
+                lambda _text: 10,
+            )
+
+        self.assertEqual(
+            [call.args for call in read_visual.call_args_list],
+            [("session", "image", "image"), ("session", "video", "contact_sheet")],
+        )
+        image_urls = [part["image_url"]["url"] for part in messages[1]["content"] if part["type"] == "image_url"]
+        self.assertEqual(image_urls, [
+            "data:image/jpeg;base64,aW1hZ2UtYnl0ZXM=",
+            "data:image/jpeg;base64,c2hlZXQtYnl0ZXM=",
+        ])
+        self.assertEqual(metrics["visual_input_count"], 2)
+        self.assertEqual(metrics["video_frame_count"], 1)
+        self.assertEqual(metrics["video_sheet_count"], 1)
 
 
 if __name__ == "__main__":

@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import http.client
 import json
-import os
 import shutil
 import sys
 import threading
-from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -36,13 +34,7 @@ OLLAMA_MODEL_TIERS = (
 
 
 def _ollama_cli_installed() -> bool:
-    if shutil.which("ollama"):
-        return True
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    return bool(
-        local_app_data
-        and (Path(local_app_data) / "Programs" / "Ollama" / "ollama.exe").is_file()
-    )
+    return shutil.which("ollama") is not None
 
 
 def _model_context_limit(details: dict[str, Any]) -> int:

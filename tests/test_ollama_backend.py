@@ -11,6 +11,7 @@ from backend.models.ollama_backend import (
     RECOMMENDED_OLLAMA_MODEL,
     TESTED_OLLAMA_TAGS,
     OllamaBackend,
+    _ollama_cli_installed,
     _ollama_messages,
 )
 
@@ -156,6 +157,13 @@ class OllamaBackendTests(unittest.TestCase):
             "media_inputs": [],
             "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "A quiet scene."},
         }
+
+    def test_cli_detection_uses_path_lookup_only(self):
+        with patch("backend.models.ollama_backend.shutil.which", return_value="C:/tools/ollama.exe") as which:
+            self.assertTrue(_ollama_cli_installed())
+        with patch("backend.models.ollama_backend.shutil.which", return_value=None):
+            self.assertFalse(_ollama_cli_installed())
+        which.assert_called_once_with("ollama")
 
     def test_beginner_recommendations_match_the_live_tested_gpu_tiers(self):
         self.assertEqual(RECOMMENDED_OLLAMA_MODEL, "gemma4:e4b")

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import base64
-import mimetypes
 import time
-from pathlib import Path
 from typing import Any, Callable
 
 from .context import (
@@ -12,7 +10,7 @@ from .context import (
     ESTIMATED_VISUAL_TOKENS,
     STANDARD_OUTPUT_TOKENS,
 )
-from .media import STORE
+from .media import STORE, MediaError
 from .models.contract import ModelError, final_text
 from .prompt_audit import audit_prompt, camera_structure_requested
 from .prompt_repair import (
@@ -25,9 +23,12 @@ from .prompt_repair import (
 )
 from .references import ReferencePolicy, reference_policy, reference_tags
 
-def _data_uri(path: str) -> str:
-    media_type = mimetypes.guess_type(path)[0] or "image/png"
-    encoded = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+def _asset_data_uri(session_id: str, asset_id: str, representation: str) -> str:
+    try:
+        media_type, payload = STORE.read_model_visual(session_id, asset_id, representation)
+    except MediaError as error:
+        raise ModelError("MEDIA_PREPARATION_FAILED", error.message, {"media_code": error.code}) from error
+    encoded = base64.b64encode(payload).decode("ascii")
     return f"data:{media_type};base64,{encoded}"
 
 
@@ -57,7 +58,7 @@ def _messages(
             content.append({"type": "text", "text": binding})
             content.append({
                 "type": "image_url",
-                "image_url": {"url": _data_uri(asset.get("_prepared_path", asset["_original_path"]))},
+                "image_url": {"url": _asset_data_uri(session_id, item["asset_id"], "image")},
             })
             debug_user_parts.extend([
                 {"type": "text", "text": binding},
@@ -66,12 +67,6 @@ def _messages(
         elif item["type"] == "video":
             frames = asset.get("_frames", [])
             video_frame_count += len(frames)
-            sheet_path = asset.get("_contact_sheet_path")
-            if not sheet_path or not Path(sheet_path).exists():
-                raise ModelError(
-                    "MEDIA_PREPARATION_FAILED",
-                    f"The internal contact sheet for {item['reference']} is missing.",
-                )
             video_sheet_count += 1
             binding = (
                 f"{item['reference']}: one ordered contact sheet sampled from this same video. "
@@ -80,7 +75,10 @@ def _messages(
                 "and must never change or renumber the external reference labels."
             )
             content.append({"type": "text", "text": binding})
-            content.append({"type": "image_url", "image_url": {"url": _data_uri(sheet_path)}})
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": _asset_data_uri(session_id, item["asset_id"], "contact_sheet")},
+            })
             debug_user_parts.extend([
                 {"type": "text", "text": binding},
                 {"type": "image", "source": item["reference"], "representation": "ordered video contact sheet"},

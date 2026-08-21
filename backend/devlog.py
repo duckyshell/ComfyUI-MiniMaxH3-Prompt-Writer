@@ -1,28 +1,11 @@
 from __future__ import annotations
 
-import json
-import os
 import threading
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 
-DEVELOPER_MODE = os.getenv("H3PROMPTWRITER_DEV_MODE", os.getenv("H3STUDIO_DEV_MODE", "0")).strip().lower() not in {"0", "false", "off", "no"}
-
-
-def _default_log_path() -> Path:
-    override = os.getenv("H3PROMPTWRITER_DEV_LOG_PATH") or os.getenv("H3STUDIO_DEV_LOG_PATH")
-    if override:
-        return Path(override).expanduser()
-    state_root = os.getenv("LOCALAPPDATA") or os.getenv("XDG_STATE_HOME")
-    if state_root:
-        return Path(state_root) / "H3PromptWriter" / "logs" / "generations.jsonl"
-    return Path.home() / ".local" / "state" / "H3PromptWriter" / "logs" / "generations.jsonl"
-
-
-LOG_PATH = _default_log_path()
-_LOCK = threading.Lock()
+DEVELOPER_MODE = False
+LOG_PATH = None
 
 
 def gpu_memory_snapshot() -> dict[str, int] | None:
@@ -75,19 +58,4 @@ class PeakVRAMMonitor:
 
 
 def write_event(event: str, **fields: Any) -> None:
-    if not DEVELOPER_MODE:
-        return
-    record = {
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-        "event": event,
-        "gpu_memory": gpu_memory_snapshot(),
-        **fields,
-    }
-    try:
-        with _LOCK:
-            LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with LOG_PATH.open("a", encoding="utf-8") as output:
-                output.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except OSError:
-        # Developer logging must never break a generation request.
-        pass
+    del event, fields

@@ -1307,7 +1307,7 @@ function renderDirectRuntimeStatus() {
   const version = diagnostics.package_version ? ` Version ${escapeHtml(diagnostics.package_version)} was detected.` : "";
   return `<section class="h3ps-direct-runtime-state is-broken">
     <header><span><small>Runtime</small><strong>llama-cpp-python is installed, but the runtime is not usable.</strong></span></header>
-    <p>The native compatibility check did not find a working GPU runtime.${version}</p>
+    <p>The installed package does not match the Direct GGUF runtime requirements.${version}</p>
     <a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Troubleshooting ↗</a>
   </section>`;
 }
@@ -1316,7 +1316,11 @@ function localRuntimeLabel() {
   const diagnostics = studio?.ggufRuntimeDiagnostics;
   if (!diagnostics) return "Local GGUF · llama-cpp-python";
   if (diagnostics.status !== "ok") return "Runtime could not be inspected";
-  const offload = diagnostics.gpu_offload ? "GPU offload available" : "GPU offload unavailable";
+  const offload = diagnostics.gpu_offload === true
+    ? "GPU offload available"
+    : diagnostics.gpu_offload === false
+      ? "GPU offload unavailable"
+      : "Runtime detected";
   return `${offload}${diagnostics.backend ? ` · ${diagnostics.backend}` : ""}`;
 }
 
@@ -1367,7 +1371,7 @@ async function inspectDirectRuntime() {
     try {
       await loadGGUFRuntimeDiagnostics();
     } catch (error) {
-      showToast("Runtime could not be inspected", "The isolated compatibility check was unavailable. Generation will continue with the existing runtime behavior.", error.details || error.message);
+      showToast("Runtime could not be inspected", "The package preflight was unavailable. Generation will continue with the existing runtime behavior.", error.details || error.message);
       return true;
     }
     syncSelectedModelSourceLabel();

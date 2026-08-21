@@ -99,6 +99,35 @@ class MediaStore:
             raise MediaError("MEDIA_NOT_FOUND", "The media asset was not found in this session.")
         return asset
 
+    def read_model_visual(self, session_id: str, asset_id: str, representation: str) -> tuple[str, bytes]:
+        asset = self.get(session_id, asset_id)
+        if representation == "image" and asset["type"] == "image":
+            stored_path = asset.get("_prepared_path") or asset.get("_original_path")
+        elif representation == "contact_sheet" and asset["type"] == "video":
+            stored_path = asset.get("_contact_sheet_path")
+        else:
+            raise MediaError("UNSUPPORTED_MEDIA", "The requested model visual does not match this asset.")
+        if not stored_path:
+            raise MediaError("MEDIA_NOT_FOUND", "The prepared model visual is missing.")
+
+        cache_root = CACHE_ROOT.resolve()
+        session_root = (CACHE_ROOT / session_id).resolve()
+        asset_root = Path(asset["_original_path"]).resolve().parent
+        visual_path = Path(stored_path).resolve()
+        try:
+            session_root.relative_to(cache_root)
+            asset_root.relative_to(session_root)
+            visual_path.relative_to(asset_root)
+        except ValueError as error:
+            raise MediaError("MEDIA_PATH_INVALID", "The prepared model visual is outside this Writer session.") from error
+        if not visual_path.is_file():
+            raise MediaError("MEDIA_NOT_FOUND", "The prepared model visual is missing.")
+
+        with visual_path.open("rb") as source:
+            payload = source.read()
+        media_type = mimetypes.guess_type(visual_path.name)[0] or "image/png"
+        return media_type, payload
+
     def public(self, asset: dict[str, Any]) -> dict[str, Any]:
         result = {key: value for key, value in asset.items() if not key.startswith("_")}
         result["content_url"] = f"/h3studio/media/{asset['id']}/content?session_id={asset['session_id']}"

@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -83,8 +84,10 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "selected_model_family": None,
             "cancel_requested": False,
             "pending_unload_family": None,
+            "media_mutation_active": False,
         })
         routes.GENERATION_CACHE.clear()
+        routes.GENERATION_CACHE_ACCESS.clear()
 
     def tearDown(self):
         routes.STATE.update({
@@ -94,8 +97,10 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "selected_model_family": None,
             "cancel_requested": False,
             "pending_unload_family": None,
+            "media_mutation_active": False,
         })
         routes.GENERATION_CACHE.clear()
+        routes.GENERATION_CACHE_ACCESS.clear()
 
     @staticmethod
     def payload(response):
@@ -337,6 +342,27 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
                 ))
         self.assertEqual(response.status, 200)
 
+    async def test_expired_media_and_generation_cache_are_cleaned_off_loop(self):
+        stale_key = ("stale-session", "Reference")
+        fresh_key = ("fresh-session", "Reference")
+        routes.GENERATION_CACHE.update({stale_key: {"prompt": "old"}, fresh_key: {"prompt": "new"}})
+        routes.GENERATION_CACHE_ACCESS.update({stale_key: 10.0, fresh_key: 90.0})
+        with tempfile.TemporaryDirectory() as directory:
+            stale_dir = Path(directory) / "stale-session"
+            stale_dir.mkdir()
+            (stale_dir / "asset.bin").write_bytes(b"old")
+            with (
+                patch.object(routes, "SESSION_TTL_SECONDS", 60.0),
+                patch.object(routes.STORE, "expire_sessions", return_value=[stale_dir]) as expire_sessions,
+            ):
+                await routes._cleanup_expired_state(now=100.0)
+            self.assertFalse(stale_dir.exists())
+
+        expire_sessions.assert_called_once_with(now=100.0, max_age_seconds=60.0)
+        self.assertNotIn(stale_key, routes.GENERATION_CACHE)
+        self.assertIn(fresh_key, routes.GENERATION_CACHE)
+        self.assertFalse(routes.STATE["media_mutation_active"])
+
     async def test_mode_clear_invalidates_only_its_generation_cache_entry(self):
         reference_key = (self.session_id, "Reference")
         text_key = (self.session_id, "T2VA")
@@ -362,7 +388,8 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         with (
             tempfile.TemporaryDirectory() as directory,
             patch.object(routes, "CACHE_ROOT", Path(directory)),
-            patch.object(routes.STORE, "add", return_value=uploaded),
+            patch.object(routes.STORE, "prepare_add", return_value={"type": "image"}),
+            patch.object(routes.STORE, "commit_add", return_value=uploaded),
         ):
             response = await routes.upload_media(_MultipartRequest(fields))
         self.assertEqual(response.status, 201)
@@ -380,7 +407,8 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             tempfile.TemporaryDirectory() as directory,
             patch.object(routes, "CACHE_ROOT", Path(directory)),
             patch.object(routes.STORE, "get", return_value={"id": "old", "mode": "Reference"}),
-            patch.object(routes.STORE, "replace", return_value=replacement),
+            patch.object(routes.STORE, "prepare_replace", return_value={"type": "image", "mode": "Reference"}),
+            patch.object(routes.STORE, "commit_replace", return_value=replacement),
             patch.object(routes.STORE, "list", return_value=[replacement]),
         ):
             response = await routes.upload_media(_MultipartRequest(replace_fields, query={"replace_asset_id": "old"}))
@@ -408,13 +436,86 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         with (
             tempfile.TemporaryDirectory() as directory,
             patch.object(routes, "CACHE_ROOT", Path(directory)),
-            patch.object(routes.STORE, "add") as add,
+            patch.object(routes.STORE, "prepare_add") as prepare_add,
+            patch.object(routes.STORE, "commit_add") as commit_add,
         ):
             response = await routes.upload_media(_MultipartRequest(fields))
 
         self.assertEqual(response.status, 409)
         self.assertEqual(self.payload(response)["error"]["code"], "GENERATION_BUSY")
-        add.assert_not_called()
+        prepare_add.assert_not_called()
+        commit_add.assert_not_called()
+
+    async def test_upload_processing_runs_off_loop_and_blocks_generation_admission(self):
+        fields = [
+            _MultipartField("session_id", text=self.session_id),
+            _MultipartField("mode", text="Reference"),
+            _MultipartField("file", filename="image.png", content=b"image", content_type="image/png"),
+        ]
+        prepared = {"id": "new", "type": "image", "mode": "Reference"}
+        uploaded = {"id": "new", "type": "image", "mode": "Reference"}
+        worker_started = threading.Event()
+        allow_worker = threading.Event()
+        main_thread = threading.get_ident()
+        worker_threads = []
+
+        def prepare_add(*_args):
+            worker_threads.append(threading.get_ident())
+            worker_started.set()
+            allow_worker.wait(timeout=2)
+            return prepared
+
+        def commit_add(*_args):
+            self.assertEqual(threading.get_ident(), main_thread)
+            return uploaded
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(routes, "CACHE_ROOT", Path(directory)),
+            patch.object(routes.STORE, "prepare_add", side_effect=prepare_add),
+            patch.object(routes.STORE, "commit_add", side_effect=commit_add),
+        ):
+            upload = asyncio.create_task(routes.upload_media(_MultipartRequest(fields)))
+            started = await asyncio.to_thread(worker_started.wait, 2)
+            self.assertTrue(started)
+            self.assertIsNone(routes._claim_generation_request())
+            allow_worker.set()
+            response = await upload
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(len(worker_threads), 1)
+        self.assertNotEqual(worker_threads[0], main_thread)
+        self.assertFalse(routes.STATE["media_mutation_active"])
+
+    async def test_resample_processing_runs_off_loop_and_commits_on_event_loop(self):
+        main_thread = threading.get_ident()
+        worker_threads = []
+        prepared = {"derived_dir": Path("derived")}
+        resampled = {"id": "video", "mode": "Reference"}
+
+        def prepare_resample(*_args):
+            worker_threads.append(threading.get_ident())
+            return prepared
+
+        def commit_resample(*_args):
+            self.assertEqual(threading.get_ident(), main_thread)
+            return resampled
+
+        with (
+            patch.object(routes.STORE, "get", return_value={"mode": "Reference"}),
+            patch.object(routes.STORE, "prepare_resample", side_effect=prepare_resample),
+            patch.object(routes.STORE, "commit_resample", side_effect=commit_resample),
+        ):
+            response = await routes.resample_media(_Request(
+                match_info={"asset_id": "video"},
+                body={"session_id": self.session_id, "frame_count": "4"},
+            ))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.payload(response), {"asset": resampled})
+        self.assertEqual(len(worker_threads), 1)
+        self.assertNotEqual(worker_threads[0], main_thread)
+        self.assertFalse(routes.STATE["media_mutation_active"])
 
     async def test_generate_success_caches_only_task_context_and_always_returns_to_idle(self):
         body = self.generation_body("Use <Video 1>.")
@@ -564,7 +665,8 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         routes.GENERATION_CACHE[reference_key] = {"prompt": "reference"}
         with (
             patch.object(routes.STORE, "get", return_value={"mode": "Reference"}),
-            patch.object(routes.STORE, "resample", return_value=resampled),
+            patch.object(routes.STORE, "prepare_resample", return_value={"derived_dir": Path("derived")}),
+            patch.object(routes.STORE, "commit_resample", return_value=resampled),
         ):
             response = await routes.resample_media(_Request(
                 match_info={"asset_id": "video"},

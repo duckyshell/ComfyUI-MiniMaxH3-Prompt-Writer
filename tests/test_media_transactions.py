@@ -40,6 +40,27 @@ class MediaTransactionTests(unittest.TestCase):
             self.assertTrue((root / "first").exists())
             self.assertEqual([asset["id"] for asset in remaining], ["first"])
 
+    def test_expire_sessions_removes_only_stale_in_memory_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_root = Path(directory)
+            stale_dir = cache_root / "stale"
+            fresh_dir = cache_root / "fresh"
+            stale_dir.mkdir()
+            fresh_dir.mkdir()
+            store = media.MediaStore()
+            store.sessions.update({"stale": [], "fresh": []})
+            store.touch("stale", now=10.0)
+            store.touch("fresh", now=90.0)
+
+            with patch.object(media, "CACHE_ROOT", cache_root):
+                expired = store.expire_sessions(now=100.0, max_age_seconds=60.0)
+
+            self.assertEqual(expired, [stale_dir])
+            self.assertNotIn("stale", store.sessions)
+            self.assertNotIn("stale", store.last_accessed)
+            self.assertIn("fresh", store.sessions)
+            self.assertTrue(stale_dir.exists(), "filesystem cleanup belongs to the route offload boundary")
+
     def test_failed_replace_keeps_old_asset_and_files_intact(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

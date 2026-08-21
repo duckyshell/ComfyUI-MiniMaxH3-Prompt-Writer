@@ -36,6 +36,7 @@ STATE: dict[str, Any] = {
     "selected_model_family": None,
     "cancel_requested": False,
     "pending_unload_family": None,
+    "media_mutation_active": False,
 }
 STATE_LOCK = threading.RLock()
 
@@ -46,23 +47,83 @@ BACKENDS = {
     "api": API_PROVIDER_BACKEND,
 }
 GENERATION_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+GENERATION_CACHE_ACCESS: dict[tuple[str, str], float] = {}
+SESSION_TTL_SECONDS = 24 * 60 * 60
 
 
 def _cache_key(session_id: str, mode: str) -> tuple[str, str]:
     return session_id, mode
 
 
+def _get_generation_cache(session_id: str, mode: str) -> dict[str, Any] | None:
+    key = _cache_key(session_id, mode)
+    cached = GENERATION_CACHE.get(key)
+    if cached is not None:
+        GENERATION_CACHE_ACCESS[key] = time.monotonic()
+    return cached
+
+
+def _set_generation_cache(session_id: str, mode: str, value: dict[str, Any]) -> None:
+    key = _cache_key(session_id, mode)
+    GENERATION_CACHE[key] = value
+    GENERATION_CACHE_ACCESS[key] = time.monotonic()
+
+
+def _invalidate_generation_cache(session_id: str, mode: str) -> None:
+    key = _cache_key(session_id, mode)
+    GENERATION_CACHE.pop(key, None)
+    GENERATION_CACHE_ACCESS.pop(key, None)
+
+
 def _generation_busy_error() -> web.Response | None:
     with STATE_LOCK:
-        if STATE["active_request_id"] is None:
+        if STATE["active_request_id"] is None and not STATE["media_mutation_active"]:
             return None
-    return _error("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.", status=409)
+    return _error("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is busy.", status=409)
+
+
+def _claim_media_mutation() -> bool:
+    with STATE_LOCK:
+        if STATE["active_request_id"] is not None or STATE["media_mutation_active"]:
+            return False
+        STATE["media_mutation_active"] = True
+    return True
+
+
+def _release_media_mutation() -> None:
+    with STATE_LOCK:
+        STATE["media_mutation_active"] = False
+
+
+async def _cleanup_expired_state(*, now: float | None = None) -> None:
+    if not _claim_media_mutation():
+        return
+    try:
+        current_time = time.monotonic() if now is None else now
+        expired_directories = STORE.expire_sessions(now=current_time, max_age_seconds=SESSION_TTL_SECONDS)
+        expired_sessions = {path.name for path in expired_directories}
+        expired_cache_keys = {
+            key
+            for key, accessed_at in GENERATION_CACHE_ACCESS.items()
+            if current_time - accessed_at >= SESSION_TTL_SECONDS
+        }
+        expired_cache_keys.update(key for key in GENERATION_CACHE if key[0] in expired_sessions)
+        for key in expired_cache_keys:
+            GENERATION_CACHE.pop(key, None)
+            GENERATION_CACHE_ACCESS.pop(key, None)
+        if expired_directories:
+            await asyncio.gather(*(
+                asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
+                for path in expired_directories
+            ))
+    finally:
+        _release_media_mutation()
 
 
 def _claim_generation_request() -> str | None:
     request_id = str(uuid4())
     with STATE_LOCK:
-        if STATE["active_request_id"] is not None:
+        if STATE["active_request_id"] is not None or STATE["media_mutation_active"]:
             return None
         STATE.update({
             "phase": "preparing",
@@ -238,6 +299,7 @@ routes = PromptServer.instance.routes
 
 @routes.get(f"{ROUTE_PREFIX}/status")
 async def get_status(_request: web.Request) -> web.Response:
+    await _cleanup_expired_state()
     with STATE_LOCK:
         state = dict(STATE)
     family = state.get("selected_model_family")
@@ -514,13 +576,13 @@ async def generate(request: web.Request) -> web.Response:
         total_seconds = round(time.perf_counter() - request_started, 3)
         peak_vram_mb = vram_monitor.stop()
         debug_input_sequence = result.pop("debug_input_sequence", None)
-        GENERATION_CACHE[_cache_key(body["session_id"], body["mode"])] = {
+        _set_generation_cache(body["session_id"], body["mode"], {
             "mode": body["mode"],
             "duration_seconds": assembled["input"]["duration_seconds"],
             "aspect_ratio": assembled["input"]["aspect_ratio"],
             "creative_brief": assembled["input"]["creative_brief"],
             "lyrics": assembled["input"].get("lyrics", ""),
-        }
+        })
         write_event(
             "request_succeeded",
             request_id=request_id,
@@ -626,7 +688,7 @@ async def refine(request: web.Request) -> web.Response:
     try:
         assembled = assemble_lyrics_request(body) if lyrics_request else assemble_refinement(
             body,
-            GENERATION_CACHE.get(_cache_key(body["session_id"], body["mode"])),
+            _get_generation_cache(body["session_id"], body["mode"]),
         )
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
@@ -779,6 +841,7 @@ async def upload_media(request: web.Request) -> web.Response:
     uploaded: list[dict[str, Any]] = []
     uploaded_ids: list[str] = []
     asset_dir: Path | None = None
+    media_claimed = False
     replace_asset_id: str | None = request.query.get("replace_asset_id") or None
     try:
         while field := await reader.next():
@@ -793,8 +856,6 @@ async def upload_media(request: web.Request) -> web.Response:
                 if uploaded:
                     raise MediaError("INVALID_REPLACEMENT", "Replacement metadata must be provided before the file.")
                 replace_asset_id = multipart_replace_asset_id
-                if replace_asset_id and STATE["active_request_id"] is not None:
-                    raise MediaError("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.")
                 continue
             if field.name != "file" or not field.filename:
                 continue
@@ -814,23 +875,34 @@ async def upload_media(request: web.Request) -> web.Response:
                     if size > MAX_FILE_BYTES:
                         raise MediaError("MEDIA_TOO_LARGE", "A media file cannot exceed 1 GB.")
                     output.write(chunk)
-            if STATE["active_request_id"] is not None:
+            if not media_claimed and not _claim_media_mutation():
                 raise MediaError("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.")
+            media_claimed = True
             if replace_asset_id:
                 if uploaded:
                     raise MediaError("INVALID_REPLACEMENT", "Replace accepts exactly one file.")
                 old_asset = STORE.get(session_id, replace_asset_id)
                 if old_asset["mode"] != mode:
                     raise MediaError("INVALID_REPLACEMENT", "The replacement must stay in the same mode.")
-                asset = STORE.replace(
+                prepared = await asyncio.to_thread(
+                    STORE.prepare_replace,
                     session_id,
                     replace_asset_id,
                     field.filename,
                     field.headers.get("Content-Type"),
                     stored_path,
                 )
+                asset = STORE.commit_replace(session_id, replace_asset_id, prepared)
             else:
-                asset = STORE.add(session_id, mode, field.filename, field.headers.get("Content-Type"), stored_path)
+                prepared = await asyncio.to_thread(
+                    STORE.prepare_add,
+                    session_id,
+                    mode,
+                    field.filename,
+                    field.headers.get("Content-Type"),
+                    stored_path,
+                )
+                asset = STORE.commit_add(session_id, mode, prepared)
             uploaded.append(asset)
             uploaded_ids.append(asset["id"])
             asset_dir = None
@@ -846,10 +918,13 @@ async def upload_media(request: web.Request) -> web.Response:
         if isinstance(error, MediaError):
             return _media_error(error, status=409 if error.code == "GENERATION_BUSY" else 400)
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
+    finally:
+        if media_claimed:
+            _release_media_mutation()
 
     if not uploaded:
         return _error("INVALID_REQUEST", "No media files were provided.", status=400)
-    GENERATION_CACHE.pop(_cache_key(session_id, mode), None)
+    _invalidate_generation_cache(session_id, mode)
     if replace_asset_id:
         return web.json_response({"session_id": session_id, "asset": uploaded[0], "assets": STORE.list(session_id)}, status=201)
     return web.json_response({"session_id": session_id, "assets": uploaded}, status=201)
@@ -909,7 +984,7 @@ async def remove_media(request: web.Request) -> web.Response:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
         return _media_error(error, status=404)
-    GENERATION_CACHE.pop(_cache_key(session_id, mode), None)
+    _invalidate_generation_cache(session_id, mode)
     return web.json_response({"removed": True, "assets": STORE.list(session_id)})
 
 
@@ -926,7 +1001,7 @@ async def clear_media(request: web.Request) -> web.Response:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
         return _media_error(error)
-    GENERATION_CACHE.pop(_cache_key(session_id, mode), None)
+    _invalidate_generation_cache(session_id, mode)
     return web.json_response({"cleared": True, "assets": assets})
 
 
@@ -936,20 +1011,33 @@ async def resample_media(request: web.Request) -> web.Response:
     if busy is not None:
         return busy
     body = await _json_body(request)
+    if not _claim_media_mutation():
+        return _error("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.", status=409)
+    prepared: dict[str, Any] | None = None
     try:
         session_id = parse_session_id((body or {}).get("session_id"))
         mode = STORE.get(session_id, request.match_info["asset_id"])["mode"]
-        asset = STORE.resample(
+        prepared = await asyncio.to_thread(
+            STORE.prepare_resample,
             session_id,
             request.match_info["asset_id"],
             (body or {}).get("frame_count"),
             (body or {}).get("include_endpoints"),
         )
+        asset = STORE.commit_resample(session_id, request.match_info["asset_id"], prepared)
     except ValueError:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
+        if prepared is not None:
+            await asyncio.to_thread(shutil.rmtree, prepared["derived_dir"], ignore_errors=True)
         return _media_error(error)
-    GENERATION_CACHE.pop(_cache_key(session_id, mode), None)
+    except Exception:
+        if prepared is not None:
+            await asyncio.to_thread(shutil.rmtree, prepared["derived_dir"], ignore_errors=True)
+        raise
+    finally:
+        _release_media_mutation()
+    _invalidate_generation_cache(session_id, mode)
     return web.json_response({"asset": asset})
 
 
@@ -961,6 +1049,9 @@ async def reorder_media(request: web.Request) -> web.Response:
     body = await _json_body(request)
     if body is None or body.get("mode") not in MODE_LIMITS or not isinstance(body.get("asset_ids"), list):
         return _error("INVALID_REQUEST", "Mode and ordered asset IDs are required.", status=400)
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
     try:
         session_id = parse_session_id(body.get("session_id"))
         assets = STORE.reorder(session_id, body["mode"], body["asset_ids"])
@@ -968,5 +1059,5 @@ async def reorder_media(request: web.Request) -> web.Response:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
         return _media_error(error)
-    GENERATION_CACHE.pop(_cache_key(session_id, body["mode"]), None)
+    _invalidate_generation_cache(session_id, body["mode"])
     return web.json_response({"assets": assets})

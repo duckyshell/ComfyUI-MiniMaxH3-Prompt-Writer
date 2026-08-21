@@ -3,6 +3,7 @@ from __future__ import annotations
 import mimetypes
 import shutil
 import math
+import time
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -86,17 +87,29 @@ class MediaError(Exception):
 class MediaStore:
     def __init__(self) -> None:
         self.sessions: dict[str, list[dict[str, Any]]] = {}
+        self.last_accessed: dict[str, float] = {}
+
+    def touch(self, session_id: str, *, now: float | None = None) -> None:
+        self.last_accessed[session_id] = time.monotonic() if now is None else now
 
     def list(self, session_id: str) -> list[dict[str, Any]]:
+        if session_id in self.sessions:
+            self.touch(session_id)
         return [self.public(asset) for asset in self.sessions.get(session_id, [])]
 
     def assets(self, session_id: str) -> list[dict[str, Any]]:
+        self.touch(session_id)
         return self.sessions.setdefault(session_id, [])
 
-    def get(self, session_id: str, asset_id: str) -> dict[str, Any]:
+    def _get_asset(self, session_id: str, asset_id: str) -> dict[str, Any]:
         asset = next((item for item in self.sessions.get(session_id, []) if item["id"] == asset_id), None)
         if asset is None:
             raise MediaError("MEDIA_NOT_FOUND", "The media asset was not found in this session.")
+        return asset
+
+    def get(self, session_id: str, asset_id: str) -> dict[str, Any]:
+        asset = self._get_asset(session_id, asset_id)
+        self.touch(session_id)
         return asset
 
     def read_model_visual(self, session_id: str, asset_id: str, representation: str) -> tuple[str, bytes]:
@@ -146,12 +159,28 @@ class MediaStore:
         return result
 
     def add(self, session_id: str, mode: str, filename: str, content_type: str | None, stored_path: Path) -> dict[str, Any]:
+        prepared = self.prepare_add(session_id, mode, filename, content_type, stored_path)
+        return self.commit_add(session_id, mode, prepared)
+
+    def prepare_add(
+        self,
+        session_id: str,
+        mode: str,
+        filename: str,
+        content_type: str | None,
+        stored_path: Path,
+    ) -> dict[str, Any]:
         kind = media_type(filename, content_type)
         if kind is None:
             raise MediaError("UNSUPPORTED_MEDIA", "This file type is not supported.")
-        assets = self.assets(session_id)
+        assets = list(self.sessions.get(session_id, []))
         validate_capacity(mode, assets, kind)
-        base = self._prepare_asset(session_id, mode, filename, content_type, stored_path, assets)
+        return self._prepare_asset(session_id, mode, filename, content_type, stored_path, assets)
+
+    def commit_add(self, session_id: str, mode: str, base: dict[str, Any]) -> dict[str, Any]:
+        assets = self.assets(session_id)
+        validate_capacity(mode, assets, base["type"])
+        validate_reference_durations(assets, base)
         assets.append(base)
         self._renumber(assets, mode)
         return self.public(base)
@@ -205,12 +234,23 @@ class MediaStore:
         content_type: str | None,
         stored_path: Path,
     ) -> dict[str, Any]:
-        old_asset = self.get(session_id, asset_id)
-        assets = self.sessions[session_id]
+        replacement = self.prepare_replace(session_id, asset_id, filename, content_type, stored_path)
+        return self.commit_replace(session_id, asset_id, replacement)
+
+    def prepare_replace(
+        self,
+        session_id: str,
+        asset_id: str,
+        filename: str,
+        content_type: str | None,
+        stored_path: Path,
+    ) -> dict[str, Any]:
+        old_asset = self._get_asset(session_id, asset_id)
+        assets = list(self.sessions[session_id])
         kind = media_type(filename, content_type)
         if kind != old_asset["type"]:
             raise MediaError("REPLACEMENT_TYPE_MISMATCH", "The replacement must use the same media type.")
-        replacement = self._prepare_asset(
+        return self._prepare_asset(
             session_id,
             old_asset["mode"],
             filename,
@@ -218,6 +258,13 @@ class MediaStore:
             stored_path,
             [asset for asset in assets if asset is not old_asset],
         )
+
+    def commit_replace(self, session_id: str, asset_id: str, replacement: dict[str, Any]) -> dict[str, Any]:
+        old_asset = self.get(session_id, asset_id)
+        assets = self.sessions[session_id]
+        if replacement["type"] != old_asset["type"] or replacement["mode"] != old_asset["mode"]:
+            raise MediaError("INVALID_REPLACEMENT", "The prepared replacement no longer matches the selected asset.")
+        validate_reference_durations([asset for asset in assets if asset is not old_asset], replacement)
         index = assets.index(old_asset)
         assets[index] = replacement
         self._renumber(assets, old_asset["mode"])
@@ -233,7 +280,27 @@ class MediaStore:
 
     def clear(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)
+        self.last_accessed.pop(session_id, None)
         shutil.rmtree(CACHE_ROOT / session_id, ignore_errors=True)
+
+    def expire_sessions(
+        self,
+        *,
+        now: float,
+        max_age_seconds: float,
+        exclude: set[str] | None = None,
+    ) -> list[Path]:
+        excluded = exclude or set()
+        expired = [
+            session_id
+            for session_id, accessed_at in self.last_accessed.items()
+            if session_id not in excluded and now - accessed_at >= max_age_seconds
+        ]
+        directories = [CACHE_ROOT / session_id for session_id in expired]
+        for session_id in expired:
+            self.sessions.pop(session_id, None)
+            self.last_accessed.pop(session_id, None)
+        return directories
 
     def clear_mode(self, session_id: str, mode: str) -> list[dict[str, Any]]:
         if mode not in MODE_LIMITS:
@@ -243,8 +310,10 @@ class MediaStore:
         remaining = [asset for asset in assets if asset["mode"] != mode]
         if remaining:
             self.sessions[session_id] = remaining
+            self.touch(session_id)
         else:
             self.sessions.pop(session_id, None)
+            self.last_accessed.pop(session_id, None)
         for asset in removed:
             shutil.rmtree(Path(asset["_original_path"]).parent, ignore_errors=True)
         session_dir = CACHE_ROOT / session_id
@@ -259,7 +328,17 @@ class MediaStore:
         frame_count_mode: str | None = None,
         include_endpoints: bool | None = None,
     ) -> dict[str, Any]:
-        asset = self.get(session_id, asset_id)
+        prepared = self.prepare_resample(session_id, asset_id, frame_count_mode, include_endpoints)
+        return self.commit_resample(session_id, asset_id, prepared)
+
+    def prepare_resample(
+        self,
+        session_id: str,
+        asset_id: str,
+        frame_count_mode: str | None = None,
+        include_endpoints: bool | None = None,
+    ) -> dict[str, Any]:
+        asset = self._get_asset(session_id, asset_id)
         if asset["type"] != "video":
             raise MediaError("UNSUPPORTED_MEDIA", "Only video assets can be resampled.")
         selected_count = frame_count_mode or asset.get("frame_count_mode", "auto")
@@ -296,8 +375,29 @@ class MediaStore:
             for value in [asset.get("_preview_path"), asset.get("_contact_sheet_path")]
             if value
         } | {Path(frame["path"]) for frame in asset.get("_frames", [])}
-        asset.update(processed)
-        asset["content_revision"] = content_revision
+        return {
+            "asset_id": asset_id,
+            "source_path": asset["_original_path"],
+            "source_revision": int(asset.get("content_revision", 0)),
+            "processed": processed,
+            "content_revision": content_revision,
+            "old_paths": old_paths,
+            "asset_dir": asset_dir,
+            "derived_dir": derived_dir,
+        }
+
+    def commit_resample(self, session_id: str, asset_id: str, prepared: dict[str, Any]) -> dict[str, Any]:
+        asset = self.get(session_id, asset_id)
+        if (
+            asset["_original_path"] != prepared["source_path"]
+            or int(asset.get("content_revision", 0)) != prepared["source_revision"]
+        ):
+            shutil.rmtree(prepared["derived_dir"], ignore_errors=True)
+            raise MediaError("MEDIA_CHANGED", "The video changed while it was being resampled. Try again.")
+        asset.update(prepared["processed"])
+        asset["content_revision"] = prepared["content_revision"]
+        old_paths = prepared["old_paths"]
+        asset_dir = prepared["asset_dir"]
         for path in old_paths:
             if path != Path(asset["_original_path"]):
                 path.unlink(missing_ok=True)
@@ -318,6 +418,8 @@ class MediaStore:
         return self.list(session_id)
 
     def manifest(self, session_id: str, mode: str) -> dict[str, Any]:
+        if session_id in self.sessions:
+            self.touch(session_id)
         assets = [asset for asset in self.sessions.get(session_id, []) if asset["mode"] == mode]
         violations: list[dict[str, str]] = []
         if mode == "Reference":

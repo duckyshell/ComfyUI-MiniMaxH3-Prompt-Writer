@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,10 @@ STATE: dict[str, Any] = {
     "active_request_id": None,
     "selected_model_id": None,
     "selected_model_family": None,
+    "cancel_requested": False,
+    "pending_unload_family": None,
 }
+STATE_LOCK = threading.RLock()
 
 BACKENDS = {
     "gguf": GGUF_BACKEND,
@@ -49,9 +53,64 @@ def _cache_key(session_id: str, mode: str) -> tuple[str, str]:
 
 
 def _generation_busy_error() -> web.Response | None:
-    if STATE["active_request_id"] is None:
-        return None
+    with STATE_LOCK:
+        if STATE["active_request_id"] is None:
+            return None
     return _error("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.", status=409)
+
+
+def _claim_generation_request() -> str | None:
+    request_id = str(uuid4())
+    with STATE_LOCK:
+        if STATE["active_request_id"] is not None:
+            return None
+        STATE.update({
+            "phase": "preparing",
+            "active_request_id": request_id,
+            "selected_model_id": None,
+            "selected_model_family": None,
+            "cancel_requested": False,
+            "pending_unload_family": None,
+        })
+    return request_id
+
+
+def _set_active_model(request_id: str, model: dict[str, Any]) -> tuple[bool, bool]:
+    with STATE_LOCK:
+        if STATE["active_request_id"] != request_id:
+            return False, False
+        STATE.update({
+            "selected_model_id": model["id"],
+            "selected_model_family": model["family"],
+        })
+        return bool(STATE["cancel_requested"]), STATE["pending_unload_family"] == model["family"]
+
+
+def _request_cancelled(request_id: str) -> bool:
+    with STATE_LOCK:
+        return STATE["active_request_id"] == request_id and bool(STATE["cancel_requested"])
+
+
+def _set_request_phase(request_id: str, phase: str) -> None:
+    with STATE_LOCK:
+        if STATE["active_request_id"] == request_id:
+            STATE["phase"] = phase
+
+
+def _release_generation_request(request_id: str) -> None:
+    with STATE_LOCK:
+        if STATE["active_request_id"] != request_id:
+            return
+        STATE.update({
+            "phase": "idle",
+            "active_request_id": None,
+            "cancel_requested": False,
+            "pending_unload_family": None,
+        })
+
+
+def _cancelled_response() -> web.Response:
+    return _error("GENERATION_CANCELLED", "Generation was cancelled.", status=499)
 
 
 async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: dict[str, Any]) -> None:
@@ -179,7 +238,9 @@ routes = PromptServer.instance.routes
 
 @routes.get(f"{ROUTE_PREFIX}/status")
 async def get_status(_request: web.Request) -> web.Response:
-    family = STATE.get("selected_model_family")
+    with STATE_LOCK:
+        state = dict(STATE)
+    family = state.get("selected_model_family")
     backend = BACKENDS.get(family, GGUF_BACKEND)
     ollama_status_call = OLLAMA_BACKEND.status if family == "ollama" else OLLAMA_BACKEND.retained_status
     direct_status, ollama_status = await asyncio.gather(
@@ -193,7 +254,7 @@ async def get_status(_request: web.Request) -> web.Response:
     else:
         backend_status = await asyncio.to_thread(backend.status)
     return web.json_response({
-        **STATE,
+        **{key: state[key] for key in ("phase", "active_request_id", "selected_model_id", "selected_model_family")},
         **backend_status,
         "backend_ready": True,
         "model_backend_ready": True,
@@ -349,25 +410,52 @@ async def generate(request: web.Request) -> web.Response:
     if body["mode"] not in MODES:
         return _error("INVALID_MODE", "The selected MiniMax mode is not supported.", status=400)
 
-    if STATE["active_request_id"] is not None:
-        return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
-    try:
-        assembled = assemble_request(body)
-    except AssemblyError as error:
-        return _error(error.code, error.message, status=400, details=error.details)
-    try:
-        model = await _resolve_model(body)
-    except ModelError as error:
-        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
-    if model is None:
-        return _error("MODEL_NOT_FOUND", "The selected prompt model was not found.", status=404)
-    backend = BACKENDS.get(model["family"])
-    if backend is None:
-        return _error("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.", status=400)
     if not isinstance(body.get("thinking", False), bool) or not isinstance(body.get("unload_after", True), bool):
         return _error("INVALID_REQUEST", "Thinking and unload_after must be booleans.", status=400)
     if body.get("seed") is not None and (not isinstance(body["seed"], int) or isinstance(body["seed"], bool) or body["seed"] < 0):
         return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
+    try:
+        assembled = assemble_request(body)
+    except AssemblyError as error:
+        return _error(error.code, error.message, status=400, details=error.details)
+    except (MediaError, RuntimeError) as error:
+        code = error.code if isinstance(error, MediaError) else "GUIDE_LOAD_FAILED"
+        return _error(code, str(error), status=500)
+
+    request_id = _claim_generation_request()
+    if request_id is None:
+        return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
+    try:
+        model = await _resolve_model(body)
+    except ModelError as error:
+        _release_generation_request(request_id)
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+    except Exception:
+        _release_generation_request(request_id)
+        raise
+    if model is None:
+        _release_generation_request(request_id)
+        return _error("MODEL_NOT_FOUND", "The selected prompt model was not found.", status=404)
+    backend = BACKENDS.get(model["family"])
+    if backend is None:
+        _release_generation_request(request_id)
+        return _error("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.", status=400)
+    cancel_requested, pending_unload = _set_active_model(request_id, model)
+    try:
+        backend.prepare_request()
+        if pending_unload:
+            request_unload = getattr(backend, "request_unload", None)
+            if callable(request_unload):
+                request_unload()
+            else:
+                backend.cancel()
+        if cancel_requested:
+            backend.cancel()
+            _release_generation_request(request_id)
+            return _cancelled_response()
+    except Exception:
+        _release_generation_request(request_id)
+        raise
     try:
         runtime_plan = await asyncio.to_thread(
             backend.preflight,
@@ -379,14 +467,19 @@ async def generate(request: web.Request) -> web.Response:
         )
         await _memory_preflight(backend, model, runtime_plan)
     except ModelError as error:
+        _release_generation_request(request_id)
         return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+    except Exception:
+        _release_generation_request(request_id)
+        raise
+    if _request_cancelled(request_id):
+        _release_generation_request(request_id)
+        return _cancelled_response()
 
-    request_id = str(uuid4())
     request_started = time.perf_counter()
-    backend.prepare_request()
     vram_monitor = PeakVRAMMonitor()
     vram_monitor.start()
-    STATE.update({"phase": "loading_model", "active_request_id": request_id, "selected_model_id": model["id"], "selected_model_family": model["family"]})
+    _set_request_phase(request_id, "loading_model")
     write_event(
         "request_started",
         request_id=request_id,
@@ -401,7 +494,7 @@ async def generate(request: web.Request) -> web.Response:
     )
 
     def on_phase(phase: str) -> None:
-        STATE.update({"phase": phase})
+        _set_request_phase(request_id, phase)
         write_event("phase", request_id=request_id, operation="generate", phase=phase, elapsed_seconds=round(time.perf_counter() - request_started, 3))
 
     try:
@@ -460,16 +553,21 @@ async def generate(request: web.Request) -> web.Response:
         return _error(error.code, error.message, status=status, details=error.details)
     finally:
         vram_monitor.stop()
-        STATE.update({"phase": "idle", "active_request_id": None})
+        _release_generation_request(request_id)
 
 
 @routes.post(f"{ROUTE_PREFIX}/cancel")
 async def cancel(_request: web.Request) -> web.Response:
-    if STATE["active_request_id"] is None:
-        return web.json_response({"cancelled": False, "reason": "idle"})
-    STATE["phase"] = "cancelling"
-    backend = BACKENDS.get(STATE.get("selected_model_family"), GGUF_BACKEND)
-    return web.json_response({"cancelled": backend.cancel()})
+    with STATE_LOCK:
+        if STATE["active_request_id"] is None:
+            return web.json_response({"cancelled": False, "reason": "idle"})
+        STATE["phase"] = "cancelling"
+        STATE["cancel_requested"] = True
+        family = STATE.get("selected_model_family")
+    if family is None:
+        return web.json_response({"cancelled": True, "pending": True})
+    backend = BACKENDS.get(family, GGUF_BACKEND)
+    return web.json_response({"cancelled": backend.cancel(), "pending": False})
 
 
 @routes.post(f"{ROUTE_PREFIX}/unload")
@@ -483,9 +581,20 @@ async def unload(request: web.Request) -> web.Response:
     if model_id is not None and not isinstance(model_id, str):
         return _error("INVALID_REQUEST", "model_id must be a string.", status=400)
     backend = BACKENDS[family]
-    active_same_family = STATE["active_request_id"] is not None and STATE.get("selected_model_family") == family
+    with STATE_LOCK:
+        active = STATE["active_request_id"] is not None
+        active_family = STATE.get("selected_model_family")
+        if active and active_family is None:
+            STATE["phase"] = "cancelling"
+            STATE["cancel_requested"] = True
+            STATE["pending_unload_family"] = family
+            return web.json_response({"unload_requested": True, "deferred": True})
+    active_same_family = active and active_family == family
     if active_same_family:
-        return web.json_response({"unload_requested": backend.request_unload(), "deferred": True})
+        request_unload = getattr(backend, "request_unload", None)
+        if callable(request_unload):
+            return web.json_response({"unload_requested": request_unload(), "deferred": True})
+        return web.json_response({"unload_requested": False, "deferred": False, "externally_managed": True})
     if getattr(backend, "externally_managed", False):
         return web.json_response({
             "unload_requested": False,
@@ -510,8 +619,10 @@ async def refine(request: web.Request) -> web.Response:
     missing = [key for key in required if not body.get(key)]
     if missing:
         return _error("INVALID_REQUEST", "Required fields are missing.", status=400, details={"fields": missing})
-    if STATE["active_request_id"] is not None:
-        return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
+    if not isinstance(body.get("thinking", False), bool) or not isinstance(body.get("unload_after", True), bool):
+        return _error("INVALID_REQUEST", "Thinking and unload_after must be booleans.", status=400)
+    if body.get("seed") is not None and (not isinstance(body["seed"], int) or isinstance(body["seed"], bool) or body["seed"] < 0):
+        return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
     try:
         assembled = assemble_lyrics_request(body) if lyrics_request else assemble_refinement(
             body,
@@ -519,19 +630,44 @@ async def refine(request: web.Request) -> web.Response:
         )
     except AssemblyError as error:
         return _error(error.code, error.message, status=400, details=error.details)
+    except (MediaError, RuntimeError) as error:
+        code = error.code if isinstance(error, MediaError) else "GUIDE_LOAD_FAILED"
+        return _error(code, str(error), status=500)
+
+    request_id = _claim_generation_request()
+    if request_id is None:
+        return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
     try:
         model = await _resolve_model(body)
     except ModelError as error:
+        _release_generation_request(request_id)
         return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+    except Exception:
+        _release_generation_request(request_id)
+        raise
     if model is None:
+        _release_generation_request(request_id)
         return _error("MODEL_NOT_FOUND", "The selected prompt model was not found.", status=404)
     backend = BACKENDS.get(model["family"])
     if backend is None:
+        _release_generation_request(request_id)
         return _error("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.", status=400)
-    if not isinstance(body.get("thinking", False), bool) or not isinstance(body.get("unload_after", True), bool):
-        return _error("INVALID_REQUEST", "Thinking and unload_after must be booleans.", status=400)
-    if body.get("seed") is not None and (not isinstance(body["seed"], int) or isinstance(body["seed"], bool) or body["seed"] < 0):
-        return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
+    cancel_requested, pending_unload = _set_active_model(request_id, model)
+    try:
+        backend.prepare_request()
+        if pending_unload:
+            request_unload = getattr(backend, "request_unload", None)
+            if callable(request_unload):
+                request_unload()
+            else:
+                backend.cancel()
+        if cancel_requested:
+            backend.cancel()
+            _release_generation_request(request_id)
+            return _cancelled_response()
+    except Exception:
+        _release_generation_request(request_id)
+        raise
     try:
         runtime_plan = await asyncio.to_thread(
             backend.preflight,
@@ -543,14 +679,19 @@ async def refine(request: web.Request) -> web.Response:
         )
         await _memory_preflight(backend, model, runtime_plan)
     except ModelError as error:
+        _release_generation_request(request_id)
         return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+    except Exception:
+        _release_generation_request(request_id)
+        raise
+    if _request_cancelled(request_id):
+        _release_generation_request(request_id)
+        return _cancelled_response()
 
-    request_id = str(uuid4())
     request_started = time.perf_counter()
-    backend.prepare_request()
     vram_monitor = PeakVRAMMonitor()
     vram_monitor.start()
-    STATE.update({"phase": "loading_model", "active_request_id": request_id, "selected_model_id": model["id"], "selected_model_family": model["family"]})
+    _set_request_phase(request_id, "loading_model")
     operation = "refine_lyrics" if lyrics_request else "refine"
     write_event(
         "request_started",
@@ -566,7 +707,7 @@ async def refine(request: web.Request) -> web.Response:
     )
 
     def on_phase(phase: str) -> None:
-        STATE.update({"phase": phase})
+        _set_request_phase(request_id, phase)
         write_event("phase", request_id=request_id, operation=operation, phase=phase, elapsed_seconds=round(time.perf_counter() - request_started, 3))
 
     try:
@@ -620,7 +761,7 @@ async def refine(request: web.Request) -> web.Response:
         return _error(error.code, error.message, status=status, details=error.details)
     finally:
         vram_monitor.stop()
-        STATE.update({"phase": "idle", "active_request_id": None})
+        _release_generation_request(request_id)
 
 
 @routes.post(f"{ROUTE_PREFIX}/media/upload")

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 import tempfile
@@ -75,11 +76,25 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
     session_id = "11111111-2222-4333-8444-555555555555"
 
     def setUp(self):
-        routes.STATE["active_request_id"] = None
+        routes.STATE.update({
+            "phase": "idle",
+            "active_request_id": None,
+            "selected_model_id": None,
+            "selected_model_family": None,
+            "cancel_requested": False,
+            "pending_unload_family": None,
+        })
         routes.GENERATION_CACHE.clear()
 
     def tearDown(self):
-        routes.STATE["active_request_id"] = None
+        routes.STATE.update({
+            "phase": "idle",
+            "active_request_id": None,
+            "selected_model_id": None,
+            "selected_model_family": None,
+            "cancel_requested": False,
+            "pending_unload_family": None,
+        })
         routes.GENERATION_CACHE.clear()
 
     @staticmethod
@@ -168,6 +183,123 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 404)
         self.assertEqual(self.payload(response)["error"]["code"], "MODEL_NOT_FOUND")
         resolve_model.assert_awaited_once()
+
+    async def test_generate_claims_busy_state_before_model_resolution_awaits(self):
+        body = self.generation_body("Use <Video 1>.")
+        assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
+        resolution_started = asyncio.Event()
+        allow_resolution = asyncio.Event()
+
+        async def delayed_resolution(_body):
+            resolution_started.set()
+            await allow_resolution.wait()
+            return None
+
+        with (
+            patch.object(routes, "assemble_request", return_value=assembled),
+            patch.object(routes, "_resolve_model", side_effect=delayed_resolution) as resolve_model,
+        ):
+            first = asyncio.create_task(routes.generate(_Request(body=body)))
+            await resolution_started.wait()
+            second = await routes.generate(_Request(body=body))
+            self.assertEqual(second.status, 409)
+            self.assertEqual(self.payload(second)["error"]["code"], "GENERATION_BUSY")
+            self.assertIsNotNone(routes.STATE["active_request_id"])
+            allow_resolution.set()
+            first_response = await first
+
+        self.assertEqual(first_response.status, 404)
+        self.assertEqual(resolve_model.await_count, 1)
+        self.assertIsNone(routes.STATE["active_request_id"])
+
+    async def test_cancel_during_model_resolution_is_applied_before_preflight(self):
+        body = self.generation_body("Use <Video 1>.")
+        assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
+        model = {"id": "test-model", "name": "Test", "family": "test"}
+        backend = MagicMock(manages_gpu_memory=False)
+        backend.cancel.return_value = True
+        resolution_started = asyncio.Event()
+        allow_resolution = asyncio.Event()
+
+        async def delayed_resolution(_body):
+            resolution_started.set()
+            await allow_resolution.wait()
+            return model
+
+        with (
+            patch.object(routes, "assemble_request", return_value=assembled),
+            patch.object(routes, "_resolve_model", side_effect=delayed_resolution),
+            patch.dict(routes.BACKENDS, {"test": backend}),
+        ):
+            generation = asyncio.create_task(routes.generate(_Request(body=body)))
+            await resolution_started.wait()
+            cancelled = await routes.cancel(_Request())
+            self.assertEqual(self.payload(cancelled), {"cancelled": True, "pending": True})
+            allow_resolution.set()
+            response = await generation
+
+        self.assertEqual(response.status, 499)
+        self.assertEqual(self.payload(response)["error"]["code"], "GENERATION_CANCELLED")
+        backend.prepare_request.assert_called_once()
+        backend.cancel.assert_called_once()
+        backend.preflight.assert_not_called()
+        self.assertIsNone(routes.STATE["active_request_id"])
+
+    async def test_unload_during_model_resolution_is_deferred_to_selected_backend(self):
+        body = self.generation_body("Use <Video 1>.")
+        assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
+        model = {"id": "test-model", "name": "Test", "family": "test"}
+        backend = MagicMock(manages_gpu_memory=False)
+        backend.request_unload.return_value = True
+        resolution_started = asyncio.Event()
+        allow_resolution = asyncio.Event()
+
+        async def delayed_resolution(_body):
+            resolution_started.set()
+            await allow_resolution.wait()
+            return model
+
+        with (
+            patch.object(routes, "assemble_request", return_value=assembled),
+            patch.object(routes, "_resolve_model", side_effect=delayed_resolution),
+            patch.dict(routes.BACKENDS, {"test": backend}),
+        ):
+            generation = asyncio.create_task(routes.generate(_Request(body=body)))
+            await resolution_started.wait()
+            unloaded = await routes.unload(_Request(body={"family": "test"}))
+            self.assertEqual(self.payload(unloaded), {"unload_requested": True, "deferred": True})
+            allow_resolution.set()
+            response = await generation
+
+        self.assertEqual(response.status, 499)
+        backend.prepare_request.assert_called_once()
+        backend.request_unload.assert_called_once()
+        backend.preflight.assert_not_called()
+        self.assertIsNone(routes.STATE["active_request_id"])
+
+    async def test_generate_and_refine_return_guide_load_json_errors(self):
+        generate_body = self.generation_body("Use <Video 1>.")
+        with patch.object(routes, "assemble_request", side_effect=RuntimeError("guide integrity failed")):
+            generated = await routes.generate(_Request(body=generate_body))
+        self.assertEqual(generated.status, 500)
+        self.assertEqual(self.payload(generated)["error"], {
+            "code": "GUIDE_LOAD_FAILED",
+            "message": "guide integrity failed",
+        })
+
+        refine_body = {
+            **generate_body,
+            "current_prompt": "Current prompt",
+            "instruction": "Make it slower.",
+        }
+        with patch.object(routes, "assemble_refinement", side_effect=RuntimeError("guide integrity failed")):
+            refined = await routes.refine(_Request(body=refine_body))
+        self.assertEqual(refined.status, 500)
+        self.assertEqual(self.payload(refined)["error"], {
+            "code": "GUIDE_LOAD_FAILED",
+            "message": "guide integrity failed",
+        })
+        self.assertIsNone(routes.STATE["active_request_id"])
 
     async def test_destructive_media_endpoints_return_409_while_generation_is_active(self):
         routes.STATE["active_request_id"] = "request"

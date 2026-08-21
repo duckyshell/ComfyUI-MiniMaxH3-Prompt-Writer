@@ -47,6 +47,13 @@ class ModelDiscoveryTests(unittest.TestCase):
         ):
             return catalog.discover_models_with_diagnostics()
 
+    def find(self, root: Path, model_path: Path):
+        with (
+            patch.object(catalog.folder_paths, "get_folder_paths", return_value=[str(root)]),
+            patch.object(catalog.importlib.util, "find_spec", return_value=object()),
+        ):
+            return catalog.find_model(str(model_path.resolve()))
+
     def test_single_flat_pair_is_paired_automatically(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -145,6 +152,49 @@ class ModelDiscoveryTests(unittest.TestCase):
                 "ready_models": 1,
                 "incomplete_models": 0,
             })
+
+    def test_find_model_uses_only_the_selected_models_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_path = root / "gemma-4-test.gguf"
+            projector = root / "mmproj-BF16.gguf"
+            model_path.touch()
+            projector.touch()
+
+            with patch.object(catalog.Path, "rglob", side_effect=AssertionError("recursive discovery was used")):
+                model = self.find(root, model_path)
+
+            self.assertEqual(model["id"], str(model_path.resolve()))
+            self.assertEqual(model["projector"], str(projector.resolve()))
+
+    def test_find_model_cache_invalidates_when_sibling_gguf_files_change(self):
+        catalog._find_model_in_directory.cache_clear()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_path = root / "gemma-4-test.gguf"
+            model_path.touch()
+
+            first = self.find(root, model_path)
+            second = self.find(root, model_path)
+            cache_after_repeat = catalog._find_model_in_directory.cache_info()
+            projector = root / "mmproj-BF16.gguf"
+            projector.touch()
+            after_projector = self.find(root, model_path)
+            cache_after_change = catalog._find_model_in_directory.cache_info()
+
+            self.assertIsNone(first["projector"])
+            self.assertIsNone(second["projector"])
+            self.assertGreaterEqual(cache_after_repeat.hits, 1)
+            self.assertEqual(after_projector["projector"], str(projector.resolve()))
+            self.assertGreater(cache_after_change.misses, cache_after_repeat.misses)
+
+    def test_find_model_rejects_a_gguf_outside_configured_roots(self):
+        with tempfile.TemporaryDirectory() as root_directory, tempfile.TemporaryDirectory() as other_directory:
+            root = Path(root_directory)
+            model_path = Path(other_directory) / "gemma-4-test.gguf"
+            model_path.touch()
+
+            self.assertIsNone(self.find(root, model_path))
 
 
 if __name__ == "__main__":

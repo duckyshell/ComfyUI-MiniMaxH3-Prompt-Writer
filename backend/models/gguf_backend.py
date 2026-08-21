@@ -254,16 +254,25 @@ class GGUFBackend:
             raise ModelError("MODEL_LOAD_FAILED", "The GGUF model could not be loaded.", details) from error
 
     def unload(self) -> None:
-        if self.model is not None:
-            self.model.close()
-        if self.chat_handler is not None:
-            exit_stack = getattr(self.chat_handler, "_exit_stack", None)
-            if exit_stack is not None:
-                exit_stack.close()
+        model = self.model
+        chat_handler = self.chat_handler
         self.model = None
         self.chat_handler = None
         self.model_id = None
         self.runtime_signature = None
+
+        if model is not None:
+            try:
+                model.close()
+            except Exception:
+                self._console("Warning: model cleanup did not complete")
+        if chat_handler is not None:
+            try:
+                exit_stack = getattr(chat_handler, "_exit_stack", None)
+                if exit_stack is not None:
+                    exit_stack.close()
+            except Exception:
+                self._console("Warning: vision handler cleanup did not complete")
         gc.collect()
 
     def generate(

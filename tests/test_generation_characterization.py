@@ -725,6 +725,38 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertIsNone(backend.chat_handler)
         self.assertIsNone(backend.model_id)
 
+    def test_unload_cleans_remaining_resources_and_state_after_close_errors(self):
+        messages = []
+        vision_closed = []
+
+        class _FailingModel:
+            def close(self):
+                raise RuntimeError("model close failed")
+
+        class _FailingStack:
+            def close(self):
+                vision_closed.append(True)
+                raise RuntimeError("vision close failed")
+
+        backend = GGUFBackend()
+        backend._console = messages.append
+        backend.model = _FailingModel()
+        backend.chat_handler = type("Handler", (), {"_exit_stack": _FailingStack()})()
+        backend.model_id = "loaded-model"
+        backend.runtime_signature = ("loaded-model", 16_384, "q8", "multimodal")
+
+        backend.unload()
+
+        self.assertEqual(vision_closed, [True])
+        self.assertIsNone(backend.model)
+        self.assertIsNone(backend.chat_handler)
+        self.assertIsNone(backend.model_id)
+        self.assertIsNone(backend.runtime_signature)
+        self.assertEqual(messages, [
+            "Warning: model cleanup did not complete",
+            "Warning: vision handler cleanup did not complete",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

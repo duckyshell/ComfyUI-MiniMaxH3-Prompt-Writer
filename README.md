@@ -4,7 +4,7 @@
   <img src="web/assets/h3-prompt-writer-launcher.svg" width="96" alt="H3 Prompt Writer">
 </p>
 
-Current release: **0.3.3** | [MIT License](LICENSE)
+Current release: **0.3.5** | [MIT License](LICENSE)
 
 H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. Start with a plain-language Creative Brief, add optional image, video, or audio references, and generate an editable prompt in the format expected by H3.
 

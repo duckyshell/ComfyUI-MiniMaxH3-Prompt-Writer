@@ -42,13 +42,13 @@ Restart ComfyUI.
 
 **Verify**
 
-Open **Settings > Direct GGUF**. Runtime diagnostics should report `llama-cpp-python 0.3.34` or another accepted 0.3.x version and **GPU offload available**.
+Open **Settings > Direct GGUF**. Settings shows an accepted `llama-cpp-python` package as **Runtime detected**.
 
 ## Direct runtime is installed but broken
 
 **Symptom**
 
-Direct reports an import error, missing native symbol, unusable runtime, or mixed package state.
+The first Direct model load fails with `MODEL_LOAD_FAILED`, an import error, a missing native symbol, or another native runtime error.
 
 **Cause**
 
@@ -67,7 +67,7 @@ Do not install into system Python, copy native DLLs manually, or replace ComfyUI
 
 **Verify**
 
-Restart ComfyUI and rerun Direct diagnostics. The package must import and report GPU offload before model generation.
+Restart ComfyUI and complete a real Direct model load and generation.
 
 ## `GGML_TYPE_F16` cannot be imported
 
@@ -85,13 +85,13 @@ Use the clean Direct-runtime replacement command from the previous entry in the 
 
 **Verify**
 
-After restart, Technical details report an accepted package version and the native runtime check completes.
+Restart ComfyUI and confirm that a real Direct model load succeeds.
 
-## GPU offload is unavailable or Direct is extremely slow
+## Direct is extremely slow or runs on CPU
 
 **Symptom**
 
-The runtime imports, but Direct reports no GPU offload or generation runs mainly on CPU.
+Direct generation is much slower than expected or runs mainly on CPU.
 
 **Cause**
 
@@ -103,13 +103,13 @@ Install the wheel matching the Python and CUDA environment used by ComfyUI. The 
 
 **Verify**
 
-Direct Settings show **GPU offload available** and identify the expected native backend.
+A real Direct generation completes without the CPU-only slowdown.
 
 ## Windows `0xC000001D` illegal instruction
 
 **Symptom**
 
-Direct fails with `MODEL_LOAD_FAILED`, Windows `0xC000001D`, or `Illegal instruction` during native runtime inspection or model loading.
+ComfyUI exits completely or Direct fails with `MODEL_LOAD_FAILED`, Windows `0xC000001D`, or `Illegal instruction` during the first native model load.
 
 **Cause**
 
@@ -123,7 +123,7 @@ The clean reinstall does not rebuild the wheel or disable AVX512.
 
 **Verify**
 
-The native probe and a real Direct model load both complete. A probe that only prints compiled features does not by itself prove that model loading is safe on the host CPU.
+A real Direct model load completes without terminating ComfyUI.
 
 ## Direct model or projector is not found
 
@@ -333,6 +333,6 @@ Settings list Ollama, Direct GGUF, External llama.cpp, and API providers in that
 
 Use the error's **Technical details** before changing the environment. It records the stage and available runtime information without assuming the user's diagnosis is correct.
 
-Developer logging is off by default. Set `H3PROMPTWRITER_DEV_MODE=1` before launching ComfyUI only when deeper diagnosis is needed. Logs can contain the full brief, assembled request, and generated prompt, so review them before sharing.
+Include the relevant ComfyUI console output when **Technical details** does not contain enough information.
 
 Historical duplicate-upload, LAN `crypto.randomUUID`, and delayed-first-SSE External bugs were fixed in v0.2.1 or v0.3. Update first rather than applying old workarounds.

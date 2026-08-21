@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.3 - 2026-08-21
+
+### Interface
+
+- Added fullscreen Writer mode with a persistent toggle and improved large-screen layout.
+- Improved Refine controls with a vertically resizable instruction editor and clearer Refine and Cancel actions.
+
+### Fixes
+
+- Refine now uses the current edited prompt as the source for each revision and keeps media as manifest-only context instead of re-uploading it.
+- Stabilized Reference audio handling so untouched audio references are preserved while explicitly targeted references can change.
+- Fixed the Free ComfyUI VRAM action returning to its normal state after a request.
+- Added compatibility with newer `llama-cpp-python` GGML type exports.
+- Improved Custom OpenAI-compatible connection errors, including non-JSON HTTP failures and missing model-list handling.
+- Fixed long Creative Brief sizing when reopening the Writer and when using fullscreen.
+- Scoped prompt-model visual reads to media owned by the current Writer session.
+- Made Direct GGUF and Ollama startup detection less invasive while preserving the tested Windows Portable CUDA 13 install guidance.
+
 ## 0.3.2 - 2026-08-14
 
 ### Features

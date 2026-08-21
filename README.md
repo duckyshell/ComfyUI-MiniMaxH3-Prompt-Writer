@@ -4,18 +4,17 @@
   <img src="web/assets/h3-prompt-writer-launcher.svg" width="96" alt="H3 Prompt Writer">
 </p>
 
-Current release: **0.3.2** | [MIT License](LICENSE)
+Current release: **0.3.3** | [MIT License](LICENSE)
 
 H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. Start with a plain-language Creative Brief, add optional image, video, or audio references, and generate an editable prompt in the format expected by H3.
 
 It is a ComfyUI UI extension, not a workflow node. It writes prompt text for your existing H3 workflow. It does not run MiniMax H3, change the graph, or queue a video.
 
-## What's new in v0.3.2
+## What's new in v0.3.3
 
-- Added an optional Music 3 workspace for writing structured captions for the separate MiniMax Music 3 model.
-- Added one Refine flow for creating or rewriting Lyrics, with separate Caption and Lyrics system prompts.
-- Added a small Reference mode control for inserting current reference tags at the caret.
-- External llama.cpp can now use text-only models when a request has no images or video.
+- Added an optional Music 3 workspace with structured captions, Lyrics, and Lyrics Refine.
+- Added fullscreen Writer mode, improved Refine editing, Reference tag insertion, and text-only External llama.cpp support.
+- Improved prompt reliability and compatibility across Reference/audio handling, Direct GGUF, Custom API connections, media handling, and VRAM controls.
 
 ## What's new in v0.3
 

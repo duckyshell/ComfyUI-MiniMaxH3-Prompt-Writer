@@ -22,7 +22,9 @@ Open PowerShell or Command Prompt in the ComfyUI Portable folder that contains `
 .\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.34,<0.4"
 ```
 
-Restart ComfyUI. Open **H3 Prompt Writer > Settings > Direct GGUF**. A working setup reports **GPU offload available**.
+Restart ComfyUI and open **H3 Prompt Writer > Settings > Direct GGUF**. Settings shows a supported installed package as **Runtime detected**.
+
+This preflight checks that `llama-cpp-python` is installed, its version is supported, and the Python module is available without importing the native runtime. Native compatibility and GPU execution are exercised only when a Direct model is actually loaded and used.
 
 This command was validated on the official NVIDIA Windows Portable build used for v0.3 validation:
 
@@ -103,6 +105,6 @@ If an update replaces `python_embeded` or leaves mixed native packages, reinstal
 .\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.34,<0.4"
 ```
 
-Restart ComfyUI and confirm that Direct reports **GPU offload available**. Do not copy native DLLs manually, replace ComfyUI's Python files, or install the package into an unrelated system Python.
+Restart ComfyUI and confirm that Direct reports **Runtime detected**, then complete one real Direct generation. Do not copy native DLLs manually, replace ComfyUI's Python files, or install the package into an unrelated system Python.
 
-If Windows still reports `0xC000001D`, see [Illegal instruction](TROUBLESHOOTING.md#windows-0xc000001d-illegal-instruction). Reinstalling the same wheel repeatedly will not solve a CPU instruction incompatibility.
+If ComfyUI exits during the first Direct load or Windows reports `0xC000001D`, see [Illegal instruction](TROUBLESHOOTING.md#windows-0xc000001d-illegal-instruction). Reinstalling the same wheel repeatedly will not solve a CPU instruction incompatibility.

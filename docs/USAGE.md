@@ -13,6 +13,8 @@
 
 Prompt Writer creates text. It does not add nodes, modify the graph, or queue a video workflow.
 
+Use the fullscreen button in the Writer header when you want the workspace to fill the browser. Press Escape to leave fullscreen.
+
 ![Reference mode with a generated prompt](assets/v0.3/reference-workspace.png)
 
 ## Modes
@@ -122,13 +124,13 @@ After generation, Writer checks the required format and exact media tags. A vali
 
 ## Refine
 
-Select **Refine** to rewrite the current prompt from a short revision instruction. Refine uses the currently selected provider and model. The previous prompt can be restored after a successful rewrite.
+Select **Refine** to rewrite the current prompt from a short revision instruction. Refine uses the currently selected provider and model. It keeps the current task context and media manifest, and uses the prompt visible in the editor, including manual edits. A normal Refine request does not attach prepared image or video payloads again. After a successful rewrite, you can restore the previous prompt.
 
-The normal Refine pass works from the current prompt and revision instruction. In Reference mode, Writer preserves an existing audio reference when its exact `<Audio N>` tag is absent from the revision instruction. When the instruction contains that tag, the reference is mutable for this revision: the prompt model decides from the instruction's meaning whether to add it, keep it, change its role, or remove it. The audit accepts either presence or absence and a format-repair pass preserves that decision instead of restoring the previous reference inventory. The next Refine pass uses the resulting current prompt as its audio-reference baseline; the original Creative Brief does not independently restore a tag removed by an earlier revision.
+In Reference mode, Writer preserves an existing audio reference when its exact `<Audio N>` tag is absent from the revision instruction. When the instruction contains that tag, the reference is mutable for this revision: the prompt model decides from the instruction's meaning whether to add it, keep it, change its role, or remove it. The audit accepts either presence or absence and a format-repair pass preserves that decision instead of restoring the previous reference inventory. The next Refine pass uses the resulting current prompt as its audio-reference baseline; the original Creative Brief does not independently restore a tag removed by an earlier revision.
 
 Any canonical reference tag used by the Creative Brief or revision instruction must exist in the current media manifest. A revised prompt containing a tag outside that manifest is rejected by the audit.
 
-Reference video and audio clips must be 2–15 seconds long. An audio-only Reference manifest is not valid; add at least one image or video. Each uploaded file is limited to 1 GB.
+Reference video and audio clips must be 2 to 15 seconds long. An audio-only Reference manifest is not valid; add at least one image or video. Each uploaded file is limited to 1 GB.
 
 ## Thinking
 

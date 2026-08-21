@@ -1,17 +1,11 @@
 import { api } from "/scripts/api.js";
+import { readApiResponse } from "./response.js";
 
 const PREFIX = "/h3studio";
 
 async function request(path, options) {
   const response = await api.fetchApi(`${PREFIX}${path}`, options);
-  const payload = await response.json();
-  if (!response.ok) {
-    const error = new Error(payload?.error?.message || `H3 Prompt Writer request failed (${response.status})`);
-    error.code = payload?.error?.code;
-    error.details = payload?.error?.details;
-    throw error;
-  }
-  return payload;
+  return readApiResponse(response);
 }
 
 function post(path, body = {}) {

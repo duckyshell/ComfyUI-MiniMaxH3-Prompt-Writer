@@ -5,6 +5,9 @@ import test from "node:test";
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");
 const { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } = await import(`data:text/javascript;base64,${encoded}`);
+const responseSource = await readFile(new URL("../web/api/response.js", import.meta.url), "utf8");
+const responseEncoded = Buffer.from(responseSource).toString("base64");
+const { readApiResponse } = await import(`data:text/javascript;base64,${responseEncoded}`);
 const stateSource = await readFile(new URL("../web/studio_state.js", import.meta.url), "utf8");
 const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
@@ -55,6 +58,45 @@ function memoryStorage(initial = {}) {
     entries: () => Object.fromEntries(values),
   };
 }
+
+test("API responses preserve structured server errors", async () => {
+  const response = {
+    ok: false,
+    status: 400,
+    text: async () => JSON.stringify({
+      error: { code: "INVALID_REQUEST", message: "Select a model.", details: { field: "model_id" } },
+    }),
+  };
+
+  await assert.rejects(readApiResponse(response), (error) => {
+    assert.equal(error.message, "Select a model.");
+    assert.equal(error.code, "INVALID_REQUEST");
+    assert.deepEqual(error.details, { field: "model_id" });
+    return true;
+  });
+});
+
+test("API responses replace non-JSON server errors with a readable fallback", async () => {
+  const response = {
+    ok: false,
+    status: 500,
+    text: async () => "<html><body>ComfyUI is restarting</body></html>",
+  };
+
+  await assert.rejects(
+    readApiResponse(response),
+    /H3 Prompt Writer request failed \(500\)\. The server returned a non-JSON response\./,
+  );
+});
+
+test("API responses reject invalid success bodies without exposing parser errors", async () => {
+  const response = { ok: true, status: 200, text: async () => "not JSON" };
+
+  await assert.rejects(
+    readApiResponse(response),
+    /H3 Prompt Writer returned an invalid response \(200\)\. ComfyUI may still be restarting\./,
+  );
+});
 
 test("createSessionId falls back to a valid UUID v4", () => {
   const fallbackCrypto = {

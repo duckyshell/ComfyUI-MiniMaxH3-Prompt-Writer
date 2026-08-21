@@ -3,7 +3,7 @@ import unittest
 from backend.context import ContextPlanError, plan_context
 
 
-def request(text="short brief", visual_count=0):
+def request(text="short brief", visual_count=0, mode="T2VA"):
     return {
         "messages": [
             {"role": "system", "content": "guide"},
@@ -13,6 +13,7 @@ def request(text="short brief", visual_count=0):
             {"type": "image", "asset_id": str(index)}
             for index in range(visual_count)
         ],
+        "input": {"mode": mode},
     }
 
 
@@ -59,7 +60,20 @@ class ContextPlanTests(unittest.TestCase):
             thinking=False,
         )
         self.assertEqual(result["context_profile"], "standard")
+        self.assertEqual(result["max_output_tokens"], 2048)
+
+    def test_music_keeps_its_separate_non_thinking_output_budget(self):
+        result = plan_context(
+            request(mode="Music3"),
+            {"recommended_context": "standard"},
+            requested_context="auto",
+            requested_kv_cache="q8",
+            thinking=False,
+        )
+
+        self.assertEqual(result["context_profile"], "standard")
         self.assertEqual(result["max_output_tokens"], 1536)
+        self.assertEqual(result["reserved_output_tokens"], 2048)
 
     def test_auto_thinking_selects_extended_for_full_completion_budget(self):
         result = plan_context(

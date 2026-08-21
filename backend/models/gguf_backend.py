@@ -132,7 +132,9 @@ class GGUFBackend:
         if self.model is not None:
             self.model.close()
         if self.chat_handler is not None:
-            self.chat_handler._exit_stack.close()
+            exit_stack = getattr(self.chat_handler, "_exit_stack", None)
+            if exit_stack is not None:
+                exit_stack.close()
         self.model = None
         self.chat_handler = None
         self.model_id = None

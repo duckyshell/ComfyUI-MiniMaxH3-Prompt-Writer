@@ -109,7 +109,7 @@ def runtime_plan(*, thinking=False):
         "context_profile": "standard",
         "context_tokens": 16_384,
         "kv_cache": "q8",
-        "max_output_tokens": 6_144 if thinking else 1_536,
+        "max_output_tokens": 6_144 if thinking else 2_048,
         "thinking_budget_reduced": False,
     }
 
@@ -418,7 +418,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertEqual(first["seed"], 42)
         self.assertEqual(first["logits_processor"], "cancel-sentinel")
         self.assertFalse(fallback["enable_thinking"])
-        self.assertEqual(fallback["max_tokens"], 1_536)
+        self.assertEqual(fallback["max_tokens"], 2_048)
         self.assertEqual(
             set(result),
             {
@@ -483,7 +483,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertEqual(repair_call["temperature"], 0.3)
         self.assertEqual(repair_call["top_p"], 0.9)
         self.assertEqual(repair_call["top_k"], 40)
-        self.assertEqual(repair_call["max_tokens"], 1_536)
+        self.assertEqual(repair_call["max_tokens"], 2_048)
         self.assertFalse(repair_call["enable_thinking"])
         self.assertTrue(all(isinstance(message["content"], str) for message in repair_call["messages"]))
 
@@ -703,6 +703,24 @@ class GenerationCharacterizationTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "UNSUPPORTED_MEDIA")
         self.assertIsNone(backend.model)
+
+    def test_unload_ignores_a_vision_exit_stack_already_closed_by_model(self):
+        backend = GGUFBackend()
+        handler = _ChatHandler([])
+
+        class _ModelThatClosesHandler:
+            def close(self):
+                handler._exit_stack = None
+
+        backend.model = _ModelThatClosesHandler()
+        backend.chat_handler = handler
+        backend.model_id = "loaded-model"
+
+        backend.unload()
+
+        self.assertIsNone(backend.model)
+        self.assertIsNone(backend.chat_handler)
+        self.assertIsNone(backend.model_id)
 
 
 if __name__ == "__main__":

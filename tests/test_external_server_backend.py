@@ -230,6 +230,15 @@ class ExternalServerBackendTests(unittest.TestCase):
         )
         self.assertEqual(plan["context_tokens"], 16384)
         self.assertEqual(plan["kv_cache"], "server")
+        self.assertEqual(plan["max_output_tokens"], 2_048)
+        music_plan = self.backend.preflight(
+            model,
+            {**assembled, "input": {"mode": "Music3"}},
+            context_profile="auto",
+            kv_cache="auto",
+            thinking=False,
+        )
+        self.assertEqual(music_plan["max_output_tokens"], 1_536)
         with self.assertRaises(ModelError) as manual:
             self.backend.preflight(
                 model,

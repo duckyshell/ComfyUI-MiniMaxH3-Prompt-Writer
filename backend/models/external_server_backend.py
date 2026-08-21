@@ -10,9 +10,10 @@ from ..context import (
     CHAT_TEMPLATE_OVERHEAD_TOKENS,
     CONTEXT_SAFETY_TOKENS,
     ESTIMATED_VISUAL_TOKENS,
-    STANDARD_OUTPUT_TOKENS,
+    MINIMUM_OUTPUT_TOKENS,
     THINKING_OUTPUT_TOKENS,
     estimate_text_tokens,
+    non_thinking_output_tokens,
 )
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from .contract import ModelError
@@ -377,14 +378,16 @@ class ExternalServerBackend:
             + visual_input_count * ESTIMATED_VISUAL_TOKENS
             + CHAT_TEMPLATE_OVERHEAD_TOKENS
         )
-        minimum_required = estimated_input_tokens + STANDARD_OUTPUT_TOKENS + CONTEXT_SAFETY_TOKENS
+        standard_output_tokens = non_thinking_output_tokens(assembled)
+        minimum_output_tokens = MINIMUM_OUTPUT_TOKENS if thinking else standard_output_tokens
+        minimum_required = estimated_input_tokens + minimum_output_tokens + CONTEXT_SAFETY_TOKENS
         if minimum_required > context_tokens:
             raise ModelError(
                 "CONTEXT_BUDGET_EXCEEDED",
                 "This request does not fit the context configured on the external llama.cpp server.",
                 {
                     "estimated_input_tokens": estimated_input_tokens,
-                    "minimum_output_tokens": STANDARD_OUTPUT_TOKENS,
+                    "minimum_output_tokens": minimum_output_tokens,
                     "safety_tokens": CONTEXT_SAFETY_TOKENS,
                     "context_tokens": context_tokens,
                     "suggestion": "Restart llama-server with a larger context or remove references.",
@@ -392,7 +395,7 @@ class ExternalServerBackend:
             )
         available_output_tokens = context_tokens - estimated_input_tokens - CONTEXT_SAFETY_TOKENS
         max_output_tokens = min(
-            THINKING_OUTPUT_TOKENS if thinking else STANDARD_OUTPUT_TOKENS,
+            THINKING_OUTPUT_TOKENS if thinking else standard_output_tokens,
             available_output_tokens,
         )
         return {

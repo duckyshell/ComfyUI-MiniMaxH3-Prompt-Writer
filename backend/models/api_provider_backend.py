@@ -14,9 +14,10 @@ from ..context import (
     CHAT_TEMPLATE_OVERHEAD_TOKENS,
     CONTEXT_SAFETY_TOKENS,
     ESTIMATED_VISUAL_TOKENS,
-    STANDARD_OUTPUT_TOKENS,
+    MINIMUM_OUTPUT_TOKENS,
     THINKING_OUTPUT_TOKENS,
     estimate_text_tokens,
+    non_thinking_output_tokens,
 )
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from ..version import VERSION
@@ -687,12 +688,14 @@ class ApiProviderBackend:
             DEFAULT_CONTEXT_TOKENS,
             estimated_input_tokens + THINKING_OUTPUT_TOKENS + CONTEXT_SAFETY_TOKENS,
         )
-        desired_output = THINKING_OUTPUT_TOKENS if thinking else STANDARD_OUTPUT_TOKENS
+        standard_output_tokens = non_thinking_output_tokens(assembled)
+        desired_output = THINKING_OUTPUT_TOKENS if thinking else standard_output_tokens
         provider_max_output = model_info.get("max_output_tokens")
         if isinstance(provider_max_output, int) and provider_max_output > 0:
             desired_output = min(desired_output, provider_max_output)
         available_output = context_tokens - estimated_input_tokens - CONTEXT_SAFETY_TOKENS
-        if available_output < STANDARD_OUTPUT_TOKENS:
+        minimum_output = MINIMUM_OUTPUT_TOKENS if thinking else desired_output
+        if available_output < minimum_output:
             raise ModelError(
                 "CONTEXT_BUDGET_EXCEEDED",
                 "The selected references leave too little provider context for a complete prompt.",

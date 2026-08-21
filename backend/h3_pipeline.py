@@ -8,7 +8,7 @@ from .context import (
     CHAT_TEMPLATE_OVERHEAD_TOKENS,
     CONTEXT_SAFETY_TOKENS,
     ESTIMATED_VISUAL_TOKENS,
-    STANDARD_OUTPUT_TOKENS,
+    non_thinking_output_tokens,
 )
 from .media import STORE, MediaError
 from .models.contract import ModelError, final_text
@@ -201,6 +201,7 @@ def run_h3_pipeline(
     on_phase: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     validate_media_capabilities(model_info, assembled)
+    standard_output_tokens = non_thinking_output_tokens(assembled)
 
     if on_phase:
         on_phase("processing_media")
@@ -236,7 +237,7 @@ def run_h3_pipeline(
             temperature=1.0,
             top_p=0.95,
             top_k=64,
-            max_tokens=1_536,
+            max_tokens=standard_output_tokens,
             seed=seed,
             thinking=False,
         )
@@ -249,10 +250,11 @@ def run_h3_pipeline(
         }
     final_finish_reason = response["choices"][0].get("finish_reason")
     if final_finish_reason == "length":
+        final_output_limit = standard_output_tokens if thinking_fallback else runtime_plan["max_output_tokens"]
         raise ModelError(
             "GENERATION_TRUNCATED",
-            "The model reached its output limit before completing the prompt. Try again or choose a model with a larger output budget.",
-            {"max_output_tokens": runtime_plan["max_output_tokens"]},
+            "The model reached the available output limit before completing the prompt. Try again, shorten the requested detail, or enable Thinking when available.",
+            {"max_output_tokens": final_output_limit},
         )
     if not text.strip():
         raise ModelError("EMPTY_GENERATION", "The model did not produce a final prompt.")
@@ -307,7 +309,7 @@ def run_h3_pipeline(
             temperature=0.3,
             top_p=0.9,
             top_k=40,
-            max_tokens=STANDARD_OUTPUT_TOKENS,
+            max_tokens=standard_output_tokens,
             seed=seed,
             thinking=False,
         )

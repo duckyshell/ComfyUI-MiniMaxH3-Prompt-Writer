@@ -14,7 +14,9 @@ KV_CACHE_PROFILES = {"auto", "q8", "f16"}
 CONTEXT_SAFETY_TOKENS = 512
 ESTIMATED_VISUAL_TOKENS = 280
 CHAT_TEMPLATE_OVERHEAD_TOKENS = 384
-STANDARD_OUTPUT_TOKENS = 1_536
+MINIMUM_OUTPUT_TOKENS = 1_536
+MUSIC_OUTPUT_TOKENS = 1_536
+STANDARD_OUTPUT_TOKENS = 2_048
 THINKING_OUTPUT_TOKENS = 6_144
 LOCAL_THINKING_OUTPUT_TOKENS = 8_192
 
@@ -67,6 +69,11 @@ def _assembled_text(assembled: dict[str, Any]) -> str:
     )
 
 
+def non_thinking_output_tokens(assembled: dict[str, Any]) -> int:
+    mode = assembled.get("input", {}).get("mode")
+    return MUSIC_OUTPUT_TOKENS if mode == "Music3" else STANDARD_OUTPUT_TOKENS
+
+
 def plan_context(
     assembled: dict[str, Any],
     model_info: dict[str, Any],
@@ -90,7 +97,11 @@ def plan_context(
         + visual_input_count * ESTIMATED_VISUAL_TOKENS
         + CHAT_TEMPLATE_OVERHEAD_TOKENS
     )
-    desired_output_tokens = LOCAL_THINKING_OUTPUT_TOKENS if thinking else STANDARD_OUTPUT_TOKENS
+    desired_output_tokens = (
+        LOCAL_THINKING_OUTPUT_TOKENS
+        if thinking
+        else non_thinking_output_tokens(assembled)
+    )
     minimum_required = estimated_input_tokens + desired_output_tokens + CONTEXT_SAFETY_TOKENS
     automatic_ladder = automatic and model_info.get("auto_context_ladder") is True
     if automatic and thinking:

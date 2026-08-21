@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4 - 2026-08-21
+
+### Fixes
+
+- Increased the non-Thinking H3 output ceiling from 1,536 to 2,048 tokens to reduce prompt truncation on longer generations and refinements.
+- Prevented Direct GGUF cleanup from failing when the vision handler had already closed its exit stack.
+
 ## 0.3.3 - 2026-08-21
 
 ### Interface

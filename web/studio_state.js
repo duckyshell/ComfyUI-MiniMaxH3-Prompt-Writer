@@ -77,6 +77,7 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       direct_context_profile: CONTEXT_PROFILES.includes(value.direct_context_profile) ? value.direct_context_profile : "auto",
       direct_kv_cache: KV_CACHES.includes(value.direct_kv_cache) ? value.direct_kv_cache : "auto",
       music_lyrics_use_brief: value.music_lyrics_use_brief !== false,
+      fullscreen: value.fullscreen === true,
     };
   } catch {
     return null;
@@ -94,6 +95,7 @@ export function saveUserPreferences(storage, state) {
     direct_context_profile: CONTEXT_PROFILES.includes(state.directContextProfile) ? state.directContextProfile : "auto",
     direct_kv_cache: KV_CACHES.includes(state.directKvCache) ? state.directKvCache : "auto",
     music_lyrics_use_brief: state.musicLyricsUseBrief !== false,
+    fullscreen: state.fullscreen === true,
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -329,6 +331,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     directContextProfile: preferences?.direct_context_profile || "auto",
     directKvCache: preferences?.direct_kv_cache || "auto",
     musicLyricsUseBrief: preferences?.music_lyrics_use_brief !== false,
+    fullscreen: preferences?.fullscreen === true,
     settingsPromptProfile: "standard",
     musicSystemPromptProfile: "music3",
     musicSystemPromptExpanded: false,

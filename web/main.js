@@ -355,6 +355,7 @@ function icon(name, size = 16) {
     refresh: '<path d="M20 11a8 8 0 1 0-2.35 5.65L20 14"/><path d="M20 7v4h-4"/>',
     memory: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9h6v6H9zM9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/>',
     expand: '<path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5"/>',
+    collapse: '<path d="M8 8H3V3m13 5h5V3M8 16H3v5m13-5h5v5"/>',
   };
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">${paths[name] || paths.info}</svg>`;
 }
@@ -851,14 +852,15 @@ function stashCurrentModeDraft() {
 function updateBriefLayout() {
   if (!studio) return;
   const brief = currentBriefTextarea();
+  const fullscreen = studio.fullscreen && studio.root.classList.contains("is-open");
   const compactHeight = window.innerHeight <= 800;
   const largeCanvas = window.innerWidth >= 3000 && window.innerHeight >= 1600;
   const minimumHeight = compactHeight ? 80 : largeCanvas ? 125 : 105;
   const maximumHeight = compactHeight ? 130 : largeCanvas ? 230 : 190;
   brief.closest(".h3ps-brief").querySelector(".h3ps-char-count").textContent = `${brief.value.length.toLocaleString()} / 2,000`;
   brief.style.height = "auto";
-  brief.style.height = `${Math.min(maximumHeight, Math.max(minimumHeight, brief.scrollHeight))}px`;
-  brief.style.overflowY = brief.scrollHeight > maximumHeight ? "auto" : "hidden";
+  brief.style.height = `${fullscreen ? Math.max(minimumHeight, brief.scrollHeight) : Math.min(maximumHeight, Math.max(minimumHeight, brief.scrollHeight))}px`;
+  brief.style.overflowY = !fullscreen && brief.scrollHeight > maximumHeight ? "auto" : "hidden";
 }
 
 function updateMusicLyricsCount() {
@@ -2328,6 +2330,24 @@ function musicSystemPromptPanelMarkup(profile, label, description, hidden = fals
     </div>`;
 }
 
+function syncFullscreenState() {
+  if (!studio) return;
+  studio.root.classList.toggle("is-fullscreen", studio.fullscreen);
+  const button = studio.root.querySelector("[data-fullscreen-toggle]");
+  button.setAttribute("aria-pressed", String(studio.fullscreen));
+  button.setAttribute("aria-label", studio.fullscreen ? "Exit fullscreen" : "Enter fullscreen");
+  button.title = studio.fullscreen ? "Exit fullscreen" : "Enter fullscreen";
+  button.innerHTML = icon(studio.fullscreen ? "collapse" : "expand", 17);
+}
+
+function setFullscreen(fullscreen) {
+  if (!studio || studio.fullscreen === fullscreen) return;
+  studio.fullscreen = fullscreen;
+  syncFullscreenState();
+  requestAnimationFrame(updateBriefLayout);
+  saveUserPreferences(localStorage, studio);
+}
+
 function createStudio() {
   if (studio) return studio;
   injectStyles();
@@ -2353,6 +2373,7 @@ function createStudio() {
             <div class="h3ps-guide-menu" data-guide-menu hidden><span>Loading guides…</span></div>
           </div>
           <button class="h3ps-guide-button" type="button" data-open-settings-header>Settings</button>
+          <button class="h3ps-icon-button" type="button" title="Enter fullscreen" aria-label="Enter fullscreen" aria-pressed="false" data-fullscreen-toggle>${icon("expand", 17)}</button>
           <button class="h3ps-icon-button" type="button" title="Close" data-close-studio>${icon("close", 18)}</button>
         </div>
       </header>
@@ -2530,7 +2551,9 @@ function createStudio() {
   const restoredAspect = ASPECT_RATIOS.find(([value]) => value === studio.aspectRatio) || ASPECT_RATIOS.find(([value]) => value === "16:9");
   root.querySelector("[data-aspect-label]").textContent = restoredAspect[0];
   root.querySelector("[data-aspect-description]").textContent = restoredAspect[1];
+  syncFullscreenState();
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
+  root.querySelector("[data-fullscreen-toggle]").addEventListener("click", () => setFullscreen(!studio.fullscreen));
   root.addEventListener("click", (event) => {
     if (studio.draftDefaultsArmed && !event.target.closest("[data-restore-default-drafts]")) disarmDraftDefaults();
     if (studio.toastDismissOnWorkspaceClick && !event.target.closest("[data-h3ps-toast]")) hideToast();
@@ -2954,6 +2977,7 @@ function openStudio() {
   current.root.classList.add("is-open");
   current.root.setAttribute("aria-hidden", "false");
   document.body.classList.add("h3ps-modal-open");
+  requestAnimationFrame(updateBriefLayout);
 }
 
 function closeStudio() {
@@ -3059,7 +3083,8 @@ document.addEventListener("keydown", (event) => {
   if (!studio?.root.classList.contains("is-open")) return;
   if (event.key === "Escape") {
     event.preventDefault();
-    if (!studio.root.querySelector("[data-other-models-popover]").hidden) setOtherModelsPopover(false);
+    if (studio.fullscreen) setFullscreen(false);
+    else if (!studio.root.querySelector("[data-other-models-popover]").hidden) setOtherModelsPopover(false);
     else if (studio.root.querySelector("[data-h3ps-image-preview]").classList.contains("is-open")) closeImagePreview();
     else if (studio.root.querySelector("[data-h3ps-preview]").classList.contains("is-open")) closeVideoPreview();
     else closeStudio();

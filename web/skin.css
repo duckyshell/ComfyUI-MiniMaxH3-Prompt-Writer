@@ -1148,6 +1148,40 @@
   .h3ps-system-prompt-overview { max-width: none; }
 }
 
+@media (min-width: 2000px) and (min-height: 1000px) {
+  .h3ps-root.is-fullscreen .h3ps-modal { grid-template-rows: 64px 54px minmax(0, 1fr) 64px; }
+  .h3ps-root.is-fullscreen .h3ps-header { padding-inline: 24px 18px; }
+  .h3ps-root.is-fullscreen .h3ps-brandmark { width: 43px; height: 35px; }
+  .h3ps-root.is-fullscreen .h3ps-brand strong { font-size: 15.5px; }
+  .h3ps-root.is-fullscreen .h3ps-guide-button { height: 32px; padding-inline: 11px; font-size: 11px; }
+  .h3ps-root.is-fullscreen .h3ps-icon-button { width: 33px; height: 33px; }
+  .h3ps-root.is-fullscreen .h3ps-input-panel { padding: 20px 24px 22px; }
+  .h3ps-root.is-fullscreen .h3ps-output-panel { padding: 19px 25px 22px; }
+  .h3ps-root.is-fullscreen .h3ps-assets,
+  .h3ps-root.is-fullscreen .h3ps-assets.is-reference { grid-template-columns: repeat(auto-fill, minmax(150px, 164px)); gap: 10px; }
+  .h3ps-root.is-fullscreen .h3ps-asset,
+  .h3ps-root.is-fullscreen .h3ps-add-asset { height: 164px; }
+  .h3ps-root.is-fullscreen .h3ps-editor,
+  .h3ps-root.is-fullscreen .h3ps-editor-highlight { font-size: 12.5px !important; line-height: 1.64 !important; }
+  .h3ps-root.is-fullscreen .h3ps-settings-heading { min-height: 88px; padding-inline: max(40px, calc((100% - 1420px) / 2)); }
+  .h3ps-root.is-fullscreen .h3ps-settings-heading strong { font-size: 19px; }
+  .h3ps-root.is-fullscreen .h3ps-settings-heading em { font-size: 12px; }
+  .h3ps-root.is-fullscreen .h3ps-settings-content {
+    grid-template-columns: 290px minmax(0, 1fr);
+    gap: 0 64px;
+    width: min(1420px, calc(100% - 80px));
+    padding-top: 38px;
+  }
+  .h3ps-root.is-fullscreen .h3ps-provider-selector > button { min-height: 64px; padding: 9px 12px; }
+  .h3ps-root.is-fullscreen .h3ps-provider-selector strong { font-size: 11.5px; }
+  .h3ps-root.is-fullscreen .h3ps-provider-selector small { font-size: 9.5px; }
+  .h3ps-root.is-fullscreen .h3ps-settings-card > header strong,
+  .h3ps-root.is-fullscreen .h3ps-settings-view .h3ps-runtime-settings > header strong,
+  .h3ps-root.is-fullscreen .h3ps-settings-section-heading strong { font-size: 14px; }
+  .h3ps-root.is-fullscreen .h3ps-installed-model-control { min-height: 61px; padding: 9px 11px; }
+  .h3ps-root.is-fullscreen .h3ps-installed-model-control select { font-size: 11px; }
+}
+
 /* Music 3 workspace */
 .h3ps-workspaces {
   display: inline-flex;

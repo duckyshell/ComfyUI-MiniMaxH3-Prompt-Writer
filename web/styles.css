@@ -35,6 +35,8 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-backdrop { position: absolute; inset: 0; background: rgba(7, 8, 10, 0.72); backdrop-filter: blur(8px); animation: h3ps-fade 140ms ease-out; }
 
 .h3ps-modal { position: absolute; inset: 16px auto auto 50%; width: min(1840px, calc(100vw - 32px)); height: min(1320px, calc(100vh - 32px)); transform: translateX(-50%); display: grid; grid-template-rows: 56px 50px minmax(0, 1fr) 60px; overflow: hidden; border: 1px solid #353944; border-radius: 13px; background: var(--h3ps-bg); box-shadow: var(--h3ps-shadow); animation: h3ps-rise 180ms cubic-bezier(.2,.8,.2,1); }
+.h3ps-root.is-fullscreen .h3ps-modal { inset: 0; width: 100vw; height: 100dvh; transform: none; border: 0; border-radius: 0; }
+.h3ps-root.is-fullscreen .h3ps-brief textarea { max-height: none; }
 .h3ps-header { display: flex; align-items: center; justify-content: space-between; padding: 0 20px 0 18px; background: #17191e; border-bottom: 1px solid var(--h3ps-border-soft); }
 .h3ps-brand { display: flex; align-items: center; gap: 11px; }
 .h3ps-brandmark { display:block; width:42px; height:34px; border-radius:8px; object-fit:contain; }

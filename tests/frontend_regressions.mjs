@@ -189,6 +189,7 @@ test("user preferences persist only stable non-secret settings", () => {
     directContextProfile: "extended",
     directKvCache: "q8",
     musicLyricsUseBrief: false,
+    fullscreen: true,
     selectedModel: { id: "api::secret-connection::model", api_connection_id: "secret-connection" },
     apiProviderConfig: { api_key: "must-not-be-stored" },
     creativeBrief: "must-not-be-stored",
@@ -208,6 +209,7 @@ test("user preferences persist only stable non-secret settings", () => {
     direct_context_profile: "extended",
     direct_kv_cache: "q8",
     music_lyrics_use_brief: false,
+    fullscreen: true,
   });
 });
 
@@ -237,6 +239,7 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     direct_context_profile: "auto",
     direct_kv_cache: "auto",
     music_lyrics_use_brief: true,
+    fullscreen: false,
   });
 });
 
@@ -251,6 +254,7 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
       direct_model_id: "direct-model.gguf",
       direct_context_profile: "extended",
       direct_kv_cache: "q8",
+      fullscreen: true,
       ollama_context_profile: "standard",
     }),
   });
@@ -263,6 +267,7 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
   assert.equal(state.directContextProfile, "extended");
   assert.equal(state.directKvCache, "q8");
   assert.equal(state.musicLyricsUseBrief, true);
+  assert.equal(state.fullscreen, true);
   assert.equal(state.ollamaContextProfile, undefined);
   assert.equal(state.keepModelLoaded, false);
   assert.equal(state.thinking, false);
@@ -797,4 +802,15 @@ test("active requests block add, reorder, and mode switching", () => {
   assert.match(mainSource, /drop[\s\S]{0,180}if \(studio\.requestBusy\) return/);
   assert.match(mainSource, /if \(!files\.length \|\| studio\.requestBusy\) return/);
   assert.match(mainSource, /querySelectorAll\("\[data-mode\]"\)[\s\S]{0,120}control\.disabled = busy/);
+});
+
+test("fullscreen reuses the studio root and persists its UI state", () => {
+  assert.match(mainSource, /data-fullscreen-toggle/);
+  assert.match(mainSource, /root\.classList\.toggle\("is-fullscreen", studio\.fullscreen\)/);
+  assert.match(mainSource, /setAttribute\("aria-pressed", String\(studio\.fullscreen\)\)/);
+  assert.match(mainSource, /if \(studio\.fullscreen\) setFullscreen\(false\)/);
+  assert.match(mainSource, /saveUserPreferences\(localStorage, studio\)/);
+  assert.match(mainSource, /current\.root\.classList\.add\("is-open"\)[\s\S]{0,220}requestAnimationFrame\(updateBriefLayout\)/);
+  assert.match(mainSource, /const fullscreen = studio\.fullscreen && studio\.root\.classList\.contains\("is-open"\)/);
+  assert.match(stylesSource, /\.h3ps-root\.is-fullscreen \.h3ps-brief textarea \{ max-height: none; \}/);
 });

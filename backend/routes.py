@@ -170,10 +170,6 @@ def _release_generation_request(request_id: str) -> None:
         })
 
 
-def _cancelled_response() -> web.Response:
-    return _error("GENERATION_CANCELLED", "Generation was cancelled.", status=499)
-
-
 async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: dict[str, Any]) -> None:
     if getattr(backend, "manages_gpu_memory", True) is False:
         return
@@ -239,7 +235,47 @@ async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
     return find_model(str(body.get("model_id") or ""))
 
 
+async def _prepare_generation_runtime(
+    body: dict[str, Any],
+    assembled: dict[str, Any],
+    request_id: str,
+) -> tuple[dict[str, Any], Any, dict[str, Any]]:
+    model = await _resolve_model(body)
+    if model is None:
+        raise ModelError("MODEL_NOT_FOUND", "The selected prompt model was not found.")
+    backend = BACKENDS.get(model["family"])
+    if backend is None:
+        raise ModelError("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.")
+
+    cancel_requested, pending_unload = _set_active_model(request_id, model)
+    backend.prepare_request()
+    if pending_unload:
+        request_unload = getattr(backend, "request_unload", None)
+        if callable(request_unload):
+            request_unload()
+        else:
+            backend.cancel()
+    if cancel_requested:
+        backend.cancel()
+        raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
+
+    runtime_plan = await asyncio.to_thread(
+        backend.preflight,
+        model,
+        assembled,
+        context_profile=body.get("context_profile", "auto"),
+        kv_cache=body.get("kv_cache", "auto"),
+        thinking=body.get("thinking", False),
+    )
+    await _memory_preflight(backend, model, runtime_plan)
+    if _request_cancelled(request_id):
+        raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
+    return model, backend, runtime_plan
+
+
 def _model_error_status(error: ModelError) -> int:
+    if error.code == "MODEL_NOT_FOUND":
+        return 404
     if error.code == "INSUFFICIENT_FREE_VRAM":
         return 409
     if error.code in {
@@ -488,55 +524,14 @@ async def generate(request: web.Request) -> web.Response:
     if request_id is None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
     try:
-        model = await _resolve_model(body)
+        model, backend, runtime_plan = await _prepare_generation_runtime(body, assembled, request_id)
     except ModelError as error:
         _release_generation_request(request_id)
-        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+        status = 499 if error.code == "GENERATION_CANCELLED" else _model_error_status(error)
+        return _error(error.code, error.message, status=status, details=error.details)
     except Exception:
         _release_generation_request(request_id)
         raise
-    if model is None:
-        _release_generation_request(request_id)
-        return _error("MODEL_NOT_FOUND", "The selected prompt model was not found.", status=404)
-    backend = BACKENDS.get(model["family"])
-    if backend is None:
-        _release_generation_request(request_id)
-        return _error("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.", status=400)
-    cancel_requested, pending_unload = _set_active_model(request_id, model)
-    try:
-        backend.prepare_request()
-        if pending_unload:
-            request_unload = getattr(backend, "request_unload", None)
-            if callable(request_unload):
-                request_unload()
-            else:
-                backend.cancel()
-        if cancel_requested:
-            backend.cancel()
-            _release_generation_request(request_id)
-            return _cancelled_response()
-    except Exception:
-        _release_generation_request(request_id)
-        raise
-    try:
-        runtime_plan = await asyncio.to_thread(
-            backend.preflight,
-            model,
-            assembled,
-            context_profile=body.get("context_profile", "auto"),
-            kv_cache=body.get("kv_cache", "auto"),
-            thinking=body.get("thinking", False),
-        )
-        await _memory_preflight(backend, model, runtime_plan)
-    except ModelError as error:
-        _release_generation_request(request_id)
-        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
-    except Exception:
-        _release_generation_request(request_id)
-        raise
-    if _request_cancelled(request_id):
-        _release_generation_request(request_id)
-        return _cancelled_response()
 
     request_started = time.perf_counter()
     vram_monitor = PeakVRAMMonitor()
@@ -700,55 +695,14 @@ async def refine(request: web.Request) -> web.Response:
     if request_id is None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
     try:
-        model = await _resolve_model(body)
+        model, backend, runtime_plan = await _prepare_generation_runtime(body, assembled, request_id)
     except ModelError as error:
         _release_generation_request(request_id)
-        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+        status = 499 if error.code == "GENERATION_CANCELLED" else _model_error_status(error)
+        return _error(error.code, error.message, status=status, details=error.details)
     except Exception:
         _release_generation_request(request_id)
         raise
-    if model is None:
-        _release_generation_request(request_id)
-        return _error("MODEL_NOT_FOUND", "The selected prompt model was not found.", status=404)
-    backend = BACKENDS.get(model["family"])
-    if backend is None:
-        _release_generation_request(request_id)
-        return _error("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.", status=400)
-    cancel_requested, pending_unload = _set_active_model(request_id, model)
-    try:
-        backend.prepare_request()
-        if pending_unload:
-            request_unload = getattr(backend, "request_unload", None)
-            if callable(request_unload):
-                request_unload()
-            else:
-                backend.cancel()
-        if cancel_requested:
-            backend.cancel()
-            _release_generation_request(request_id)
-            return _cancelled_response()
-    except Exception:
-        _release_generation_request(request_id)
-        raise
-    try:
-        runtime_plan = await asyncio.to_thread(
-            backend.preflight,
-            model,
-            assembled,
-            context_profile=body.get("context_profile", "auto"),
-            kv_cache=body.get("kv_cache", "auto"),
-            thinking=body.get("thinking", False),
-        )
-        await _memory_preflight(backend, model, runtime_plan)
-    except ModelError as error:
-        _release_generation_request(request_id)
-        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
-    except Exception:
-        _release_generation_request(request_id)
-        raise
-    if _request_cancelled(request_id):
-        _release_generation_request(request_id)
-        return _cancelled_response()
 
     request_started = time.perf_counter()
     vram_monitor = PeakVRAMMonitor()

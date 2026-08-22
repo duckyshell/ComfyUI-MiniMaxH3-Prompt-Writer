@@ -78,7 +78,9 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
                 "executable",
                 "C:\\ComfyUI_windows_portable\\python_embeded\\python.exe",
             ),
+            patch.object(runtime_diagnostics, "Path") as path_cls,
         ):
+            path_cls.return_value.parent.name = "python_embeded"
             self.assertTrue(runtime_diagnostics._is_tested_windows_cuda13_environment({"cuda_version": "13.0"}))
             self.assertFalse(runtime_diagnostics._is_tested_windows_cuda13_environment({"cuda_version": "12.9"}))
             self.assertFalse(runtime_diagnostics._is_tested_windows_cuda13_environment(None))

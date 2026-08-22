@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.6 - 2026-08-22
+
+### Fixes
+
+- Made generation and refinement admission atomic and cancellation reliable, including deferred unload handling.
+- Moved media processing off the ComfyUI event loop and added predictable cleanup for expired media sessions and generation state.
+- Hardened Direct GGUF resource cleanup and improved model lookup with safe cache invalidation.
+- Added clear fallback errors for non-JSON HTTP responses.
+- Added CI for the Python and frontend test suites.
+
 ## 0.3.5 - 2026-08-21
 
 ### Fixes

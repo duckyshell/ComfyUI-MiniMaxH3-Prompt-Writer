@@ -107,6 +107,16 @@ def _visual_reference_label(assembled: dict[str, Any]) -> str | None:
     return f"{count} {noun}"
 
 
+def _cancel_to_eos(cancel_event: threading.Event, eos_token: int) -> Callable[..., Any]:
+    def processor(_input_ids, scores):
+        if cancel_event.is_set():
+            scores[:] = float("-inf")
+            scores[eos_token] = 0.0
+        return scores
+
+    return processor
+
+
 class GGUFBackend:
     def __init__(self) -> None:
         self.model = None
@@ -323,12 +333,9 @@ class GGUFBackend:
                 if self.cancel_event.is_set():
                     raise ModelError("GENERATION_CANCELLED", "Generation was cancelled after model loading.")
 
-                def stop_if_cancelled(_input_ids, scores):
-                    if self.cancel_event.is_set():
-                        raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
-                    return scores
-
-                logits_processors = self._logits_processors(stop_if_cancelled)
+                logits_processors = self._logits_processors(
+                    _cancel_to_eos(self.cancel_event, self.model.token_eos())
+                )
                 media_started: float | None = None
                 visual_references = _visual_reference_label(assembled)
 
@@ -367,14 +374,18 @@ class GGUFBackend:
                         "logits_processor": logits_processors,
                     }
                     if text_only:
-                        return self.model.create_chat_completion(**options)
-                    self.chat_handler.verbose = False
-                    with _quiet_mtmd_info():
-                        return self.chat_handler(
-                            llama=self.model,
-                            enable_thinking=thinking,
-                            **options,
-                        )
+                        response = self.model.create_chat_completion(**options)
+                    else:
+                        self.chat_handler.verbose = False
+                        with _quiet_mtmd_info():
+                            response = self.chat_handler(
+                                llama=self.model,
+                                enable_thinking=thinking,
+                                **options,
+                            )
+                    if self.cancel_event.is_set():
+                        raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
+                    return response
 
                 result = run_h3_pipeline(
                     model_info,

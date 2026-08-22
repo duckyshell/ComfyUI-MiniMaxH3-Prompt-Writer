@@ -1,9 +1,10 @@
+import threading
 import unittest
 from unittest.mock import patch
 
 from backend.models.contract import ModelError
 from backend.h3_pipeline import _audit
-from backend.models.gguf_backend import GGUFBackend
+from backend.models.gguf_backend import GGUFBackend, _cancel_to_eos
 
 
 def reference_prompt(word_count: int, *, include_soundscape: bool = True) -> str:
@@ -40,6 +41,9 @@ class _Closer:
 class _Tokenizer:
     def tokenize(self, _value, add_bos=True):
         return [0] * (12 + int(add_bos))
+
+    def token_eos(self):
+        return 1
 
     def close(self):
         return None
@@ -125,6 +129,26 @@ def model_info():
 
 
 class GenerationCharacterizationTests(unittest.TestCase):
+    def test_cancel_logits_processor_forces_eos_without_raising_from_native_callback(self):
+        cancel_event = threading.Event()
+
+        class _Scores:
+            def __init__(self):
+                self.assignments = []
+
+            def __setitem__(self, key, value):
+                self.assignments.append((key, value))
+
+        scores = _Scores()
+        processor = _cancel_to_eos(cancel_event, 7)
+        self.assertIs(processor([], scores), scores)
+        self.assertEqual(scores.assignments, [])
+
+        cancel_event.set()
+        self.assertIs(processor([], scores), scores)
+        self.assertEqual(scores.assignments[0], (slice(None), float("-inf")))
+        self.assertEqual(scores.assignments[1], (7, 0.0))
+
     def test_unmentioned_uploaded_audio_is_allowed_but_not_required_by_audit(self):
         assembled = {
             "input": {

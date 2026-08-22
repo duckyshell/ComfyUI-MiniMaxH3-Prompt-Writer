@@ -84,6 +84,7 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "selected_model_family": None,
             "cancel_requested": False,
             "pending_unload_family": None,
+            "pending_unload_model_id": None,
             "media_mutation_active": False,
         })
         routes.GENERATION_CACHE.clear()
@@ -97,6 +98,7 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "selected_model_family": None,
             "cancel_requested": False,
             "pending_unload_family": None,
+            "pending_unload_model_id": None,
             "media_mutation_active": False,
         })
         routes.GENERATION_CACHE.clear()
@@ -217,6 +219,78 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolve_model.await_count, 1)
         self.assertIsNone(routes.STATE["active_request_id"])
 
+    async def test_cancelled_http_tasks_release_generate_and_refine_claims(self):
+        assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": "brief"}}
+        generate_body = self.generation_body("Use <Video 1>.")
+        refine_body = {
+            **generate_body,
+            "current_prompt": "Current prompt",
+            "instruction": "Make it calmer.",
+        }
+
+        for endpoint, assembler, body in (
+            (routes.generate, "assemble_request", generate_body),
+            (routes.refine, "assemble_refinement", refine_body),
+        ):
+            with self.subTest(endpoint=endpoint.__name__):
+                resolution_started = asyncio.Event()
+
+                async def delayed_resolution(_body):
+                    resolution_started.set()
+                    await asyncio.Event().wait()
+
+                with (
+                    patch.object(routes, assembler, return_value=assembled),
+                    patch.object(routes, "_resolve_model", side_effect=delayed_resolution),
+                ):
+                    request_task = asyncio.create_task(endpoint(_Request(body=body)))
+                    await resolution_started.wait()
+                    request_task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await request_task
+
+                self.assertIsNone(routes.STATE["active_request_id"])
+                next_request_id = routes._claim_generation_request()
+                self.assertIsNotNone(next_request_id)
+                routes._release_generation_request(next_request_id)
+
+    async def test_cancelled_generation_holds_claim_until_backend_worker_stops(self):
+        body = self.generation_body("Use <Video 1>.")
+        assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
+        model = {"id": "test-model", "name": "Test", "family": "test", "format": "Test"}
+        backend = MagicMock(manages_gpu_memory=False)
+        backend.preflight.return_value = {
+            "context_profile": "standard",
+            "context_tokens": 16_384,
+            "kv_cache": "q8",
+            "max_output_tokens": 2_048,
+        }
+        worker_started = threading.Event()
+        allow_worker = threading.Event()
+
+        def generate_in_worker(*_args, **_kwargs):
+            worker_started.set()
+            allow_worker.wait(timeout=5)
+            return {"prompt": "unused"}
+
+        backend.generate.side_effect = generate_in_worker
+        with (
+            patch.object(routes, "assemble_request", return_value=assembled),
+            patch.object(routes, "_resolve_model", new_callable=AsyncMock, return_value=model),
+            patch.dict(routes.BACKENDS, {"test": backend}),
+        ):
+            generation = asyncio.create_task(routes.generate(_Request(body=body)))
+            self.assertTrue(await asyncio.to_thread(worker_started.wait, 2))
+            generation.cancel()
+            await asyncio.sleep(0)
+            self.assertIsNotNone(routes.STATE["active_request_id"])
+            backend.cancel.assert_called_once()
+            allow_worker.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await generation
+
+        self.assertIsNone(routes.STATE["active_request_id"])
+
     async def test_cancel_during_model_resolution_is_applied_before_preflight(self):
         body = self.generation_body("Use <Video 1>.")
         assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
@@ -280,6 +354,38 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         backend.prepare_request.assert_called_once()
         backend.request_unload.assert_called_once()
         backend.preflight.assert_not_called()
+        self.assertIsNone(routes.STATE["active_request_id"])
+
+    async def test_deferred_unload_targets_requested_family_when_resolution_differs(self):
+        body = self.generation_body("Use <Video 1>.")
+        assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
+        model = {"id": "resolved-model", "name": "Resolved", "family": "resolved"}
+        resolved_backend = MagicMock(manages_gpu_memory=False)
+        target_backend = MagicMock(externally_managed=False)
+        resolution_started = asyncio.Event()
+        allow_resolution = asyncio.Event()
+
+        async def delayed_resolution(_body):
+            resolution_started.set()
+            await allow_resolution.wait()
+            return model
+
+        with (
+            patch.object(routes, "assemble_request", return_value=assembled),
+            patch.object(routes, "_resolve_model", side_effect=delayed_resolution),
+            patch.dict(routes.BACKENDS, {"resolved": resolved_backend, "target": target_backend}),
+        ):
+            generation = asyncio.create_task(routes.generate(_Request(body=body)))
+            await resolution_started.wait()
+            unloaded = await routes.unload(_Request(body={"family": "target"}))
+            self.assertEqual(self.payload(unloaded), {"unload_requested": True, "deferred": True})
+            allow_resolution.set()
+            response = await generation
+
+        self.assertEqual(response.status, 499)
+        target_backend.unload.assert_called_once()
+        resolved_backend.cancel.assert_called_once()
+        resolved_backend.preflight.assert_not_called()
         self.assertIsNone(routes.STATE["active_request_id"])
 
     async def test_generate_and_refine_return_guide_load_json_errors(self):
@@ -487,6 +593,41 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(worker_threads[0], main_thread)
         self.assertFalse(routes.STATE["media_mutation_active"])
 
+    async def test_cancelled_upload_holds_media_gate_until_worker_finishes(self):
+        fields = [
+            _MultipartField("session_id", text=self.session_id),
+            _MultipartField("mode", text="Reference"),
+            _MultipartField("file", filename="image.png", content=b"image", content_type="image/png"),
+        ]
+        worker_started = threading.Event()
+        allow_worker = threading.Event()
+        prepared = {"id": "new", "type": "image", "mode": "Reference"}
+
+        def prepare_add(*_args):
+            worker_started.set()
+            allow_worker.wait(timeout=5)
+            return prepared
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(routes, "CACHE_ROOT", Path(directory)),
+            patch.object(routes.STORE, "prepare_add", side_effect=prepare_add),
+            patch.object(routes.STORE, "commit_add") as commit_add,
+        ):
+            upload = asyncio.create_task(routes.upload_media(_MultipartRequest(fields)))
+            self.assertTrue(await asyncio.to_thread(worker_started.wait, 2))
+            upload.cancel()
+            await asyncio.sleep(0)
+            self.assertTrue(routes.STATE["media_mutation_active"])
+            self.assertIsNone(routes._claim_generation_request())
+            allow_worker.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await upload
+            self.assertEqual(list(Path(directory).rglob("original*")), [])
+
+        commit_add.assert_not_called()
+        self.assertFalse(routes.STATE["media_mutation_active"])
+
     async def test_resample_processing_runs_off_loop_and_commits_on_event_loop(self):
         main_thread = threading.get_ident()
         worker_threads = []
@@ -515,6 +656,43 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.payload(response), {"asset": resampled})
         self.assertEqual(len(worker_threads), 1)
         self.assertNotEqual(worker_threads[0], main_thread)
+        self.assertFalse(routes.STATE["media_mutation_active"])
+
+    async def test_cancelled_resample_holds_media_gate_and_discards_worker_output(self):
+        worker_started = threading.Event()
+        allow_worker = threading.Event()
+
+        with tempfile.TemporaryDirectory() as directory:
+            derived_dir = Path(directory) / "derived"
+
+            def prepare_resample(*_args):
+                derived_dir.mkdir()
+                (derived_dir / "frame.jpg").write_bytes(b"frame")
+                worker_started.set()
+                allow_worker.wait(timeout=5)
+                return {"derived_dir": derived_dir}
+
+            with (
+                patch.object(routes.STORE, "get", return_value={"mode": "Reference"}),
+                patch.object(routes.STORE, "prepare_resample", side_effect=prepare_resample),
+                patch.object(routes.STORE, "commit_resample") as commit_resample,
+            ):
+                resample = asyncio.create_task(routes.resample_media(_Request(
+                    match_info={"asset_id": "video"},
+                    body={"session_id": self.session_id, "frame_count": "4"},
+                )))
+                self.assertTrue(await asyncio.to_thread(worker_started.wait, 2))
+                resample.cancel()
+                await asyncio.sleep(0)
+                self.assertTrue(routes.STATE["media_mutation_active"])
+                self.assertIsNone(routes._claim_generation_request())
+                allow_worker.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await resample
+
+            self.assertFalse(derived_dir.exists())
+
+        commit_resample.assert_not_called()
         self.assertFalse(routes.STATE["media_mutation_active"])
 
     async def test_generate_success_caches_only_task_context_and_always_returns_to_idle(self):

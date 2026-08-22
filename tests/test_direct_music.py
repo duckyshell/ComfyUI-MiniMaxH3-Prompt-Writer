@@ -43,6 +43,9 @@ class _FakeModel:
     def close(self):
         self.closed = True
 
+    def token_eos(self):
+        return 1
+
 
 class _Closer:
     def __init__(self):

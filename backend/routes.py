@@ -5,7 +5,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from aiohttp import web
@@ -36,6 +36,7 @@ STATE: dict[str, Any] = {
     "selected_model_family": None,
     "cancel_requested": False,
     "pending_unload_family": None,
+    "pending_unload_model_id": None,
     "media_mutation_active": False,
 }
 STATE_LOCK = threading.RLock()
@@ -95,6 +96,39 @@ def _release_media_mutation() -> None:
         STATE["media_mutation_active"] = False
 
 
+async def _run_thread_worker(
+    function: Callable[..., Any],
+    *args: Any,
+    on_cancel: Callable[[], Any] | None = None,
+    **kwargs: Any,
+) -> tuple[Any, asyncio.CancelledError | None]:
+    """Keep a native worker owned until it really stops, even if its request task is cancelled."""
+    worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    cancellation: asyncio.CancelledError | None = None
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError as error:
+            if cancellation is None and on_cancel is not None:
+                try:
+                    on_cancel()
+                except Exception:
+                    pass
+            cancellation = cancellation or error
+    try:
+        result = worker.result()
+    except BaseException as error:
+        if cancellation is not None:
+            raise cancellation from error
+        raise
+    return result, cancellation
+
+
+def _propagate_worker_cancellation(cancellation: asyncio.CancelledError | None) -> None:
+    if cancellation is not None:
+        raise cancellation
+
+
 async def _cleanup_expired_state(*, now: float | None = None) -> None:
     if not _claim_media_mutation():
         return
@@ -111,11 +145,11 @@ async def _cleanup_expired_state(*, now: float | None = None) -> None:
         for key in expired_cache_keys:
             GENERATION_CACHE.pop(key, None)
             GENERATION_CACHE_ACCESS.pop(key, None)
-        if expired_directories:
-            await asyncio.gather(*(
-                asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
-                for path in expired_directories
-            ))
+        cleanup_cancellation = None
+        for path in expired_directories:
+            _result, cancellation = await _run_thread_worker(shutil.rmtree, path, ignore_errors=True)
+            cleanup_cancellation = cleanup_cancellation or cancellation
+        _propagate_worker_cancellation(cleanup_cancellation)
     finally:
         _release_media_mutation()
 
@@ -132,19 +166,24 @@ def _claim_generation_request() -> str | None:
             "selected_model_family": None,
             "cancel_requested": False,
             "pending_unload_family": None,
+            "pending_unload_model_id": None,
         })
     return request_id
 
 
-def _set_active_model(request_id: str, model: dict[str, Any]) -> tuple[bool, bool]:
+def _set_active_model(request_id: str, model: dict[str, Any]) -> tuple[bool, str | None, str | None]:
     with STATE_LOCK:
         if STATE["active_request_id"] != request_id:
-            return False, False
+            return False, None, None
         STATE.update({
             "selected_model_id": model["id"],
             "selected_model_family": model["family"],
         })
-        return bool(STATE["cancel_requested"]), STATE["pending_unload_family"] == model["family"]
+        pending_family = STATE["pending_unload_family"]
+        pending_model_id = STATE["pending_unload_model_id"]
+        STATE["pending_unload_family"] = None
+        STATE["pending_unload_model_id"] = None
+        return bool(STATE["cancel_requested"]), pending_family, pending_model_id
 
 
 def _request_cancelled(request_id: str) -> bool:
@@ -167,6 +206,7 @@ def _release_generation_request(request_id: str) -> None:
             "active_request_id": None,
             "cancel_requested": False,
             "pending_unload_family": None,
+            "pending_unload_model_id": None,
         })
 
 
@@ -182,7 +222,8 @@ async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: d
     )
     already_loaded = status.get("loaded") and loaded_signature == desired_signature
     if status.get("loaded") and not already_loaded:
-        await asyncio.to_thread(backend.unload)
+        _result, cancellation = await _run_thread_worker(backend.unload)
+        _propagate_worker_cancellation(cancellation)
     details = assess_free_vram(model, runtime_plan, gpu_memory_snapshot(), already_loaded=bool(already_loaded))
     if details:
         raise ModelError(
@@ -210,7 +251,8 @@ async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
     if ollama_model is not None:
         if not isinstance(ollama_model, str) or not ollama_model.strip():
             raise ModelError("INVALID_OLLAMA_MODEL", "Select an installed Ollama model.")
-        model = await asyncio.to_thread(OLLAMA_BACKEND.probe_model, ollama_model.strip())
+        model, cancellation = await _run_thread_worker(OLLAMA_BACKEND.probe_model, ollama_model.strip())
+        _propagate_worker_cancellation(cancellation)
         requested_id = str(body.get("model_id") or "")
         if requested_id and requested_id != model["id"]:
             raise ModelError(
@@ -223,7 +265,8 @@ async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
     if external_config is not None:
         if not isinstance(external_config, dict):
             raise ModelError("INVALID_EXTERNAL_SERVER", "External server settings must be a JSON object.")
-        model = await asyncio.to_thread(EXTERNAL_SERVER_BACKEND.probe_model, external_config)
+        model, cancellation = await _run_thread_worker(EXTERNAL_SERVER_BACKEND.probe_model, external_config)
+        _propagate_worker_cancellation(cancellation)
         requested_id = str(body.get("model_id") or "")
         if requested_id and requested_id != model["id"]:
             raise ModelError(
@@ -233,6 +276,30 @@ async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
             )
         return model
     return find_model(str(body.get("model_id") or ""))
+
+
+async def _apply_deferred_unload(
+    family: str,
+    model_id: str | None,
+    resolved_family: str,
+) -> None:
+    backend = BACKENDS.get(family)
+    if backend is None:
+        return
+    if family == resolved_family:
+        request_unload = getattr(backend, "request_unload", None)
+        if callable(request_unload):
+            request_unload()
+        else:
+            backend.cancel()
+        return
+    if getattr(backend, "externally_managed", False):
+        return
+    if family == "ollama":
+        _result, cancellation = await _run_thread_worker(backend.unload, model_id)
+    else:
+        _result, cancellation = await _run_thread_worker(backend.unload)
+    _propagate_worker_cancellation(cancellation)
 
 
 async def _prepare_generation_runtime(
@@ -247,19 +314,15 @@ async def _prepare_generation_runtime(
     if backend is None:
         raise ModelError("MODEL_BACKEND_UNAVAILABLE", "The selected model backend is not connected yet.")
 
-    cancel_requested, pending_unload = _set_active_model(request_id, model)
+    cancel_requested, pending_unload_family, pending_unload_model_id = _set_active_model(request_id, model)
     backend.prepare_request()
-    if pending_unload:
-        request_unload = getattr(backend, "request_unload", None)
-        if callable(request_unload):
-            request_unload()
-        else:
-            backend.cancel()
+    if pending_unload_family is not None:
+        await _apply_deferred_unload(pending_unload_family, pending_unload_model_id, model["family"])
     if cancel_requested:
         backend.cancel()
         raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
 
-    runtime_plan = await asyncio.to_thread(
+    runtime_plan, cancellation = await _run_thread_worker(
         backend.preflight,
         model,
         assembled,
@@ -267,6 +330,7 @@ async def _prepare_generation_runtime(
         kv_cache=body.get("kv_cache", "auto"),
         thinking=body.get("thinking", False),
     )
+    _propagate_worker_cancellation(cancellation)
     await _memory_preflight(backend, model, runtime_plan)
     if _request_cancelled(request_id):
         raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
@@ -529,7 +593,7 @@ async def generate(request: web.Request) -> web.Response:
         _release_generation_request(request_id)
         status = 499 if error.code == "GENERATION_CANCELLED" else _model_error_status(error)
         return _error(error.code, error.message, status=status, details=error.details)
-    except Exception:
+    except BaseException:
         _release_generation_request(request_id)
         raise
 
@@ -555,11 +619,12 @@ async def generate(request: web.Request) -> web.Response:
         write_event("phase", request_id=request_id, operation="generate", phase=phase, elapsed_seconds=round(time.perf_counter() - request_started, 3))
 
     try:
-        result = await asyncio.to_thread(
+        result, cancellation = await _run_thread_worker(
             backend.generate,
             model,
             assembled,
             body["session_id"],
+            on_cancel=backend.cancel,
             thinking=body.get("thinking", False),
             seed=body.get("seed"),
             unload_after=body.get("unload_after", True),
@@ -568,6 +633,7 @@ async def generate(request: web.Request) -> web.Response:
             runtime_plan=runtime_plan,
             on_phase=on_phase,
         )
+        _propagate_worker_cancellation(cancellation)
         total_seconds = round(time.perf_counter() - request_started, 3)
         peak_vram_mb = vram_monitor.stop()
         debug_input_sequence = result.pop("debug_input_sequence", None)
@@ -631,7 +697,9 @@ async def cancel(_request: web.Request) -> web.Response:
 async def unload(request: web.Request) -> web.Response:
     body = await _json_body(request)
     body = body or {}
-    family = body.get("family") or STATE.get("selected_model_family")
+    with STATE_LOCK:
+        selected_family = STATE.get("selected_model_family")
+    family = body.get("family") or selected_family
     model_id = body.get("model_id")
     if family not in BACKENDS:
         return _error("INVALID_MODEL_FAMILY", "A supported model family is required.", status=400)
@@ -645,6 +713,7 @@ async def unload(request: web.Request) -> web.Response:
             STATE["phase"] = "cancelling"
             STATE["cancel_requested"] = True
             STATE["pending_unload_family"] = family
+            STATE["pending_unload_model_id"] = model_id
             return web.json_response({"unload_requested": True, "deferred": True})
     active_same_family = active and active_family == family
     if active_same_family:
@@ -700,7 +769,7 @@ async def refine(request: web.Request) -> web.Response:
         _release_generation_request(request_id)
         status = 499 if error.code == "GENERATION_CANCELLED" else _model_error_status(error)
         return _error(error.code, error.message, status=status, details=error.details)
-    except Exception:
+    except BaseException:
         _release_generation_request(request_id)
         raise
 
@@ -727,11 +796,12 @@ async def refine(request: web.Request) -> web.Response:
         write_event("phase", request_id=request_id, operation=operation, phase=phase, elapsed_seconds=round(time.perf_counter() - request_started, 3))
 
     try:
-        result = await asyncio.to_thread(
+        result, cancellation = await _run_thread_worker(
             backend.generate,
             model,
             assembled,
             body["session_id"],
+            on_cancel=backend.cancel,
             thinking=body.get("thinking", False),
             seed=body.get("seed"),
             unload_after=body.get("unload_after", True),
@@ -740,6 +810,7 @@ async def refine(request: web.Request) -> web.Response:
             runtime_plan=runtime_plan,
             on_phase=on_phase,
         )
+        _propagate_worker_cancellation(cancellation)
         if lyrics_request and len(result["prompt"]) > 4000:
             raise ModelError("LYRICS_TOO_LONG", "The generated Lyrics exceed 4,000 characters. Shorten the request and try again.")
         total_seconds = round(time.perf_counter() - request_started, 3)
@@ -797,6 +868,17 @@ async def upload_media(request: web.Request) -> web.Response:
     asset_dir: Path | None = None
     media_claimed = False
     replace_asset_id: str | None = request.query.get("replace_asset_id") or None
+
+    def rollback_upload() -> None:
+        if asset_dir is not None:
+            shutil.rmtree(asset_dir, ignore_errors=True)
+        if session_id is not None and not replace_asset_id:
+            for asset_id in uploaded_ids:
+                try:
+                    STORE.remove(session_id, asset_id)
+                except MediaError:
+                    pass
+
     try:
         while field := await reader.next():
             if field.name == "session_id":
@@ -838,7 +920,7 @@ async def upload_media(request: web.Request) -> web.Response:
                 old_asset = STORE.get(session_id, replace_asset_id)
                 if old_asset["mode"] != mode:
                     raise MediaError("INVALID_REPLACEMENT", "The replacement must stay in the same mode.")
-                prepared = await asyncio.to_thread(
+                prepared, cancellation = await _run_thread_worker(
                     STORE.prepare_replace,
                     session_id,
                     replace_asset_id,
@@ -846,9 +928,11 @@ async def upload_media(request: web.Request) -> web.Response:
                     field.headers.get("Content-Type"),
                     stored_path,
                 )
+                if cancellation is not None:
+                    raise cancellation
                 asset = STORE.commit_replace(session_id, replace_asset_id, prepared)
             else:
-                prepared = await asyncio.to_thread(
+                prepared, cancellation = await _run_thread_worker(
                     STORE.prepare_add,
                     session_id,
                     mode,
@@ -856,22 +940,20 @@ async def upload_media(request: web.Request) -> web.Response:
                     field.headers.get("Content-Type"),
                     stored_path,
                 )
+                if cancellation is not None:
+                    raise cancellation
                 asset = STORE.commit_add(session_id, mode, prepared)
             uploaded.append(asset)
             uploaded_ids.append(asset["id"])
             asset_dir = None
     except (MediaError, ValueError) as error:
-        if asset_dir is not None:
-            shutil.rmtree(asset_dir, ignore_errors=True)
-        if session_id is not None and not replace_asset_id:
-            for asset_id in uploaded_ids:
-                try:
-                    STORE.remove(session_id, asset_id)
-                except MediaError:
-                    pass
+        rollback_upload()
         if isinstance(error, MediaError):
             return _media_error(error, status=409 if error.code == "GENERATION_BUSY" else 400)
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
+    except BaseException:
+        rollback_upload()
+        raise
     finally:
         if media_claimed:
             _release_media_mutation()
@@ -971,23 +1053,31 @@ async def resample_media(request: web.Request) -> web.Response:
     try:
         session_id = parse_session_id((body or {}).get("session_id"))
         mode = STORE.get(session_id, request.match_info["asset_id"])["mode"]
-        prepared = await asyncio.to_thread(
+        prepared, cancellation = await _run_thread_worker(
             STORE.prepare_resample,
             session_id,
             request.match_info["asset_id"],
             (body or {}).get("frame_count"),
             (body or {}).get("include_endpoints"),
         )
+        if cancellation is not None:
+            raise cancellation
         asset = STORE.commit_resample(session_id, request.match_info["asset_id"], prepared)
     except ValueError:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
     except MediaError as error:
         if prepared is not None:
-            await asyncio.to_thread(shutil.rmtree, prepared["derived_dir"], ignore_errors=True)
+            _result, cleanup_cancellation = await _run_thread_worker(
+                shutil.rmtree,
+                prepared["derived_dir"],
+                ignore_errors=True,
+            )
+            if cleanup_cancellation is not None:
+                raise cleanup_cancellation
         return _media_error(error)
-    except Exception:
+    except BaseException:
         if prepared is not None:
-            await asyncio.to_thread(shutil.rmtree, prepared["derived_dir"], ignore_errors=True)
+            await _run_thread_worker(shutil.rmtree, prepared["derived_dir"], ignore_errors=True)
         raise
     finally:
         _release_media_mutation()

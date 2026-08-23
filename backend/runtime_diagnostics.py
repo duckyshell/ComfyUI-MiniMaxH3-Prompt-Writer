@@ -15,7 +15,7 @@ MAXIMUM_VERSION = (0, 4, 0)
 TESTED_WINDOWS_CUDA13_INSTALL_COMMAND = (
     '.\\python_embeded\\python.exe -m pip install --only-binary=:all: '
     '--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 '
-    '"llama-cpp-python>=0.3.34,<0.4"'
+    '"llama-cpp-python>=0.3.35,<0.4"'
 )
 _CACHE: dict[str, Any] | None = None
 _CACHE_LOCK = threading.Lock()

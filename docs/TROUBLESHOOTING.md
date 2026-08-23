@@ -35,7 +35,7 @@ Direct uses an optional native runtime. ComfyUI Manager installs the base extens
 For the NVIDIA Windows Portable build used for v0.3 validation, open a terminal in the folder containing `python_embeded` and run:
 
 ```powershell
-.\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.34,<0.4"
+.\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.35,<0.4"
 ```
 
 Restart ComfyUI.
@@ -60,7 +60,7 @@ From the Windows Portable folder containing `python_embeded`, perform one clean 
 
 ```powershell
 .\python_embeded\python.exe -m pip uninstall llama-cpp-python -y
-.\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.34,<0.4"
+.\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.35,<0.4"
 ```
 
 Do not install into system Python, copy native DLLs manually, or replace ComfyUI's embedded Python files.
@@ -68,6 +68,8 @@ Do not install into system Python, copy native DLLs manually, or replace ComfyUI
 **Verify**
 
 Restart ComfyUI and complete a real Direct model load and generation.
+
+If Gemma is available but a Qwen model says the runtime is unsupported, check Scan details. Gemma remains supported on 0.3.34, while the validated Qwen adapters require 0.3.35 or newer. Use the clean replacement command above; Writer blocks Qwen before loading weights when the installed runtime is too old.
 
 ## `GGML_TYPE_F16` cannot be imported
 

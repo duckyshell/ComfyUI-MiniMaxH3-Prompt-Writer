@@ -53,6 +53,7 @@ def model_setup_catalog() -> list[dict[str, Any]]:
             "id": item.get("id", model_file),
             "name": item.get("display_name", Path(model_file).stem),
             "vram_gb": item.get("vram_gb"),
+            "minimum_runtime": item.get("minimum_runtime"),
             "recommended_context": item.get("recommended_context", "standard"),
             "model_file": model_file,
             "projector_file": projector_file,
@@ -153,14 +154,19 @@ def _model_candidate(
 
     configured = _configured_models().get(model_path.name, {})
     metadata_name = str((metadata or {}).get("name") or "") or None
-    name = str(configured.get("display_name") or _display_name(model_path))
     model_policy = identify_model_policy(architecture, metadata_name)
+    qwen_context = adapter is not None and adapter.id in {"qwen35", "qwen35moe"}
+    if qwen_context and model_policy is None:
+        configured = {}
+    name = str(configured.get("display_name") or _display_name(model_path))
     template_controls = (metadata or {}).get("template_controls") or {
         "enable_thinking": False,
         "reasoning_effort": False,
     }
-    configuration_verified = bool(configured) or policy_is_verified_configuration(model_policy, model_path)
-    qwen_context = adapter is not None and adapter.id in {"qwen35", "qwen35moe"}
+    configuration_verified = (
+        (bool(configured) and not qwen_context)
+        or policy_is_verified_configuration(model_policy, model_path)
+    )
     native_context = (metadata or {}).get("context_length")
     context_profiles = (
         ["standard", "extended", "large", "maximum"]

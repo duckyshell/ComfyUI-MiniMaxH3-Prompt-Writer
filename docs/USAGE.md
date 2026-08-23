@@ -136,7 +136,7 @@ Reference video and audio clips must be 2 to 15 seconds long. An audio-only Refe
 
 For Direct GGUF and compatible Ollama models, the **Thinking** switch asks the model to use a larger reasoning budget. Auto context plans for the assembled input, reasoning, and final answer rather than silently shrinking Thinking to save VRAM.
 
-Direct disables Thinking when a manually selected 8K context cannot provide the required budget. Ollama shows the switch only when the model reports thinking support. API reasoning is provider managed; Gemini exposes **Minimal**, **Low**, **Medium**, and **High** in API Settings instead of using the general switch.
+Direct disables Thinking when a manually selected 8K context cannot provide the required budget. Gemma offers its existing 8K–24K tiers; supported Qwen models offer 16K–48K and use exact preflight token counting. Ollama shows the switch only when the model reports thinking support. API reasoning is provider managed; Gemini exposes **Minimal**, **Low**, **Medium**, and **High** in API Settings instead of using the general switch.
 
 If a model still cannot complete Thinking, Writer reports the fallback. It does not present a standard-mode retry as though the full Thinking request succeeded.
 

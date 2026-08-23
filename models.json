@@ -64,6 +64,20 @@
       "files": ["gemma-4-31B-it-UD-Q4_K_XL.gguf", "mmproj-BF16.gguf"],
       "recommended_context": "standard",
       "capabilities": {"images": true, "video_frames": true, "audio": false}
+    },
+    {
+      "id": "qwen3.8-27b-ud-q4-k-xl-gguf",
+      "repo": "unsloth/Qwen3.8-27B-GGUF",
+      "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+      "role": "gguf-large-unmetered",
+      "display_name": "Qwen 3.8 27B UD-Q4_K_XL",
+      "vram_gb": null,
+      "estimated_free_vram_mb": null,
+      "f16_kv_extra_mb_16k": 0,
+      "files": ["Qwen3.8-27B-UD-Q4_K_XL.gguf", "mmproj-BF16.gguf"],
+      "recommended_context": "standard",
+      "minimum_runtime": "0.3.35",
+      "capabilities": {"images": true, "video_frames": true, "audio": false}
     }
   ]
 }

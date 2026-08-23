@@ -6,7 +6,7 @@ The provider determines how Writer reaches its prompt model. That prompt model r
 
 Ollama, External llama.cpp, and API providers can use other multimodal models when the provider and model accept image inputs. Gemma 4 is the recommended local family and has received the most testing, but it is not a whitelist for those three provider paths. Compatibility does not guarantee the same H3 prompt quality.
 
-External llama.cpp can also use a text-only model for requests without images or video. Direct GGUF is currently limited to the verified Gemma 4 pairs.
+External llama.cpp can also use a text-only model for requests without images or video. Direct GGUF supports its verified Gemma 4 pairs, a verified Qwen 3.8 configuration, and metadata-recognized custom configurations that remain labeled unverified.
 
 | Provider | Best for | Model runs | Extra setup |
 | --- | --- | --- | --- |
@@ -23,7 +23,7 @@ Prompt Writer does not install or start Ollama, and it never pulls a model autom
 
 ## Direct GGUF
 
-Choose Direct when you want Prompt Writer to load a verified Gemma 4 GGUF and its projector directly inside ComfyUI. This path exposes Context and KV cache controls and lets Writer manage model loading and unload.
+Choose Direct when you want Prompt Writer to load a supported GGUF and optional matching projector directly inside ComfyUI. This path exposes Context and KV cache controls and lets Writer manage model loading and unload. Gemma 4 uses the established adapter; Qwen 3.8 requires `llama-cpp-python 0.3.35` or newer and uses model-aware 16K–48K planning.
 
 Direct is optional. It depends on a native `llama-cpp-python` wheel, so compatibility is narrower than the other provider paths.
 

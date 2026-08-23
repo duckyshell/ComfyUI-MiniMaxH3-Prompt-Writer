@@ -58,7 +58,7 @@ class ModelSetupCatalogTests(unittest.TestCase):
     def test_every_recommended_model_has_an_exact_model_and_projector_link(self):
         entries = model_setup_catalog()
 
-        self.assertEqual([entry["vram_gb"] for entry in entries], [8, 12, 16, 24, 32])
+        self.assertEqual([entry["vram_gb"] for entry in entries], [8, 12, 16, 24, 32, None])
         for entry in entries:
             self.assertTrue(entry["model_file"].endswith(".gguf"))
             self.assertIn("mmproj", entry["projector_file"].lower())
@@ -69,6 +69,10 @@ class ModelSetupCatalogTests(unittest.TestCase):
             self.assertNotIn("download=true", entry["projector_url"])
             self.assertIn(entry["model_file"], entry["model_url"])
             self.assertIn(entry["projector_file"], entry["projector_url"])
+
+        qwen = entries[-1]
+        self.assertEqual(qwen["model_file"], "Qwen3.8-27B-UD-Q4_K_XL.gguf")
+        self.assertEqual(qwen["minimum_runtime"], "0.3.35")
 
 
 class ModelDiscoveryTests(unittest.TestCase):
@@ -297,6 +301,23 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertTrue(model["configuration_verified"])
         self.assertEqual(model["verification_status"], "verified")
         self.assertTrue(model["template_controls"]["reasoning_effort"])
+
+    def test_verified_qwen_filename_does_not_override_custom_metadata_lineage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(
+                root / "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+                architecture="qwen35",
+                dimension=5_120,
+                name="Custom Qwen fine-tune",
+                reasoning_effort=True,
+            )
+
+            model = self.discover(root)[0]
+
+        self.assertIsNone(model["model_policy"])
+        self.assertFalse(model["configuration_verified"])
+        self.assertEqual(model["verification_status"], "compatible_unverified")
 
     def test_incompatible_qwen_projector_disables_vision_without_blocking_text(self):
         with tempfile.TemporaryDirectory() as directory:

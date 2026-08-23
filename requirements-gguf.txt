@@ -1,2 +1,3 @@
-# Optional GGUF backend. Use the CUDA wheel index matching the host CUDA runtime.
+# Optional GGUF backend. Gemma keeps the 0.3.34 floor; Qwen adapters require
+# 0.3.35 or newer. Use the CUDA wheel index matching the host CUDA runtime.
 llama-cpp-python>=0.3.34,<0.4

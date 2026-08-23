@@ -21,19 +21,20 @@ Workflow safetensors, checkpoints, and text encoders are unrelated to the Direct
 Open PowerShell or Command Prompt in the ComfyUI Portable folder that contains `python_embeded`, then run:
 
 ```powershell
-.\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.34,<0.4"
+.\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.35,<0.4"
 ```
 
 Restart ComfyUI and open **H3 Prompt Writer > Settings > Direct GGUF**. Settings shows a supported installed package as **Runtime detected**.
 
 This preflight checks that `llama-cpp-python` is installed, its version is supported, and the Python module is available without importing the native runtime. Native compatibility and GPU execution are exercised only when a Direct model is actually loaded and used.
 
-This command was validated on the official NVIDIA Windows Portable build used for v0.3 validation:
+The Direct runtime was validated on the official NVIDIA Windows Portable build used for local validation:
 
 - Python 3.13.14
 - PyTorch `2.13.0+cu130`
 - CUDA 13.0
-- `llama-cpp-python 0.3.34`
+- `llama-cpp-python 0.3.34` for the existing Gemma configurations
+- `llama-cpp-python 0.3.35` for Qwen 3.8
 - `GGML_TYPE_F16` import and CUDA GPU offload
 - real multimodal generation and unload
 
@@ -54,8 +55,11 @@ ComfyUI/models/LLM/
 ├── gemma-4-12b/
 │   ├── gemma-4-12b-it-Q4_K_S.gguf
 │   └── mmproj-BF16.gguf
-└── gemma-4-26b/
-    ├── gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
+├── gemma-4-26b/
+│   ├── gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
+│   └── mmproj-BF16.gguf
+└── qwen-3.8-27b/
+    ├── Qwen3.8-27B-UD-Q4_K_XL.gguf
     └── mmproj-BF16.gguf
 ```
 
@@ -75,6 +79,8 @@ Select **Refresh** after adding files. Expand **Scan details** if the model does
 
 These are measured starting tiers, not hard requirements or quality rankings. They are the currently published verified Gemma 4 pairs. Direct also recognizes the `qwen35` and `qwen35moe` runtime architectures from GGUF metadata. A recognized custom configuration is labeled compatible/unverified until that exact model policy and projector combination has been validated; an unknown architecture is visible in Scan details but is not loaded.
 
+The verified Qwen configuration is [Qwen 3.8 27B UD-Q4_K_XL](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_XL.gguf) with its matching [BF16 projector](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/mmproj-BF16.gguf). It is intentionally not assigned a Gemma-style GPU starting tier: it is a large model, and actual headroom depends strongly on the chosen 16K–48K context, KV format, display use, and other loaded GPU workloads. Measure it on the target machine.
+
 ## Qwen model policy
 
 Architecture and model policy are separate. `qwen35` and `qwen35moe` select a safe loading/MTMD adapter; they do not by themselves mean Qwen 3.8 or 3.6 and never enable version-specific defaults.
@@ -87,6 +93,12 @@ Qwen Thinking output is split from the final prompt whether the runtime returns 
 
 The validated Qwen adapter floor is `llama-cpp-python 0.3.35`; Gemma remains compatible with the existing 0.3.34 floor. If 0.3.34 is installed, Qwen is discoverable but not runtime-ready and Settings reports the required update before any weights are loaded.
 
+The verified Qwen 3.8 configuration completed T2VA, I2VA, FL2VA, L2VA, and Reference with Thinking both off and on. A 48K maximum-Reference run with nine images and three ordered video contact sheets completed without fallback or OOM, and unload/reload also completed. Peak observed GPU memory was 22,959 MiB on the validation machine; this is evidence for that machine and workload, not a universal VRAM tier.
+
+A local `qwen35moe` Qwen 3.6 fine-tune also completed T2VA, one image, Reference, and a 24K Thinking run. That run used 4,400 reasoning tokens without truncation. Its metadata lineage is custom, so it correctly remains compatible/unverified and does not inherit the official Qwen 3.6 policy.
+
+Direct continues to send videos as the ordered contact sheet shown in Writer. The current `llama-cpp-python` high-level MTMD handler has no stable public native-video input; an undocumented MP4 path was not reliable and is intentionally not used.
+
 ## Context and KV cache
 
 Direct is the only provider with manual Context and KV controls in Writer.
@@ -98,7 +110,7 @@ Direct is the only provider with manual Context and KV controls in Writer.
 - Qwen text is counted before full load by a cached `vocab_only` tokenizer subprocess. It sets `n_gpu_layers=0` and hides CUDA, so preflight does not allocate model weights or GPU state.
 - Qwen visual input is budgeted from the exact prepared image or contact-sheet dimensions and projector patch metadata. Missing dimensions use a conservative fallback instead of silently assuming a small fixed image cost.
 
-The 48K ceiling is deliberate for the current Prompt Writer workload, including the maximum Reference media set. Direct does not automatically request Qwen 3.6's advertised 128K context or its very large possible output budget; Qwen 3.6 Thinking remains unverified until the dedicated live characterization is complete.
+The 48K ceiling is deliberate for the current Prompt Writer workload, including the maximum Reference media set. Direct does not automatically request Qwen 3.6's advertised 128K context or its very large possible output budget. A local custom Qwen 3.6 Thinking smoke completed at 24K, but custom lineage is still not promoted to a verified official policy.
 
 Increasing context or using F16 KV consumes more VRAM. If preflight reports insufficient free VRAM, use a smaller model or release other GPU models.
 
@@ -120,7 +132,7 @@ If an update replaces `python_embeded` or leaves mixed native packages, reinstal
 
 ```powershell
 .\python_embeded\python.exe -m pip uninstall llama-cpp-python -y
-.\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.34,<0.4"
+.\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.35,<0.4"
 ```
 
 Restart ComfyUI and confirm that Direct reports **Runtime detected**, then complete one real Direct generation. Do not copy native DLLs manually, replace ComfyUI's Python files, or install the package into an unrelated system Python.

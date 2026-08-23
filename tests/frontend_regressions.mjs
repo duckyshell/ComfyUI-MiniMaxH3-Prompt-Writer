@@ -762,6 +762,8 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.match(mainSource, /const availableContexts = model\.context_profiles/);
   assert.match(mainSource, /studio\.directContextProfile = "auto"/);
   assert.match(mainSource, /button\.disabled = unavailable/);
+  assert.match(mainSource, /Large model · measure locally/);
+  assert.match(mainSource, /llama-cpp-python \$\{model\.minimum_runtime\}\+/);
   assert.match(mainSource, /"Server managed"/);
   assert.match(mainSource, /generate\(buildGeneratePayload\(studio/);
   assert.match(mainSource, /refine\(buildRefinePayload\(studio/);

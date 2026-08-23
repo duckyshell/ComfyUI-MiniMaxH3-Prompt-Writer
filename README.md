@@ -87,7 +87,7 @@ For Git, ZIP, Windows Portable, update, and provider-specific steps, see [Instal
 - Gemma 4 is the recommended local model family and has received the most testing. Qwen 3.6 also completed all five H3 modes through Ollama without special changes to Writer.
 - Ollama, External llama.cpp, and compatible API endpoints let you try other multimodal models that accept images. Compatibility does not guarantee a good H3 prompt.
 - External llama.cpp also accepts text-only models for Music 3, T2VA, and Refine. Image and video requests still need a vision model.
-- Direct GGUF is the exception. It currently supports only the verified Gemma 4 pairs because its model loader and vision-projector integration are built for Gemma 4.
+- Direct GGUF recognizes Gemma 4 plus the `qwen35` and `qwen35moe` llama.cpp architectures from GGUF metadata. The Qwen 3.8 27B UD-Q4_K_XL model/projector pair is verified; other recognized configurations stay clearly marked compatible/unverified. A missing projector leaves text-only T2VA available.
 - Gemini and a Custom OpenAI-compatible endpoint were tested live. OpenAI and OpenRouter have automated contract coverage but were not tested live with commercial credentials. Comfy Cloud has not been validated for v0.3.
 
 ## Documentation

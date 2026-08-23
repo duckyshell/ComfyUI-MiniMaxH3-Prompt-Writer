@@ -1283,11 +1283,16 @@ function detectedVramTier() {
 
 function renderModelSetupRows() {
   const tier = detectedVramTier();
-  return studio.modelSetup.map((model, index) => `
+  return studio.modelSetup.map((model, index) => {
+    const modelSize = model.vram_gb ? `${model.vram_gb} GB VRAM` : "Large model · measure locally";
+    const contextLabel = ({ low: "8K", standard: "16K", extended: "24K", large: "32K", maximum: "48K" })[model.recommended_context] || "Auto";
+    const runtimeLabel = model.minimum_runtime ? ` · llama-cpp-python ${model.minimum_runtime}+` : "";
+    return `
     <div class="h3ps-model-setup-row ${model.vram_gb === tier ? "fits-detected-vram" : ""}" ${model.vram_gb === tier ? 'title="Fits the detected total VRAM tier"' : ""}>
-      <span><strong>${escapeHtml(model.name)}</strong><small>${model.vram_gb} GB VRAM · ${model.recommended_context === "low" ? "8K" : "16K"}${model.vram_gb === tier ? " · Fits detected VRAM" : ""}</small><small class="h3ps-model-source">${escapeHtml(model.source_label)}</small></span>
+      <span><strong>${escapeHtml(model.name)}</strong><small>${modelSize} · ${contextLabel}${runtimeLabel}${model.vram_gb === tier ? " · Fits detected VRAM" : ""}</small><small class="h3ps-model-source">${escapeHtml(model.source_label)}</small></span>
       <span class="h3ps-model-files"><button type="button" data-model-files-toggle="${index}">Files ↗</button><span data-model-files-menu="${index}" hidden><a href="${model.model_url}" target="_blank" rel="noopener noreferrer">Model file ↗</a><a href="${model.projector_url}" target="_blank" rel="noopener noreferrer">Projector file ↗</a></span></span>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 function modelDiscoveryDetails() {

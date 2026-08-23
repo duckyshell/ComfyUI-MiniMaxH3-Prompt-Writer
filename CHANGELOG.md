@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Added metadata-driven Direct GGUF support for Qwen architectures, with the Qwen 3.8 27B UD-Q4_K_XL configuration verified on `llama-cpp-python 0.3.35`.
+- Added text-only Direct fallback, generic MTMD projector handling, Qwen sampling/Thinking policies, exact CPU-only token preflight, and media-aware 16K–48K context planning.
+- Kept unknown architectures discoverable but not runnable, and labeled recognized custom configurations separately from verified model policies.
+
 ## 0.3.6 - 2026-08-22
 
 ### Fixes

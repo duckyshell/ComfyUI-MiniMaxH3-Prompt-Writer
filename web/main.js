@@ -1,6 +1,6 @@
 import { app } from "/scripts/app.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
-import { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } from "./compat.js";
+import { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
@@ -1083,29 +1083,37 @@ function syncLifecycleActions() {
   slot.querySelectorAll("[data-lifecycle-family]").forEach((button) => button.addEventListener("click", runLifecycleAction));
 }
 
-async function releaseComfyVram({ retry = null } = {}) {
+async function releaseComfyVram({ retry = null, requiredFreeMb = null } = {}) {
   const button = studio.root.querySelector("[data-comfy-memory-action]");
-  if (button.disabled) return;
+  if (button.disabled || studio.comfyVramReleaseInFlight) return;
   let shouldRetry = false;
+  studio.comfyVramReleaseInFlight = true;
   button.disabled = true;
   button.innerHTML = `<span class="h3ps-spinner"></span>Releasing…`;
   try {
     const before = await getStatus();
     const beforeFree = Number(before.gpu_memory?.free_mb);
+    const requiredFree = requiredFreeMb == null ? null : Number(requiredFreeMb);
     await freeComfyVram();
 
     let latest = before;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+    let targetReached = vramReleaseReachedTarget(beforeFree, beforeFree, requiredFree);
+    for (let attempt = 0; attempt < 60 && !targetReached; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
       latest = await getStatus();
       const currentFree = Number(latest.gpu_memory?.free_mb);
-      if (Number.isFinite(beforeFree) && Number.isFinite(currentFree) && currentFree - beforeFree >= 64) break;
+      targetReached = vramReleaseReachedTarget(beforeFree, currentFree, requiredFree);
     }
     studio.gpuMemory = latest.gpu_memory || studio.gpuMemory;
     const afterFree = Number(latest.gpu_memory?.free_mb);
     const releasedMb = Number.isFinite(beforeFree) && Number.isFinite(afterFree) ? Math.max(0, afterFree - beforeFree) : 0;
     if (typeof retry === "function") {
-      shouldRetry = true;
+      shouldRetry = targetReached;
+      if (!targetReached) {
+        const freeText = Number.isFinite(afterFree) ? `${(afterFree / 1024).toFixed(1)} GB is free.` : "Free VRAM could not be measured.";
+        const requiredText = Number.isFinite(requiredFree) ? ` About ${(requiredFree / 1024).toFixed(1)} GB is required.` : "";
+        showToast("VRAM release is still completing", `${freeText}${requiredText} Generate again after ComfyUI finishes unloading.`);
+      }
     } else if (releasedMb >= 64) {
       showToast("ComfyUI VRAM released", `${(releasedMb / 1024).toFixed(1)} GB freed. Workflow and cached node results were kept.`);
     } else {
@@ -1114,6 +1122,7 @@ async function releaseComfyVram({ retry = null } = {}) {
   } catch (error) {
     showToast("VRAM release failed", error.message);
   } finally {
+    studio.comfyVramReleaseInFlight = false;
     button.disabled = false;
     button.innerHTML = `${icon("memory", 15)}Free ComfyUI VRAM`;
     syncLifecycleActions();
@@ -1131,7 +1140,7 @@ function showVramRetry(error, retry) {
     "Not enough free VRAM",
     message,
     null,
-    { label: "Free ComfyUI VRAM & retry", onClick: () => releaseComfyVram({ retry }) },
+    { label: "Free ComfyUI VRAM & retry", onClick: () => releaseComfyVram({ retry, requiredFreeMb: error.details?.required_free_mb }) },
   );
 }
 

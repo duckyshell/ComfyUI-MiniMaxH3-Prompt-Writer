@@ -4,7 +4,7 @@ import test from "node:test";
 
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");
-const { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener } = await import(`data:text/javascript;base64,${encoded}`);
+const { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener, vramReleaseReachedTarget } = await import(`data:text/javascript;base64,${encoded}`);
 const responseSource = await readFile(new URL("../web/api/response.js", import.meta.url), "utf8");
 const responseEncoded = Buffer.from(responseSource).toString("base64");
 const { readApiResponse } = await import(`data:text/javascript;base64,${responseEncoded}`);
@@ -507,6 +507,13 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(state.keepModelLoaded, false);
 });
 
+test("VRAM retry waits for the required free-memory target", () => {
+  assert.equal(vramReleaseReachedTarget(4_000, 9_999, 10_000), false);
+  assert.equal(vramReleaseReachedTarget(4_000, 10_000, 10_000), true);
+  assert.equal(vramReleaseReachedTarget(4_000, 4_063), false);
+  assert.equal(vramReleaseReachedTarget(4_000, 4_064), true);
+});
+
 test("Direct context preferences preserve Qwen 32K and 48K tiers", () => {
   for (const profile of ["large", "maximum"]) {
     const storage = memoryStorage();
@@ -753,6 +760,9 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   const freeVramEnd = mainSource.indexOf("function showVramRetry", freeVramStart);
   const freeVramSource = mainSource.slice(freeVramStart, freeVramEnd);
   assert.match(freeVramSource, /finally\s*\{[\s\S]*button\.disabled = false;[\s\S]*button\.innerHTML = `\$\{icon\("memory", 15\)\}Free ComfyUI VRAM`;/);
+  assert.match(freeVramSource, /requiredFreeMb/);
+  assert.match(freeVramSource, /targetReached/);
+  assert.doesNotMatch(freeVramSource, /if \(typeof retry === "function"\) \{\s*shouldRetry = true/);
   assert.match(mainSource, /Unload Ollama/);
   assert.match(mainSource, /Unload Direct/);
   assert.match(mainSource, /Stop & unload/);

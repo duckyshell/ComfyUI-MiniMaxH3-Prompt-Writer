@@ -27,6 +27,12 @@ export function replaceEventListener(target, type, key, listener, options) {
   listeners.set(slot, { listener, options });
 }
 
+export function vramReleaseReachedTarget(beforeFreeMb, currentFreeMb, requiredFreeMb = null) {
+  if (!Number.isFinite(currentFreeMb)) return false;
+  if (Number.isFinite(requiredFreeMb)) return currentFreeMb >= requiredFreeMb;
+  return Number.isFinite(beforeFreeMb) && currentFreeMb - beforeFreeMb >= 64;
+}
+
 export function moveOntoTarget(items, sourceId, targetId, getId = (item) => item.id) {
   const sourceIndex = items.findIndex((item) => getId(item) === sourceId);
   const targetIndex = items.findIndex((item) => getId(item) === targetId);

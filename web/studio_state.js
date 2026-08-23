@@ -348,6 +348,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     activeRequestFamily: null,
     activeRequestModelId: null,
     requestBusy: false,
+    comfyVramReleaseInFlight: false,
     lyricsRequestBusy: false,
     toastTimer: null,
     statusTimer: null,

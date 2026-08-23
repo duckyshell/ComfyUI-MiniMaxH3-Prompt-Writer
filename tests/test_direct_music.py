@@ -185,6 +185,30 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         self.assertEqual(first["text_token_source"], "vocab_only")
         self.assertEqual(second["estimated_text_tokens"], 400)
 
+    def test_qwen3vl_preflight_uses_exact_vocab_only_counting(self):
+        info = {
+            **model_info(projector=None),
+            "architecture_adapter": "qwen3vl",
+            "context_profiles": ["standard", "extended", "large", "maximum"],
+            "auto_context_ladder": True,
+            "native_context_tokens": 262_144,
+        }
+        assembled = {
+            "messages": [{"role": "user", "content": "brief"}],
+            "media_inputs": [],
+            "input": {"mode": "T2VA", "creative_brief": "brief"},
+        }
+        backend = GGUFBackend()
+
+        with patch.object(backend, "_count_preflight_text_tokens", return_value=321) as count:
+            result = backend.preflight(
+                info, assembled, context_profile="auto", kv_cache="auto", thinking=False,
+            )
+
+        count.assert_called_once()
+        self.assertEqual(result["text_token_source"], "vocab_only")
+        self.assertEqual(result["estimated_text_tokens"], 321)
+
     def test_mtmd_logging_suppresses_info_and_keeps_warnings_and_errors(self):
         with (
             patch.dict(sys.modules, self.fake_modules()),

@@ -19,9 +19,9 @@ def request(text="short brief", visual_count=0, mode="T2VA"):
 
 class ContextPlanTests(unittest.TestCase):
     @staticmethod
-    def qwen_model(*, native_context=262_144):
+    def qwen_model(*, native_context=262_144, adapter="qwen35"):
         return {
-            "architecture_adapter": "qwen35",
+            "architecture_adapter": adapter,
             "recommended_context": "standard",
             "context_profiles": ["standard", "extended", "large", "maximum"],
             "auto_context_ladder": True,
@@ -195,6 +195,21 @@ class ContextPlanTests(unittest.TestCase):
 
         self.assertEqual(total, 1_152 + 576)
         self.assertEqual([item["tokens"] for item in details], [1_152, 576])
+        self.assertTrue(applied)
+
+    def test_qwen3vl_visual_budget_uses_projector_grid_not_response_usage(self):
+        assembled = request()
+        assembled["media_inputs"] = [
+            {"type": "image", "asset_id": "live-smoke", "visual_width": 1_504, "visual_height": 2_720},
+        ]
+
+        total, details, applied = estimate_visual_tokens(
+            assembled,
+            self.qwen_model(adapter="qwen3vl"),
+        )
+
+        self.assertEqual(total, 47 * 85)
+        self.assertEqual(details[0]["tokens"], 3_995)
         self.assertTrue(applied)
 
     def test_qwen_missing_dimensions_use_conservative_media_maxima(self):

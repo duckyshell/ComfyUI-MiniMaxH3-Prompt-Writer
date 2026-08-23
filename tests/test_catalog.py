@@ -26,9 +26,10 @@ def write_model(
     dimension: int = 3_840,
     name: str = "Gemma test",
     reasoning_effort: bool = False,
+    thinking_control: bool = True,
     context_length: int = 262_144,
 ) -> None:
-    template = "{% if enable_thinking %}thinking{% endif %}"
+    template = "{% if enable_thinking %}thinking{% endif %}" if thinking_control else "{{ messages }}"
     if reasoning_effort:
         template += "{{ reasoning_effort }}"
     write_gguf(path, [
@@ -58,11 +59,11 @@ class ModelSetupCatalogTests(unittest.TestCase):
     def test_every_recommended_model_has_an_exact_model_and_projector_link(self):
         entries = model_setup_catalog()
 
-        self.assertEqual([entry["vram_gb"] for entry in entries], [8, 12, 16, 24, 32, None])
+        self.assertEqual([entry["vram_gb"] for entry in entries], [8, 12, 16, 24, 32, None, None])
         for entry in entries:
             self.assertTrue(entry["model_file"].endswith(".gguf"))
             self.assertIn("mmproj", entry["projector_file"].lower())
-            self.assertTrue(entry["source_label"].startswith("Hugging Face · unsloth/"))
+            self.assertTrue(entry["source_label"].startswith("Hugging Face · "))
             self.assertIn("/blob/", entry["model_url"])
             self.assertIn("/blob/", entry["projector_url"])
             self.assertNotIn("download=true", entry["model_url"])
@@ -70,9 +71,10 @@ class ModelSetupCatalogTests(unittest.TestCase):
             self.assertIn(entry["model_file"], entry["model_url"])
             self.assertIn(entry["projector_file"], entry["projector_url"])
 
-        qwen = entries[-1]
-        self.assertEqual(qwen["model_file"], "Qwen3.8-27B-UD-Q4_K_XL.gguf")
-        self.assertEqual(qwen["minimum_runtime"], "0.3.35")
+        by_id = {entry["id"]: entry for entry in entries}
+        self.assertEqual(by_id["qwen3.8-27b-ud-q4-k-xl-gguf"]["model_file"], "Qwen3.8-27B-UD-Q4_K_XL.gguf")
+        self.assertEqual(by_id["qwen3.8-27b-ud-q4-k-xl-gguf"]["minimum_runtime"], "0.3.35")
+        self.assertEqual(by_id["qwen3-vl-8b-instruct-q4-k-m-gguf"]["projector_file"], "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf")
 
 
 class ModelDiscoveryTests(unittest.TestCase):
@@ -318,6 +320,61 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertIsNone(model["model_policy"])
         self.assertFalse(model["configuration_verified"])
         self.assertEqual(model["verification_status"], "compatible_unverified")
+
+    def test_live_spiked_qwen3vl_pair_is_verified_without_a_model_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(
+                root / "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+                architecture="qwen3vl",
+                dimension=4_096,
+                name="Qwen3Vl 8b Instruct",
+                thinking_control=False,
+            )
+            write_projector(
+                root / "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+                projector_type="qwen3vl_merger",
+                dimension=4_096,
+            )
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["architecture_adapter"], "qwen3vl")
+        self.assertEqual(model["name"], "Qwen3-VL 8B Instruct Q4_K_M")
+        self.assertTrue(model["runtime_ready"])
+        self.assertTrue(model["configuration_verified"])
+        self.assertEqual(model["verification_status"], "verified")
+        self.assertTrue(model["verified_capabilities"]["vision"])
+        self.assertIsNone(model["model_policy"])
+        self.assertFalse(model["thinking"])
+        self.assertFalse(model["detected_capabilities"]["reasoning_effort"])
+
+    def test_qwen3vlmoe_is_recognized_but_remains_custom_unverified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(
+                root / "custom-qwen3vlmoe.gguf",
+                architecture="qwen3vlmoe",
+                dimension=4_096,
+                name="Custom Qwen3-VL MoE",
+                thinking_control=False,
+            )
+            write_projector(
+                root / "mmproj.gguf",
+                projector_type="qwen3vl_merger",
+                dimension=4_096,
+            )
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["architecture_adapter"], "qwen3vlmoe")
+        self.assertTrue(model["architecture_recognized"])
+        self.assertTrue(model["runtime_supported"])
+        self.assertTrue(model["runtime_ready"])
+        self.assertEqual(model["vision_status"], "compatible")
+        self.assertFalse(model["configuration_verified"])
+        self.assertEqual(model["verification_status"], "compatible_unverified")
+        self.assertIsNone(model["model_policy"])
 
     def test_incompatible_qwen_projector_disables_vision_without_blocking_text(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -23,7 +23,7 @@ Prompt Writer does not install or start Ollama, and it never pulls a model autom
 
 ## Direct GGUF
 
-Choose Direct when you want Prompt Writer to load a supported GGUF and optional matching projector directly inside ComfyUI. This path exposes Context and KV cache controls and lets Writer manage model loading and unload. Gemma 4 uses the established adapter; Qwen 3.8 requires `llama-cpp-python 0.3.35` or newer and uses model-aware 16K–48K planning.
+Choose Direct when you want Prompt Writer to load a supported GGUF and optional matching projector directly inside ComfyUI. This path exposes Context and KV cache controls and lets Writer manage model loading and unload. Gemma 4 uses the established adapter; Qwen 3.8 and Qwen3-VL require `llama-cpp-python 0.3.35` or newer and use model-aware 16K–48K planning.
 
 Direct is optional. It depends on a native `llama-cpp-python` wheel, so compatibility is narrower than the other provider paths.
 

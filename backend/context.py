@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from typing import Any, Callable
 
+from .models.gguf_adapters import QWEN_VISION_ADAPTER_IDS
+
 
 CONTEXT_PROFILES = {
     "low": 8_192,
@@ -84,7 +86,7 @@ def context_profiles_for(model_info: dict[str, Any]) -> tuple[str, ...]:
     configured = model_info.get("context_profiles")
     if isinstance(configured, (list, tuple)):
         profiles = tuple(name for name in configured if name in CONTEXT_PROFILES)
-    elif model_info.get("architecture_adapter") in {"qwen35", "qwen35moe"}:
+    elif model_info.get("architecture_adapter") in QWEN_VISION_ADAPTER_IDS:
         profiles = QWEN_CONTEXT_PROFILES
     else:
         profiles = LEGACY_CONTEXT_PROFILES
@@ -102,7 +104,7 @@ def estimate_visual_tokens(
         item for item in assembled.get("media_inputs", [])
         if item.get("type") in {"image", "video"}
     ]
-    if model_info.get("architecture_adapter") not in {"qwen35", "qwen35moe"}:
+    if model_info.get("architecture_adapter") not in QWEN_VISION_ADAPTER_IDS:
         return len(visual_inputs) * ESTIMATED_VISUAL_TOKENS, [], False
 
     projector = model_info.get("projector_metadata") or {}

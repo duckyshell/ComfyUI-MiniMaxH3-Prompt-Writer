@@ -35,7 +35,28 @@ QWEN35_MOE_ADAPTER = GGUFArchitectureAdapter(
     minimum_runtime=(0, 3, 35),
     projector_types=("qwen3vl_merger",),
 )
-_ADAPTERS = (GEMMA_ADAPTER, QWEN35_ADAPTER, QWEN35_MOE_ADAPTER)
+QWEN3VL_ADAPTER = GGUFArchitectureAdapter(
+    id="qwen3vl",
+    label="Qwen3-VL",
+    architectures=("qwen3vl",),
+    minimum_runtime=(0, 3, 35),
+    projector_types=("qwen3vl_merger",),
+)
+QWEN3VL_MOE_ADAPTER = GGUFArchitectureAdapter(
+    id="qwen3vlmoe",
+    label="Qwen3-VL MoE",
+    architectures=("qwen3vlmoe",),
+    minimum_runtime=(0, 3, 35),
+    projector_types=("qwen3vl_merger",),
+)
+QWEN_VISION_ADAPTER_IDS = frozenset({"qwen35", "qwen35moe", "qwen3vl", "qwen3vlmoe"})
+_ADAPTERS = (
+    GEMMA_ADAPTER,
+    QWEN35_ADAPTER,
+    QWEN35_MOE_ADAPTER,
+    QWEN3VL_ADAPTER,
+    QWEN3VL_MOE_ADAPTER,
+)
 
 
 def architecture_adapter(architecture: str | None) -> GGUFArchitectureAdapter | None:

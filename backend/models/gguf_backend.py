@@ -14,6 +14,7 @@ from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from ..runtime_diagnostics import cached_gguf_runtime_diagnostics
 from ..vocab_tokenizer import TokenizerPreflightError, VocabOnlyTokenizerClient, model_identity
 from .contract import ModelError
+from .gguf_adapters import QWEN_VISION_ADAPTER_IDS
 from .gguf_policies import sampling_options, template_kwargs
 
 
@@ -235,7 +236,7 @@ class GGUFBackend:
                 "This Direct GGUF chat template does not expose Thinking controls.",
             )
         exact_counter = None
-        if model_info.get("architecture_adapter") in {"qwen35", "qwen35moe"}:
+        if model_info.get("architecture_adapter") in QWEN_VISION_ADAPTER_IDS:
             exact_counter = lambda text: self._count_preflight_text_tokens(model_info, text)
         try:
             return plan_context(

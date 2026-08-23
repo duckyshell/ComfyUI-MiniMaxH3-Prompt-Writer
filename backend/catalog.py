@@ -13,8 +13,17 @@ import folder_paths
 
 from .gguf_metadata import GGUFMetadataError, read_gguf_metadata
 from .context import CONTEXT_PROFILES
-from .models.gguf_adapters import architecture_adapter, projector_is_compatible, runtime_supports
-from .models.gguf_policies import identify_model_policy, policy_is_verified_configuration
+from .models.gguf_adapters import (
+    QWEN_VISION_ADAPTER_IDS,
+    architecture_adapter,
+    projector_is_compatible,
+    runtime_supports,
+)
+from .models.gguf_policies import (
+    identify_model_policy,
+    non_policy_configuration_is_verified,
+    policy_is_verified_configuration,
+)
 
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "models.json"
@@ -155,8 +164,14 @@ def _model_candidate(
     configured = _configured_models().get(model_path.name, {})
     metadata_name = str((metadata or {}).get("name") or "") or None
     model_policy = identify_model_policy(architecture, metadata_name)
-    qwen_context = adapter is not None and adapter.id in {"qwen35", "qwen35moe"}
-    if qwen_context and model_policy is None:
+    qwen_context = adapter is not None and adapter.id in QWEN_VISION_ADAPTER_IDS
+    non_policy_verified = non_policy_configuration_is_verified(
+        architecture,
+        metadata_name,
+        model_path,
+        projector,
+    )
+    if qwen_context and model_policy is None and not non_policy_verified:
         configured = {}
     name = str(configured.get("display_name") or _display_name(model_path))
     template_controls = (metadata or {}).get("template_controls") or {
@@ -166,6 +181,7 @@ def _model_candidate(
     configuration_verified = (
         (bool(configured) and not qwen_context)
         or policy_is_verified_configuration(model_policy, model_path)
+        or non_policy_verified
     )
     native_context = (metadata or {}).get("context_length")
     context_profiles = (

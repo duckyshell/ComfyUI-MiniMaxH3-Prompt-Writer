@@ -78,6 +78,20 @@
       "recommended_context": "standard",
       "minimum_runtime": "0.3.35",
       "capabilities": {"images": true, "video_frames": true, "audio": false}
+    },
+    {
+      "id": "qwen3-vl-8b-instruct-q4-k-m-gguf",
+      "repo": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+      "revision": "f982a07559d4a2f6c8744d840bf6fccab30eea96",
+      "role": "gguf-qwen-vl",
+      "display_name": "Qwen3-VL 8B Instruct Q4_K_M",
+      "vram_gb": null,
+      "estimated_free_vram_mb": null,
+      "f16_kv_extra_mb_16k": 0,
+      "files": ["Qwen3VL-8B-Instruct-Q4_K_M.gguf", "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"],
+      "recommended_context": "standard",
+      "minimum_runtime": "0.3.35",
+      "capabilities": {"images": true, "video_frames": true, "audio": false}
     }
   ]
 }

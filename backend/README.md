@@ -12,7 +12,8 @@ Responsibilities:
 - generation orchestration, lifecycle, status, cancellation, and structured errors;
 - backend-neutral model adapters in `models/`.
 
-Generation dispatches metadata-recognized Gemma 4, `qwen35`, and `qwen35moe`
+Generation dispatches metadata-recognized Gemma 4, `qwen35`, `qwen35moe`,
+`qwen3vl`, and `qwen3vlmoe`
 GGUF models to the llama-cpp-python adapter. Unknown architectures remain
 discoverable for diagnostics but are not marked runtime-ready.
 Generation and text-only refinement use the same request and response contract.

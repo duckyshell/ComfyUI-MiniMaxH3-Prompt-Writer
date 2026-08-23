@@ -80,8 +80,11 @@ class _CharacterizedBackend(GGUFBackend):
 
     def load(self, model_info, runtime_plan, *, text_only=False):
         if self.model is None:
-            self.model = _Tokenizer()
             self.chat_handler = _ChatHandler(self.responses)
+            self.model = _Tokenizer()
+            self.model.chat_handler = None
+            self.model.chat_format = "embedded"
+            self.model._chat_handlers = {"embedded": self.chat_handler}
             self.model_id = model_info["id"]
             self.runtime_signature = (
                 model_info["id"],
@@ -124,6 +127,9 @@ def runtime_plan(*, thinking=False):
 def model_info():
     return {
         "id": "characterization-model",
+        "architecture_adapter": "gemma",
+        "template_controls": {"enable_thinking": True, "reasoning_effort": False},
+        "thinking": True,
         "capabilities": {"images": True, "video_frames": True, "audio": False},
     }
 
@@ -425,6 +431,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertEqual(result["prompt"], "FINAL PROMPT")
         self.assertTrue(result["thinking_fallback"])
         self.assertEqual(result["thinking_attempt_tokens"], 5)
+        self.assertEqual(result["reasoning_tokens"], 0)
         self.assertEqual(result["primary_finish_reason"], "length")
         self.assertEqual(result["input_tokens"], 11)
         self.assertEqual(result["output_tokens"], 8)
@@ -454,7 +461,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "visual_input_count", "video_frame_count", "video_sheet_count",
                 "vision_budget_applied", "estimated_input_tokens",
                 "reserved_output_tokens", "debug_input_sequence",
-                "thinking_fallback", "thinking_attempt_tokens",
+                "thinking_fallback", "thinking_attempt_tokens", "reasoning_tokens",
                 "primary_finish_reason", "format_repair_attempted",
                 "format_repair_applied", "format_repair_reason",
                 "format_repair_failure", "format_repair_method",
@@ -464,6 +471,100 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "thinking_budget_reduced",
             },
         )
+
+    def test_qwen38_policy_and_reasoning_contract_are_applied_end_to_end(self):
+        backend = _CharacterizedBackend([
+            response(
+                "inspect composition and motion</think>Cinematic static scene with deliberate framing.",
+                prompt_tokens=10,
+                completion_tokens=10,
+            ),
+        ])
+        assembled = {
+            "messages": [
+                {"role": "system", "content": "system guide"},
+                {"role": "user", "content": "Create a static scene."},
+            ],
+            "media_inputs": [],
+            "input": {
+                "mode": "T2VA",
+                "duration_seconds": 5,
+                "creative_brief": "Create a static scene.",
+            },
+        }
+        qwen = {
+            **model_info(),
+            "architecture_adapter": "qwen35",
+            "model_policy": "qwen38-27b",
+            "template_controls": {"enable_thinking": True, "reasoning_effort": True},
+        }
+
+        result = backend.generate(
+            qwen,
+            assembled,
+            "characterization-session",
+            thinking=True,
+            seed=38,
+            unload_after=False,
+            runtime_plan=runtime_plan(thinking=True),
+        )
+
+        self.assertEqual(result["prompt"], "Cinematic static scene with deliberate framing.")
+        self.assertGreater(result["reasoning_tokens"], 0)
+        self.assertNotIn("inspect composition", result["prompt"])
+        call = backend.chat_handler.calls[0]
+        self.assertEqual(call["temperature"], 1.0)
+        self.assertEqual(call["top_p"], 0.95)
+        self.assertEqual(call["top_k"], 20)
+        self.assertEqual(call["min_p"], 0.0)
+        self.assertEqual(call["presence_penalty"], 0.0)
+        self.assertEqual(call["repeat_penalty"], 1.0)
+        self.assertNotIn("repetition_penalty", call)
+        self.assertTrue(call["enable_thinking"])
+        self.assertEqual(call["reasoning_effort"], "low")
+
+    def test_text_only_qwen_uses_embedded_template_controls_and_non_thinking_policy(self):
+        backend = _CharacterizedBackend([
+            response("Cinematic text-only prompt.", prompt_tokens=8, completion_tokens=4),
+        ])
+        assembled = {
+            "messages": [{"role": "user", "content": "Create a static scene."}],
+            "media_inputs": [],
+            "input": {
+                "mode": "T2VA",
+                "duration_seconds": 5,
+                "creative_brief": "Create a static scene.",
+            },
+        }
+        qwen = {
+            **model_info(),
+            "family": "gguf",
+            "architecture_adapter": "qwen35",
+            "model_policy": "qwen38-27b",
+            "template_controls": {"enable_thinking": True, "reasoning_effort": True},
+            "capabilities": {"images": False, "video_frames": False, "audio": False},
+        }
+
+        result = backend.generate(
+            qwen,
+            assembled,
+            "characterization-session",
+            thinking=False,
+            seed=39,
+            unload_after=False,
+            runtime_plan=runtime_plan(),
+        )
+
+        self.assertEqual(result["prompt"], "Cinematic text-only prompt.")
+        call = backend.chat_handler.calls[0]
+        self.assertIs(call["llama"], backend.model)
+        self.assertFalse(call["enable_thinking"])
+        self.assertNotIn("reasoning_effort", call)
+        self.assertEqual(call["temperature"], 0.7)
+        self.assertEqual(call["top_p"], 0.8)
+        self.assertEqual(call["top_k"], 20)
+        self.assertEqual(call["presence_penalty"], 1.5)
+        self.assertEqual(call["repeat_penalty"], 1.0)
 
     def test_reference_repair_is_one_text_only_completion_and_preserves_metrics(self):
         initial = reference_prompt(340, include_soundscape=False)

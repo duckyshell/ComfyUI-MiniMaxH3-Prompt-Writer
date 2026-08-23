@@ -1875,7 +1875,8 @@ function syncThinkingAvailability() {
   const resolved = context === "auto" ? (studio.selectedModel?.recommended_context || "standard") : context;
   const input = studio.root.querySelector("[data-thinking]");
   const label = input.closest("label");
-  const unsupported = studio.selectedModel?.family === "ollama" && studio.selectedModel.thinking !== true;
+  const unsupported = ["ollama", "gguf"].includes(studio.selectedModel?.family)
+    && studio.selectedModel.thinking !== true;
   const disabled = apiManaged || unsupported || (!external && context !== "auto" && resolved === "low");
   if (disabled) input.checked = false;
   if (disabled) studio.thinking = false;

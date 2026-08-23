@@ -525,6 +525,7 @@ class OllamaBackend:
                     on_phase("loading_model")
 
                 def complete(**kwargs: Any) -> dict[str, Any]:
+                    kwargs.pop("purpose", None)
                     return self._chat_completion(self.model_name, runtime_plan, **kwargs)
 
                 result = run_h3_pipeline(

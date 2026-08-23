@@ -461,7 +461,9 @@ class ExternalServerBackend:
                     max_tokens: int,
                     seed: int | None,
                     thinking: bool,
+                    purpose: str,
                 ) -> dict[str, Any]:
+                    del purpose
                     if self.chat_handler is None:
                         raise ModelError(
                             "EXTERNAL_SERVER_UNAVAILABLE",

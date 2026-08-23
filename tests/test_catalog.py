@@ -19,13 +19,23 @@ from backend.catalog import model_setup_catalog  # noqa: E402
 from tests.test_gguf_metadata import TYPE_BOOL, TYPE_STRING, TYPE_UINT32, write_gguf  # noqa: E402
 
 
-def write_model(path: Path, *, architecture: str = "gemma4", dimension: int = 3_840, name: str = "Gemma test") -> None:
+def write_model(
+    path: Path,
+    *,
+    architecture: str = "gemma4",
+    dimension: int = 3_840,
+    name: str = "Gemma test",
+    reasoning_effort: bool = False,
+) -> None:
+    template = "{% if enable_thinking %}thinking{% endif %}"
+    if reasoning_effort:
+        template += "{{ reasoning_effort }}"
     write_gguf(path, [
         ("general.architecture", TYPE_STRING, architecture),
         ("general.name", TYPE_STRING, name),
         (f"{architecture}.context_length", TYPE_UINT32, 262_144),
         (f"{architecture}.embedding_length", TYPE_UINT32, dimension),
-        ("tokenizer.chat_template", TYPE_STRING, "{% if enable_thinking %}thinking{% endif %}"),
+        ("tokenizer.chat_template", TYPE_STRING, template),
     ])
 
 
@@ -206,7 +216,8 @@ class ModelDiscoveryTests(unittest.TestCase):
 
             model = self.discover(root)[0]
 
-        self.assertEqual(model["name"], "Custom fine-tune")
+        self.assertEqual(model["name"], "renamed-custom")
+        self.assertEqual(model["metadata_name"], "Custom fine-tune")
         self.assertEqual(model["architecture"], "qwen35")
         self.assertEqual(model["architecture_adapter"], "qwen35")
         self.assertTrue(model["architecture_recognized"])
@@ -217,6 +228,8 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertFalse(model["detected_capabilities"]["reasoning_effort"])
         self.assertFalse(model["configuration_verified"])
         self.assertEqual(model["verification_status"], "compatible_unverified")
+        self.assertIsNone(model["model_policy"])
+        self.assertFalse(model["model_policy_supported"])
 
     def test_unknown_architecture_is_discoverable_but_not_runtime_ready(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -249,6 +262,25 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertFalse(model["runtime_supported"])
         self.assertFalse(model["runtime_ready"])
         self.assertIn("llama-cpp-python>=0.3.35 for qwen35", model["missing_dependencies"])
+
+    def test_live_spiked_qwen38_configuration_has_known_policy_and_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(
+                root / "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+                architecture="qwen35",
+                dimension=5_120,
+                name="Qwen3.8-27B",
+                reasoning_effort=True,
+            )
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["model_policy"], "qwen38-27b")
+        self.assertTrue(model["model_policy_supported"])
+        self.assertTrue(model["configuration_verified"])
+        self.assertEqual(model["verification_status"], "verified")
+        self.assertTrue(model["template_controls"]["reasoning_effort"])
 
     def test_incompatible_qwen_projector_disables_vision_without_blocking_text(self):
         with tempfile.TemporaryDirectory() as directory:

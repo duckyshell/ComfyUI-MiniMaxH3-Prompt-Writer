@@ -11,7 +11,7 @@ from .context import (
     non_thinking_output_tokens,
 )
 from .media import STORE, MediaError
-from .models.contract import ModelError, final_text
+from .models.contract import ModelError, final_message_text
 from .prompt_audit import audit_prompt, camera_structure_requested
 from .prompt_repair import (
     audit_failures,
@@ -237,14 +237,24 @@ def run_h3_pipeline(
         max_tokens=runtime_plan["max_output_tokens"],
         seed=seed,
         thinking=thinking,
+        purpose="generation",
     )
     message = response["choices"][0]["message"]
-    text = message.get("content") or ""
     usage = response.get("usage", {})
     primary_finish_reason = response["choices"][0].get("finish_reason")
     thinking_attempt_tokens = int(usage.get("completion_tokens", 0)) if thinking else 0
+    qwen_reasoning_contract = model_info.get("architecture_adapter") in {"qwen35", "qwen35moe"}
+    reasoning_content: str | None = None
+    if thinking and primary_finish_reason == "length":
+        text = ""
+    else:
+        text, reasoning_content = final_message_text(
+            message,
+            thinking=thinking,
+            qwen_reasoning_contract=qwen_reasoning_contract,
+        )
     thinking_fallback = thinking and (
-        not text.strip() or response["choices"][0].get("finish_reason") == "length"
+        not text.strip() or primary_finish_reason == "length"
     )
     if thinking_fallback:
         response = complete(
@@ -255,9 +265,14 @@ def run_h3_pipeline(
             max_tokens=standard_output_tokens,
             seed=seed,
             thinking=False,
+            purpose="generation",
         )
         message = response["choices"][0]["message"]
-        text = message.get("content") or ""
+        text, _fallback_reasoning = final_message_text(
+            message,
+            thinking=False,
+            qwen_reasoning_contract=qwen_reasoning_contract,
+        )
         fallback_usage = response.get("usage", {})
         usage = {
             "prompt_tokens": fallback_usage.get("prompt_tokens", usage.get("prompt_tokens", 0)),
@@ -274,7 +289,8 @@ def run_h3_pipeline(
     if not text.strip():
         raise ModelError("EMPTY_GENERATION", "The model did not produce a final prompt.")
 
-    prompt = final_text(text)
+    prompt = text
+    reasoning_tokens = count_text_tokens(reasoning_content) if reasoning_content else 0
     initial_audit, reference_policy_value, intent_text, duration_seconds, camera_structure_allowed = _audit(
         prompt,
         assembled,
@@ -327,11 +343,16 @@ def run_h3_pipeline(
             max_tokens=standard_output_tokens,
             seed=seed,
             thinking=False,
+            purpose="repair",
         )
         repair_usage = repair_response.get("usage", {})
         format_repair_tokens = int(repair_usage.get("completion_tokens", 0))
         repair_finish_reason = repair_response["choices"][0].get("finish_reason")
-        repaired = final_text(repair_response["choices"][0]["message"].get("content") or "")
+        repaired, _repair_reasoning = final_message_text(
+            repair_response["choices"][0]["message"],
+            thinking=False,
+            qwen_reasoning_contract=qwen_reasoning_contract,
+        )
         repaired_audit = audit_prompt(
             repaired,
             assembled["input"]["mode"],
@@ -391,6 +412,7 @@ def run_h3_pipeline(
         **media_metrics,
         "thinking_fallback": thinking_fallback,
         "thinking_attempt_tokens": thinking_attempt_tokens,
+        "reasoning_tokens": reasoning_tokens,
         "primary_finish_reason": primary_finish_reason,
         "format_repair_attempted": format_repair_attempted,
         "format_repair_applied": format_repair_applied,

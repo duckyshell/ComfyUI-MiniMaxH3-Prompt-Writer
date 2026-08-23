@@ -13,6 +13,7 @@ import folder_paths
 
 from .gguf_metadata import GGUFMetadataError, read_gguf_metadata
 from .models.gguf_adapters import architecture_adapter, projector_is_compatible, runtime_supports
+from .models.gguf_policies import identify_model_policy, policy_is_verified_configuration
 
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "models.json"
@@ -150,12 +151,14 @@ def _model_candidate(
     capability_message = None if vision_status == "compatible" else f"Vision unavailable: {pairing_message}{text_fallback}"
 
     configured = _configured_models().get(model_path.name, {})
-    name = str((metadata or {}).get("name") or _display_name(model_path))
+    metadata_name = str((metadata or {}).get("name") or "") or None
+    name = str(configured.get("display_name") or _display_name(model_path))
+    model_policy = identify_model_policy(architecture, metadata_name)
     template_controls = (metadata or {}).get("template_controls") or {
         "enable_thinking": False,
         "reasoning_effort": False,
     }
-    configuration_verified = bool(configured)
+    configuration_verified = bool(configured) or policy_is_verified_configuration(model_policy, model_path)
     return {
         "id": model_id,
         "name": name,
@@ -174,6 +177,9 @@ def _model_candidate(
         "architecture": architecture,
         "architecture_adapter": adapter.id if adapter else "unknown",
         "architecture_recognized": architecture_recognized,
+        "metadata_name": metadata_name,
+        "model_policy": model_policy.id if model_policy else None,
+        "model_policy_supported": model_policy is not None,
         "runtime_version": runtime_version,
         "runtime_supported": installed_runtime_support,
         "runtime_ready": not missing_dependencies,

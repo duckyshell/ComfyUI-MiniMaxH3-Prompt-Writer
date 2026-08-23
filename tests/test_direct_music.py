@@ -27,6 +27,9 @@ def model_info(*, ready=True, projector="mmproj.gguf"):
         "family": "gguf",
         "path": "model.gguf",
         "projector": projector,
+        "architecture_adapter": "gemma",
+        "template_controls": {"enable_thinking": True, "reasoning_effort": False},
+        "thinking": True,
         "runtime_ready": ready,
         "missing_dependencies": [],
         "capabilities": {
@@ -220,6 +223,26 @@ class DirectMusicRuntimeTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "DIRECT_VISION_REQUIRED")
         self.assertEqual(raised.exception.details["supported_modes"], ["T2VA"])
+        self.assertIsNone(backend.model)
+
+    def test_direct_model_without_template_control_rejects_thinking_before_load(self):
+        backend = GGUFBackend()
+        info = model_info(projector=None)
+        info["thinking"] = False
+        info["template_controls"] = {"enable_thinking": False, "reasoning_effort": False}
+        assembled = {
+            "messages": [{"role": "user", "content": "brief"}],
+            "media_inputs": [],
+            "input": {"mode": "T2VA", "creative_brief": "brief"},
+        }
+
+        with self.assertRaises(ModelError) as raised:
+            backend.generate(
+                info, assembled, "session",
+                thinking=True, seed=1, unload_after=False, runtime_plan=runtime_plan(),
+            )
+
+        self.assertEqual(raised.exception.code, "DIRECT_THINKING_UNAVAILABLE")
         self.assertIsNone(backend.model)
 
     def test_direct_console_reports_lifecycle_without_prompt_content(self):

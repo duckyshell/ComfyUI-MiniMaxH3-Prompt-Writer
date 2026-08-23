@@ -75,6 +75,18 @@ Select **Refresh** after adding files. Expand **Scan details** if the model does
 
 These are measured starting tiers, not hard requirements or quality rankings. They are the currently published verified Gemma 4 pairs. Direct also recognizes the `qwen35` and `qwen35moe` runtime architectures from GGUF metadata. A recognized custom configuration is labeled compatible/unverified until that exact model policy and projector combination has been validated; an unknown architecture is visible in Scan details but is not loaded.
 
+## Qwen model policy
+
+Architecture and model policy are separate. `qwen35` and `qwen35moe` select a safe loading/MTMD adapter; they do not by themselves mean Qwen 3.8 or 3.6 and never enable version-specific defaults.
+
+Direct recognizes the exact `Qwen3.8-27B` metadata lineage as a known policy. Thinking uses `temperature 1.0`, `top_p 0.95`, `top_k 20`, `min_p 0`, `presence_penalty 0`, and `repeat_penalty 1.0`; non-thinking uses `0.7`, `0.8`, `20`, `0`, `1.5`, and `1.0`. When both the known policy and embedded template advertise it, Thinking passes `reasoning_effort=low`. The verified local `Qwen3.8-27B-UD-Q4_K_XL.gguf` configuration is distinguished from other policy-compatible but unverified quants.
+
+The exact official `Qwen3.6-35B-A3B` metadata lineage has its own known sampling policy and does not receive `reasoning_effort`. A renamed or fine-tuned `qwen35`/`qwen35moe` model remains custom/unverified and uses the generic Direct fallback instead of inheriting either lineage policy.
+
+Qwen Thinking output is split from the final prompt whether the runtime returns `reasoning_content` separately or emits a completed `</think>` prefix. Private reasoning is never included in the returned H3 prompt. A missing closing tag is treated as truncated Thinking. MTP/`nextn` tensors are detected for diagnostics but intentionally remain disabled.
+
+The validated Qwen adapter floor is `llama-cpp-python 0.3.35`; Gemma remains compatible with the existing 0.3.34 floor. If 0.3.34 is installed, Qwen is discoverable but not runtime-ready and Settings reports the required update before any weights are loaded.
+
 ## Context and KV cache
 
 Direct is the only provider with manual Context and KV controls in Writer.

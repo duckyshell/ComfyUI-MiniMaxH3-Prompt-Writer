@@ -12,6 +12,7 @@ from ..context import ContextPlanError, plan_context
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from ..runtime_diagnostics import cached_gguf_runtime_diagnostics
 from .contract import ModelError
+from .gguf_policies import sampling_options, template_kwargs
 
 
 CONSOLE_PREFIX = "[H3 Prompt Writer]"
@@ -173,6 +174,7 @@ class GGUFBackend:
                 "EMPTY_GENERATION": "model returned an empty prompt",
                 "GENERATION_FAILED": "generation failed",
                 "MODEL_DEPENDENCY_MISSING": "Direct GGUF runtime is unavailable",
+                "DIRECT_THINKING_UNAVAILABLE": "model template has no Thinking control",
                 "THINKING_TRUNCATED": "Thinking ended before the final prompt",
             }
             message = safe_messages.get(error.code, f"request failed · {error.code}")
@@ -300,6 +302,11 @@ class GGUFBackend:
         on_phase: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         with self.lock:
+            if thinking and model_info.get("thinking") is not True:
+                raise ModelError(
+                    "DIRECT_THINKING_UNAVAILABLE",
+                    "This Direct GGUF chat template does not expose Thinking controls.",
+                )
             validate_media_capabilities(model_info, assembled)
             try:
                 runtime_plan = runtime_plan or self.preflight(
@@ -366,25 +373,50 @@ class GGUFBackend:
                     max_tokens: int,
                     seed: int | None,
                     thinking: bool,
+                    purpose: str,
                 ) -> dict[str, Any]:
-                    options = {
-                        "messages": messages,
+                    fallback_sampling = {
                         "temperature": temperature,
                         "top_p": top_p,
                         "top_k": top_k,
+                    }
+                    sampling = (
+                        sampling_options(model_info, thinking=thinking, fallback=fallback_sampling)
+                        if purpose == "generation"
+                        else fallback_sampling
+                    )
+                    options = {
+                        "messages": messages,
+                        **sampling,
                         "max_tokens": max_tokens,
                         "seed": seed,
                         "logits_processor": logits_processors,
                     }
+                    chat_template_options = template_kwargs(model_info, thinking=thinking)
                     if text_only:
-                        response = self.model.create_chat_completion(**options)
+                        if chat_template_options:
+                            base_chat_handler = (
+                                getattr(self.model, "chat_handler", None)
+                                or getattr(self.model, "_chat_handlers", {}).get(self.model.chat_format)
+                            )
+                            if base_chat_handler is None:
+                                from llama_cpp.llama_chat_format import get_chat_completion_handler
+
+                                base_chat_handler = get_chat_completion_handler(self.model.chat_format)
+                            response = base_chat_handler(
+                                llama=self.model,
+                                **options,
+                                **chat_template_options,
+                            )
+                        else:
+                            response = self.model.create_chat_completion(**options)
                     else:
                         self.chat_handler.verbose = False
                         with _quiet_mtmd_info():
                             response = self.chat_handler(
                                 llama=self.model,
-                                enable_thinking=thinking,
                                 **options,
+                                **chat_template_options,
                             )
                     if self.cancel_event.is_set():
                         raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")

@@ -507,6 +507,11 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(state.keepModelLoaded, false);
 });
 
+test("Direct Thinking is disabled when the GGUF template has no detected control", () => {
+  assert.match(mainSource, /\["ollama", "gguf"\]\.includes\(studio\.selectedModel\?\.family\)/);
+  assert.match(mainSource, /studio\.selectedModel\.thinking !== true/);
+});
+
 test("text-only Direct models expose only T2VA", () => {
   const textOnly = {
     id: "direct-text-only",

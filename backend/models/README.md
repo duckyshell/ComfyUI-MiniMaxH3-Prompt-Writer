@@ -18,6 +18,9 @@ transport, or lifecycle.
 
 The extension does not install the full Unsloth runtime. Unsloth GGUF files are
 loaded directly with llama.cpp. `requirements-gguf.txt` installs the adapter.
+GGUF architecture adapters own loading compatibility only. Exact metadata
+lineages are resolved separately in `gguf_policies.py`; a custom `qwen35` model
+does not inherit Qwen 3.8 reasoning effort or sampling by architecture alone.
 
 Audio files remain declared references. The local adapter does not analyze their
 signal and must not infer unheard content.

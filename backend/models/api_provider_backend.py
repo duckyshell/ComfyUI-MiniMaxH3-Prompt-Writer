@@ -868,6 +868,7 @@ class ApiProviderBackend:
                 handler = _ApiChatHandler(self, connection, model_info["remote_model"])
 
                 def complete(**kwargs: Any) -> dict[str, Any]:
+                    kwargs.pop("purpose", None)
                     return handler(**kwargs)
 
                 result = run_h3_pipeline(

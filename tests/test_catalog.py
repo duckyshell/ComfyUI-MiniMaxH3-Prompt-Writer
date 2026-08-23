@@ -26,6 +26,7 @@ def write_model(
     dimension: int = 3_840,
     name: str = "Gemma test",
     reasoning_effort: bool = False,
+    context_length: int = 262_144,
 ) -> None:
     template = "{% if enable_thinking %}thinking{% endif %}"
     if reasoning_effort:
@@ -33,7 +34,7 @@ def write_model(
     write_gguf(path, [
         ("general.architecture", TYPE_STRING, architecture),
         ("general.name", TYPE_STRING, name),
-        (f"{architecture}.context_length", TYPE_UINT32, 262_144),
+        (f"{architecture}.context_length", TYPE_UINT32, context_length),
         (f"{architecture}.embedding_length", TYPE_UINT32, dimension),
         ("tokenizer.chat_template", TYPE_STRING, template),
     ])
@@ -262,6 +263,21 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertFalse(model["runtime_supported"])
         self.assertFalse(model["runtime_ready"])
         self.assertIn("llama-cpp-python>=0.3.35 for qwen35", model["missing_dependencies"])
+
+    def test_qwen_context_choices_are_capped_by_declared_native_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(
+                root / "qwen.gguf",
+                architecture="qwen35",
+                dimension=5_120,
+                context_length=32_768,
+            )
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["native_context_tokens"], 32_768)
+        self.assertEqual(model["context_profiles"], ["standard", "extended", "large"])
 
     def test_live_spiked_qwen38_configuration_has_known_policy_and_verification(self):
         with tempfile.TemporaryDirectory() as directory:

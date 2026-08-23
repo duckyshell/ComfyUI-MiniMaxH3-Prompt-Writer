@@ -507,6 +507,14 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(state.keepModelLoaded, false);
 });
 
+test("Direct context preferences preserve Qwen 32K and 48K tiers", () => {
+  for (const profile of ["large", "maximum"]) {
+    const storage = memoryStorage();
+    saveUserPreferences(storage, { directContextProfile: profile });
+    assert.equal(loadUserPreferences(storage).direct_context_profile, profile);
+  }
+});
+
 test("Direct Thinking is disabled when the GGUF template has no detected control", () => {
   assert.match(mainSource, /\["ollama", "gguf"\]\.includes\(studio\.selectedModel\?\.family\)/);
   assert.match(mainSource, /studio\.selectedModel\.thinking !== true/);
@@ -749,6 +757,11 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.match(mainSource, /Ollama is not running/);
   assert.match(settingsSource, /title="Open model settings"/);
   assert.match(settingsSource, /data-active-runtime-summary>Runtime · Auto</);
+  assert.match(settingsSource, /data-runtime-option="context" data-value="large">32K</);
+  assert.match(settingsSource, /data-runtime-option="context" data-value="maximum">48K</);
+  assert.match(mainSource, /const availableContexts = model\.context_profiles/);
+  assert.match(mainSource, /studio\.directContextProfile = "auto"/);
+  assert.match(mainSource, /button\.disabled = unavailable/);
   assert.match(mainSource, /"Server managed"/);
   assert.match(mainSource, /generate\(buildGeneratePayload\(studio/);
   assert.match(mainSource, /refine\(buildRefinePayload\(studio/);

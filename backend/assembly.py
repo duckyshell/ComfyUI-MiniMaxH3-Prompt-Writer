@@ -216,6 +216,16 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
                 for frame in asset.get("frames", [])
             ],
             "content_url": asset["content_url"],
+            "visual_width": (
+                asset.get("prepared_width")
+                if asset["type"] == "image"
+                else asset.get("contact_sheet_width")
+            ),
+            "visual_height": (
+                asset.get("prepared_height")
+                if asset["type"] == "image"
+                else asset.get("contact_sheet_height")
+            ),
         }
         for asset in eligible
     ]

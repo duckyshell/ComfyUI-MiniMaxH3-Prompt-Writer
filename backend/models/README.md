@@ -11,6 +11,13 @@ the specialized local llama.cpp HTTP/SSE connection. `ollama_backend.py` owns
 the native Ollama contract. `api_provider_backend.py` owns one generic Chat
 Completions transport with OpenAI, Gemini, OpenRouter, and Custom presets.
 
+Qwen preflight reuses a lightweight tokenizer process implemented by
+`vocab_tokenizer.py` and `gguf_tokenizer_worker.py`. The worker opens the GGUF
+with `vocab_only=True`, `n_gpu_layers=0`, and CUDA hidden; exact text counting
+therefore happens before full model loading without allocating weights or GPU
+state. Prepared media dimensions are carried through assembly so Qwen context
+planning can budget the projector tokens for each image and video contact sheet.
+
 All backends supply a narrow `complete(...)` callable to `backend/h3_pipeline.py`.
 The pipeline owns shared media messages, Thinking fallback, prompt audit, narrow
 repair, and normalized generation metrics. It does not own provider preflight,

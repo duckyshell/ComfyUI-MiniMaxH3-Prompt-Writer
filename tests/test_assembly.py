@@ -134,12 +134,16 @@ class AssemblyReferenceManifestTests(unittest.TestCase):
         self.assertEqual(assembled["media_inputs"], [])
 
     def test_all_manifest_assets_are_active_but_audio_bytes_are_not_attached(self):
-        picture = {"id": "p", "type": "image", "filename": "p.png", "reference": "<Picture 1>", "content_url": "/p", "frames": []}
-        video = {"id": "v", "type": "video", "filename": "v.mp4", "reference": "<Video 1>", "content_url": "/v", "frames": []}
+        picture = {"id": "p", "type": "image", "filename": "p.png", "reference": "<Picture 1>", "content_url": "/p", "frames": [], "prepared_width": 1536, "prepared_height": 768}
+        video = {"id": "v", "type": "video", "filename": "v.mp4", "reference": "<Video 1>", "content_url": "/v", "frames": [], "contact_sheet_width": 1152, "contact_sheet_height": 488}
         audio = {"id": "a", "type": "audio", "filename": "a.wav", "reference": "<Audio 1>", "content_url": "/a", "frames": []}
         with patch("backend.assembly.STORE.manifest", return_value=self.manifest(picture, video, audio)):
             assembled = assemble_request(self.body("Use <Picture 1>, <Video 1>, and <Audio 1>."))
         self.assertEqual([item["asset_id"] for item in assembled["media_inputs"]], ["p", "v"])
+        self.assertEqual(
+            [(item["visual_width"], item["visual_height"]) for item in assembled["media_inputs"]],
+            [(1536, 768), (1152, 488)],
+        )
         self.assertEqual([item["reference"] for item in assembled["input"]["media_manifest"]["assets"]], ["<Picture 1>", "<Video 1>", "<Audio 1>"])
 
         with patch("backend.assembly.STORE.manifest", return_value=self.manifest(picture, video, audio)):

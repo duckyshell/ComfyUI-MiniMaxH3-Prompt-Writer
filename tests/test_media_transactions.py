@@ -248,6 +248,7 @@ class MediaTransactionTests(unittest.TestCase):
         ):
             messages, metrics = h3_pipeline._messages(
                 assembled,
+                {},
                 "session",
                 {"context_tokens": 16_384, "max_output_tokens": 1_536},
                 lambda _text: 10,

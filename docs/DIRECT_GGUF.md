@@ -91,10 +91,14 @@ The validated Qwen adapter floor is `llama-cpp-python 0.3.35`; Gemma remains com
 
 Direct is the only provider with manual Context and KV controls in Writer.
 
-- **Context Auto** chooses the smallest sufficient 8K, 16K, or 24K tier from the assembled input and output budget.
+- **Context Auto** chooses the smallest tier that fits the assembled input, complete output budget, and a safety reserve. Gemma keeps its existing 8K/16K/24K choices; Qwen uses 16K/24K/32K/48K, capped by the GGUF's declared native context.
 - **KV cache Auto** uses the tested Q8 policy. F16 is available manually.
 - A manual context is respected. Writer reports when the request needs a larger tier instead of silently changing it.
 - Thinking with Auto reserves the full reasoning and final-output budget before choosing context.
+- Qwen text is counted before full load by a cached `vocab_only` tokenizer subprocess. It sets `n_gpu_layers=0` and hides CUDA, so preflight does not allocate model weights or GPU state.
+- Qwen visual input is budgeted from the exact prepared image or contact-sheet dimensions and projector patch metadata. Missing dimensions use a conservative fallback instead of silently assuming a small fixed image cost.
+
+The 48K ceiling is deliberate for the current Prompt Writer workload, including the maximum Reference media set. Direct does not automatically request Qwen 3.6's advertised 128K context or its very large possible output budget; Qwen 3.6 Thinking remains unverified until the dedicated live characterization is complete.
 
 Increasing context or using F16 KV consumes more VRAM. If preflight reports insufficient free VRAM, use a smaller model or release other GPU models.
 

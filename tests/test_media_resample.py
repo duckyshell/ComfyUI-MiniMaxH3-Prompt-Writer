@@ -7,6 +7,17 @@ from backend import media
 
 
 class MediaResampleTests(unittest.TestCase):
+    def test_image_processing_records_original_and_prepared_dimensions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.png"
+            media.Image.new("RGB", (2_000, 1_000), "white").save(source)
+
+            result = media.process_image(source, root)
+
+        self.assertEqual((result["width"], result["height"]), (2_000, 1_000))
+        self.assertEqual((result["prepared_width"], result["prepared_height"]), (1_536, 768))
+
     def test_auto_video_sampling_uses_six_frames(self):
         self.assertEqual(media._selected_frame_count("auto"), 6)
         self.assertEqual(media._selected_frame_count("4"), 4)
@@ -17,6 +28,19 @@ class MediaResampleTests(unittest.TestCase):
         self.assertEqual(media._contact_sheet_columns(4), 2)
         self.assertEqual(media._contact_sheet_columns(6), 3)
         self.assertEqual(media._contact_sheet_columns(8), 4)
+
+    def test_contact_sheet_reports_the_exact_prepared_dimensions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            frames = []
+            for index in range(6):
+                path = root / f"frame-{index}.jpg"
+                media.Image.new("RGB", (768, 432), "white").save(path)
+                frames.append({"timestamp": float(index), "path": str(path)})
+
+            dimensions = media._build_contact_sheet(frames, root / "sheet.jpg")
+
+        self.assertEqual(dimensions, (1152, 488))
 
     def test_four_frame_resample_changes_all_derived_media_urls(self):
         with tempfile.TemporaryDirectory() as directory:

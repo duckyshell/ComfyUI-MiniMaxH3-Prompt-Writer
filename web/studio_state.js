@@ -8,7 +8,7 @@ export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
 const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
 const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
 const PROVIDERS = ["direct", "external", "ollama", "api"];
-const CONTEXT_PROFILES = ["auto", "low", "standard", "extended"];
+const CONTEXT_PROFILES = ["auto", "low", "standard", "extended", "large", "maximum"];
 const KV_CACHES = ["auto", "f16", "q8"];
 const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
 

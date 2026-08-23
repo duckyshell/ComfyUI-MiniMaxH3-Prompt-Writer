@@ -7,7 +7,7 @@ from typing import Any, Callable
 from .context import (
     CHAT_TEMPLATE_OVERHEAD_TOKENS,
     CONTEXT_SAFETY_TOKENS,
-    ESTIMATED_VISUAL_TOKENS,
+    estimate_visual_tokens,
     non_thinking_output_tokens,
 )
 from .media import STORE, MediaError
@@ -34,6 +34,7 @@ def _asset_data_uri(session_id: str, asset_id: str, representation: str) -> str:
 
 def _messages(
     assembled: dict[str, Any],
+    model_info: dict[str, Any],
     session_id: str,
     runtime_plan: dict[str, Any],
     count_text_tokens: Callable[[str], int],
@@ -88,9 +89,14 @@ def _messages(
     messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
     visual_input_count = image_count + video_sheet_count
     text_tokens = count_text_tokens(system + "\n\n" + user_text)
+    fallback_visual_tokens, visual_token_details, vision_budget_applied = estimate_visual_tokens(
+        assembled,
+        model_info,
+    )
+    visual_tokens = int(runtime_plan.get("estimated_visual_tokens", fallback_visual_tokens))
     estimated_input_tokens = (
         text_tokens
-        + visual_input_count * ESTIMATED_VISUAL_TOKENS
+        + visual_tokens
         + CHAT_TEMPLATE_OVERHEAD_TOKENS
     )
     reserved_output_tokens = runtime_plan["max_output_tokens"] + CONTEXT_SAFETY_TOKENS
@@ -109,7 +115,9 @@ def _messages(
         "visual_input_count": visual_input_count,
         "video_frame_count": video_frame_count,
         "video_sheet_count": video_sheet_count,
-        "vision_budget_applied": False,
+        "vision_budget_applied": runtime_plan.get("vision_budget_applied", vision_budget_applied),
+        "estimated_visual_tokens": visual_tokens,
+        "visual_token_details": runtime_plan.get("visual_token_details", visual_token_details),
         "estimated_input_tokens": estimated_input_tokens,
         "reserved_output_tokens": reserved_output_tokens,
         "debug_input_sequence": [
@@ -221,7 +229,7 @@ def run_h3_pipeline(
     if on_phase:
         on_phase("processing_media")
     media_started = time.perf_counter()
-    messages, media_metrics = _messages(assembled, session_id, runtime_plan, count_text_tokens)
+    messages, media_metrics = _messages(assembled, model_info, session_id, runtime_plan, count_text_tokens)
     media_processing_seconds = time.perf_counter() - media_started
     if is_cancelled():
         raise ModelError("GENERATION_CANCELLED", "Generation was cancelled after media preparation.")

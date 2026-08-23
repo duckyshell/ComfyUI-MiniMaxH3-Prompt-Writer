@@ -1814,6 +1814,13 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
     restoreModeDraft(studio.mode);
   }
   applyRuntimePreferences(studio.settingsProvider);
+  if (model?.family === "gguf") {
+    const availableContexts = model.context_profiles || ["low", "standard", "extended"];
+    if (studio.contextProfile !== "auto" && !availableContexts.includes(studio.contextProfile)) {
+      studio.contextProfile = "auto";
+      studio.directContextProfile = "auto";
+    }
+  }
   if (model?.family === "gguf") studio.preferredDirectModelId = model.id;
   const remote = ["external", "api"].includes(model?.family);
   if (model?.family !== "gguf") {
@@ -1886,14 +1893,29 @@ function syncThinkingAvailability() {
   label.classList.toggle("is-disabled", disabled);
   label.title = unsupported
     ? "This provider model does not report thinking controls."
-    : disabled ? "Thinking needs Standard 16K or Extended 24K context." : "";
+    : disabled ? "Thinking needs 16K or larger Context." : "";
 }
 
-const CONTEXT_LABELS = { auto: "Auto", low: "8K", standard: "16K", extended: "24K" };
+const CONTEXT_LABELS = { auto: "Auto", low: "8K", standard: "16K", extended: "24K", large: "32K", maximum: "48K" };
 const KV_LABELS = { auto: "Auto", q8: "Q8", f16: "F16" };
+
+function syncContextAvailability() {
+  const profiles = studio.selectedModel?.family === "gguf"
+    ? (studio.selectedModel.context_profiles || ["low", "standard", "extended"])
+    : [];
+  studio.root.querySelectorAll('[data-runtime-option="context"]').forEach((button) => {
+    const unavailable = studio.selectedModel?.family === "gguf"
+      && button.dataset.value !== "auto"
+      && !profiles.includes(button.dataset.value);
+    button.disabled = unavailable;
+    button.setAttribute("aria-disabled", String(unavailable));
+    button.title = unavailable ? "This Context tier is not available for the selected Direct model." : "";
+  });
+}
 
 function syncRuntimeSummary(result = null) {
   if (!studio) return;
+  syncContextAvailability();
   studio.root.querySelector('[data-runtime-label="context"]').textContent = CONTEXT_LABELS[studio.contextProfile];
   studio.root.querySelector('[data-runtime-label="kv"]').textContent = KV_LABELS[studio.kvCache];
   const summary = studio.root.querySelector("[data-runtime-summary]");
@@ -1902,7 +1924,7 @@ function syncRuntimeSummary(result = null) {
     const tokens = result?.context_tokens || studio.selectedModel.server_context_tokens;
     activeSummary = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Server managed";
   } else if (studio.selectedModel?.family === "ollama") {
-    const tokens = result?.context_tokens || (studio.contextProfile === "auto" ? null : ({ low: 8192, standard: 16384, extended: 24576 }[studio.contextProfile]));
+    const tokens = result?.context_tokens || (studio.contextProfile === "auto" ? null : ({ low: 8192, standard: 16384, extended: 24576, large: 32768, maximum: 49152 }[studio.contextProfile]));
     activeSummary = tokens ? `Ollama · ${Math.round(tokens / 1024)}K` : "Ollama · Auto";
   } else if (studio.selectedModel?.family === "api") {
     const tokens = result?.context_limit_known ? result.context_tokens : studio.selectedModel.model_context_limit;

@@ -462,6 +462,7 @@ def process_image(source: Path, target_dir: Path) -> dict[str, Any]:
         width, height = image.size
         prepared = image.copy()
         prepared.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
+        prepared_width, prepared_height = prepared.size
         prepared.save(prepared_path, "JPEG", quality=92, optimize=True)
         preview = image.copy()
         preview.thumbnail((640, 640), Image.Resampling.LANCZOS)
@@ -469,6 +470,8 @@ def process_image(source: Path, target_dir: Path) -> dict[str, Any]:
     return {
         "width": width,
         "height": height,
+        "prepared_width": prepared_width,
+        "prepared_height": prepared_height,
         "_prepared_path": str(prepared_path),
         "_preview_path": str(preview_path),
     }
@@ -547,9 +550,11 @@ def process_video(
     if not frames:
         raise MediaError("MEDIA_DECODE_FAILED", "No video frames could be sampled.")
     contact_sheet_path = target_dir / "motion_contact_sheet.jpg"
-    _build_contact_sheet(frames, contact_sheet_path)
+    contact_sheet_width, contact_sheet_height = _build_contact_sheet(frames, contact_sheet_path)
     metadata["_frames"] = frames
     metadata["_contact_sheet_path"] = str(contact_sheet_path)
+    metadata["contact_sheet_width"] = contact_sheet_width
+    metadata["contact_sheet_height"] = contact_sheet_height
     metadata["_preview_path"] = frames[0]["path"]
     metadata["sampling"] = "uniform"
     metadata["frame_count_mode"] = frame_count_mode
@@ -565,7 +570,7 @@ def _contact_sheet_columns(frame_count: int) -> int:
     return 3 if frame_count <= 6 else 4
 
 
-def _build_contact_sheet(frames: list[dict[str, Any]], target: Path) -> None:
+def _build_contact_sheet(frames: list[dict[str, Any]], target: Path) -> tuple[int, int]:
     columns = _contact_sheet_columns(len(frames))
     rows = math.ceil(len(frames) / columns)
     cell_width = 384
@@ -589,6 +594,7 @@ def _build_contact_sheet(frames: list[dict[str, Any]], target: Path) -> None:
         sheet.paste(fitted, (left, top))
         draw.text((column * cell_width + 10, cell_top + 4), str(index + 1), font=index_font, fill=(183, 188, 198))
     sheet.save(target, "JPEG", quality=90, optimize=True)
+    return sheet.size
 
 
 def process_audio(source: Path) -> dict[str, Any]:

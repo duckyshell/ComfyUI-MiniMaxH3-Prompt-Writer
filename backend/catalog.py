@@ -12,6 +12,7 @@ from urllib.parse import quote
 import folder_paths
 
 from .gguf_metadata import GGUFMetadataError, read_gguf_metadata
+from .context import CONTEXT_PROFILES
 from .models.gguf_adapters import architecture_adapter, projector_is_compatible, runtime_supports
 from .models.gguf_policies import identify_model_policy, policy_is_verified_configuration
 
@@ -159,6 +160,20 @@ def _model_candidate(
         "reasoning_effort": False,
     }
     configuration_verified = bool(configured) or policy_is_verified_configuration(model_policy, model_path)
+    qwen_context = adapter is not None and adapter.id in {"qwen35", "qwen35moe"}
+    native_context = (metadata or {}).get("context_length")
+    context_profiles = (
+        ["standard", "extended", "large", "maximum"]
+        if qwen_context
+        else ["low", "standard", "extended"]
+    )
+    if isinstance(native_context, int) and native_context > 0:
+        context_profiles = [
+            profile for profile in context_profiles
+            if CONTEXT_PROFILES[profile] <= native_context
+        ]
+    if not context_profiles:
+        context_profiles = ["standard"]
     return {
         "id": model_id,
         "name": name,
@@ -168,6 +183,8 @@ def _model_candidate(
         "format": "GGUF",
         "role": configured.get("role", "gguf-custom"),
         "recommended_context": configured.get("recommended_context", "standard"),
+        "context_profiles": context_profiles,
+        "auto_context_ladder": qwen_context,
         "estimated_free_vram_mb": configured.get("estimated_free_vram_mb"),
         "f16_kv_extra_mb_16k": configured.get("f16_kv_extra_mb_16k", 0),
         "thinking": bool(template_controls["enable_thinking"]),
@@ -193,7 +210,7 @@ def _model_candidate(
             "text": configuration_verified,
             "vision": configuration_verified and projector is not None,
         },
-        "native_context_tokens": (metadata or {}).get("context_length"),
+        "native_context_tokens": native_context,
         "embedding_length": (metadata or {}).get("embedding_length"),
         "template_controls": template_controls,
         "mtp_detected": bool((metadata or {}).get("mtp_detected")),

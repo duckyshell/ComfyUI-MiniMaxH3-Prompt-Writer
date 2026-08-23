@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import ctypes
 import gc
 import sys
@@ -11,6 +12,7 @@ from typing import Any, Callable
 from ..context import ContextPlanError, plan_context
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from ..runtime_diagnostics import cached_gguf_runtime_diagnostics
+from ..vocab_tokenizer import TokenizerPreflightError, VocabOnlyTokenizerClient, model_identity
 from .contract import ModelError
 from .gguf_policies import sampling_options, template_kwargs
 
@@ -127,6 +129,9 @@ class GGUFBackend:
         self.cancel_event = threading.Event()
         self.force_unload_event = threading.Event()
         self.lock = threading.RLock()
+        self.tokenizer_lock = threading.Lock()
+        self.preflight_tokenizer: VocabOnlyTokenizerClient | None = None
+        atexit.register(self._close_preflight_tokenizer)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -134,6 +139,9 @@ class GGUFBackend:
             "loaded": self.model is not None,
             "loaded_context_tokens": self.runtime_signature[1] if self.runtime_signature else None,
             "loaded_kv_cache": self.runtime_signature[2] if self.runtime_signature else None,
+            "vocab_only_tokenizer_model_id": (
+                self.preflight_tokenizer.identity[0] if self.preflight_tokenizer else None
+            ),
         }
 
     def cancel(self) -> bool:
@@ -155,6 +163,32 @@ class GGUFBackend:
 
     def _console(self, message: str) -> None:
         _write_console(message)
+
+    def _count_preflight_text_tokens(self, model_info: dict[str, Any], text: str) -> int:
+        try:
+            identity = model_identity(model_info["path"])
+            with self.tokenizer_lock:
+                if self.preflight_tokenizer is None or self.preflight_tokenizer.identity != identity:
+                    if self.preflight_tokenizer is not None:
+                        self.preflight_tokenizer.close()
+                    self.preflight_tokenizer = VocabOnlyTokenizerClient(model_info["path"])
+                return self.preflight_tokenizer.count(text)
+        except (OSError, TokenizerPreflightError) as error:
+            with self.tokenizer_lock:
+                if self.preflight_tokenizer is not None:
+                    self.preflight_tokenizer.close()
+                    self.preflight_tokenizer = None
+            raise ModelError(
+                "TOKENIZER_PREFLIGHT_FAILED",
+                "Writer could not count Qwen input tokens before model loading.",
+                {"exception": str(error)},
+            ) from error
+
+    def _close_preflight_tokenizer(self) -> None:
+        with self.tokenizer_lock:
+            if self.preflight_tokenizer is not None:
+                self.preflight_tokenizer.close()
+                self.preflight_tokenizer = None
 
     def _console_error(self, error: ModelError, runtime_plan: dict[str, Any] | None) -> None:
         if error.code == "GENERATION_CANCELLED":
@@ -189,6 +223,20 @@ class GGUFBackend:
         kv_cache: str | None,
         thinking: bool,
     ) -> dict[str, Any]:
+        if not model_info.get("runtime_ready", True):
+            raise ModelError(
+                "MODEL_DEPENDENCY_MISSING",
+                model_info.get("setup_message") or "The selected GGUF model is not ready for Direct inference.",
+                {"packages": model_info.get("missing_dependencies", [])},
+            )
+        if thinking and model_info.get("thinking") is not True:
+            raise ModelError(
+                "DIRECT_THINKING_UNAVAILABLE",
+                "This Direct GGUF chat template does not expose Thinking controls.",
+            )
+        exact_counter = None
+        if model_info.get("architecture_adapter") in {"qwen35", "qwen35moe"}:
+            exact_counter = lambda text: self._count_preflight_text_tokens(model_info, text)
         try:
             return plan_context(
                 assembled,
@@ -196,6 +244,7 @@ class GGUFBackend:
                 requested_context=context_profile,
                 requested_kv_cache=kv_cache,
                 thinking=thinking,
+                count_text_tokens=exact_counter,
             )
         except ContextPlanError as error:
             raise ModelError(error.code, error.message, error.details) from error
@@ -460,6 +509,11 @@ class GGUFBackend:
                     "kv_cache": runtime_plan["kv_cache"],
                     "max_output_tokens": runtime_plan["max_output_tokens"],
                     "thinking_budget_reduced": runtime_plan["thinking_budget_reduced"],
+                    "text_token_source": runtime_plan.get("text_token_source", "estimate"),
+                    "estimated_visual_tokens": runtime_plan.get("estimated_visual_tokens", 0),
+                    "visual_token_details": runtime_plan.get("visual_token_details", []),
+                    "vision_budget_applied": runtime_plan.get("vision_budget_applied", False),
+                    "available_context_profiles": runtime_plan.get("available_context_profiles", []),
                 }
             except ModelError as error:
                 self._console_error(error, runtime_plan)

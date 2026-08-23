@@ -468,7 +468,9 @@ class GenerationCharacterizationTests(unittest.TestCase):
                 "format_repair_multimodal", "format_repair_tokens", "seed", "cold_start",
                 "model_load_seconds", "tokens_per_second", "context_profile",
                 "context_tokens", "kv_cache", "max_output_tokens",
-                "thinking_budget_reduced",
+                "thinking_budget_reduced", "text_token_source",
+                "estimated_visual_tokens", "visual_token_details",
+                "available_context_profiles",
             },
         )
 

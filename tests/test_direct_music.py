@@ -2,8 +2,10 @@ from enum import IntEnum
 from contextlib import redirect_stderr
 from io import StringIO
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from backend.models import gguf_backend
@@ -131,6 +133,57 @@ class DirectMusicRuntimeTests(unittest.TestCase):
             self.assertEqual(backend.chat_handler.kwargs["clip_model_path"], "mmproj.gguf")
             self.assertEqual(backend.runtime_signature[-1], "multimodal")
             self.assertEqual(set(_FakeMTMD.callbacks), {"mtmd", "helper"})
+
+    def test_qwen_preflight_reuses_cpu_vocab_only_tokenizer(self):
+        instances = []
+
+        class FakeTokenizerClient:
+            def __init__(self, path):
+                resolved = Path(path).resolve()
+                stat = resolved.stat()
+                self.identity = (str(resolved), stat.st_size, stat.st_mtime_ns)
+                self.counts = []
+                self.closed = False
+                instances.append(self)
+
+            def count(self, text):
+                self.counts.append(text)
+                return 400
+
+            def close(self):
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "qwen.gguf"
+            path.write_bytes(b"fixture")
+            info = {
+                **model_info(projector=None),
+                "path": str(path),
+                "architecture_adapter": "qwen35",
+                "runtime_ready": True,
+                "context_profiles": ["standard", "extended", "large", "maximum"],
+                "auto_context_ladder": True,
+                "native_context_tokens": 262_144,
+            }
+            assembled = {
+                "messages": [{"role": "user", "content": "brief"}],
+                "media_inputs": [],
+                "input": {"mode": "T2VA", "creative_brief": "brief"},
+            }
+            backend = GGUFBackend()
+
+            with patch.object(gguf_backend, "VocabOnlyTokenizerClient", FakeTokenizerClient):
+                first = backend.preflight(
+                    info, assembled, context_profile="auto", kv_cache="auto", thinking=False,
+                )
+                second = backend.preflight(
+                    info, assembled, context_profile="auto", kv_cache="auto", thinking=False,
+                )
+
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(len(instances[0].counts), 2)
+        self.assertEqual(first["text_token_source"], "vocab_only")
+        self.assertEqual(second["estimated_text_tokens"], 400)
 
     def test_mtmd_logging_suppresses_info_and_keeps_warnings_and_errors(self):
         with (

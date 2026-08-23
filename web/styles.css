@@ -121,7 +121,7 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-drag-ghost img { width: 38px; height: 38px; border-radius: 5px; object-fit: contain; background: #111318; }
 .h3ps-drag-ghost span { min-width: 0; display: flex; flex-direction: column; }.h3ps-drag-ghost strong, .h3ps-drag-ghost small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.h3ps-drag-ghost strong { font-size: 9px; }.h3ps-drag-ghost small { color: var(--h3ps-muted); font-size: 8px; }
 .h3ps-play { position: absolute; inset: 50% auto auto 50%; display: grid; place-items: center; width: 30px; height: 30px; transform: translate(-50%, -50%); border: 1px solid rgba(255,255,255,.25); border-radius: 50%; background: rgba(8,9,11,.68); color: white; backdrop-filter: blur(4px); }
-.h3ps-duration { position: absolute; top: 7px; right: 7px; padding: 2px 5px; border-radius: 4px; background: rgba(7,8,10,.72); color: #e9ebee; font-size: 9px; }
+.h3ps-duration { position: absolute; z-index: 3; top: 7px; right: 7px; padding: 2px 5px; border-radius: 4px; background: rgba(7,8,10,.72); color: #e9ebee; font-size: 9px; }
 .h3ps-audio { display: grid; place-items: center; background: linear-gradient(145deg, #292d35, #191b20); }
 .h3ps-wave { display: flex; align-items: center; gap: 3px; height: 36px; }
 .h3ps-wave i { width: 2px; height: 14px; border-radius: 2px; background: #8c929c; }

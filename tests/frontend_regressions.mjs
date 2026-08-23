@@ -522,6 +522,10 @@ test("Reference assets replace one dropped file and append multiple dropped file
   assert.equal(replacementTargetForFileDrop("asset-2", 2), null);
 });
 
+test("media duration remains above landscape thumbnails", () => {
+  assert.match(stylesSource, /\.h3ps-duration\s*\{[^}]*position:\s*absolute;[^}]*z-index:\s*3;/);
+});
+
 test("VRAM retry waits for the required free-memory target", () => {
   assert.equal(vramReleaseReachedTarget(4_000, 9_999, 10_000), false);
   assert.equal(vramReleaseReachedTarget(4_000, 10_000, 10_000), true);

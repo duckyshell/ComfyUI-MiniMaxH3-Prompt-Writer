@@ -100,13 +100,36 @@ class MediaTransactionTests(unittest.TestCase):
             with patch.object(media, "process_image", return_value={"width": 10, "height": 20, "_prepared_path": str(prepared), "_preview_path": str(preview)}):
                 result = store.replace("session", "old", "replacement.png", "image/png", incoming)
 
-            self.assertEqual(result["id"], "new")
+            self.assertEqual(result["id"], "old")
             self.assertEqual(result["reference"], "<Picture 1>")
-            self.assertEqual(store.sessions["session"][0]["id"], "new")
-            self.assertEqual([asset["id"] for asset in store.sessions["session"]], ["new", "second"])
+            self.assertEqual(result["content_revision"], 1)
+            self.assertEqual(store.sessions["session"][0]["id"], "old")
+            self.assertEqual([asset["id"] for asset in store.sessions["session"]], ["old", "second"])
             self.assertEqual([asset["reference"] for asset in store.sessions["session"]], ["<Picture 1>", "<Picture 2>"])
             self.assertFalse((root / "old").exists())
             self.assertTrue(incoming.exists())
+
+    def test_reference_replace_can_change_media_type_without_moving_the_slot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = self.asset(root, "first", "Reference", "image", "<Picture 1>")
+            replaced = self.asset(root, "replace-me", "Reference", "image", "<Picture 2>")
+            third = self.asset(root, "third", "Reference", "image", "<Picture 3>")
+            incoming_dir = root / "incoming"
+            incoming_dir.mkdir()
+            incoming = incoming_dir / "original.wav"
+            incoming.touch()
+            store = media.MediaStore()
+            store.sessions["session"] = [first, replaced, third]
+
+            with patch.object(media, "process_audio", return_value={"duration": 3.0}):
+                result = store.replace("session", "replace-me", "replacement.wav", "audio/wav", incoming)
+
+            self.assertEqual(result["id"], "replace-me")
+            self.assertEqual(result["type"], "audio")
+            self.assertEqual(result["reference"], "<Audio 1>")
+            self.assertEqual([asset["id"] for asset in store.sessions["session"]], ["first", "replace-me", "third"])
+            self.assertEqual([asset["reference"] for asset in store.sessions["session"]], ["<Picture 1>", "<Audio 1>", "<Picture 2>"])
 
     def test_failed_resample_preserves_old_derived_media_and_revision(self):
         with tempfile.TemporaryDirectory() as directory:

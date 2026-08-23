@@ -248,24 +248,30 @@ class MediaStore:
         old_asset = self._get_asset(session_id, asset_id)
         assets = list(self.sessions[session_id])
         kind = media_type(filename, content_type)
-        if kind != old_asset["type"]:
-            raise MediaError("REPLACEMENT_TYPE_MISMATCH", "The replacement must use the same media type.")
+        if kind is None:
+            raise MediaError("UNSUPPORTED_MEDIA", "This file type is not supported.")
+        remaining = [asset for asset in assets if asset is not old_asset]
+        validate_capacity(old_asset["mode"], remaining, kind)
         return self._prepare_asset(
             session_id,
             old_asset["mode"],
             filename,
             content_type,
             stored_path,
-            [asset for asset in assets if asset is not old_asset],
+            remaining,
         )
 
     def commit_replace(self, session_id: str, asset_id: str, replacement: dict[str, Any]) -> dict[str, Any]:
         old_asset = self.get(session_id, asset_id)
         assets = self.sessions[session_id]
-        if replacement["type"] != old_asset["type"] or replacement["mode"] != old_asset["mode"]:
+        if replacement["mode"] != old_asset["mode"]:
             raise MediaError("INVALID_REPLACEMENT", "The prepared replacement no longer matches the selected asset.")
-        validate_reference_durations([asset for asset in assets if asset is not old_asset], replacement)
+        remaining = [asset for asset in assets if asset is not old_asset]
+        validate_capacity(old_asset["mode"], remaining, replacement["type"])
+        validate_reference_durations(remaining, replacement)
         index = assets.index(old_asset)
+        replacement["id"] = old_asset["id"]
+        replacement["content_revision"] = int(old_asset.get("content_revision", 0)) + 1
         assets[index] = replacement
         self._renumber(assets, old_asset["mode"])
         shutil.rmtree(Path(old_asset["_original_path"]).parent, ignore_errors=True)

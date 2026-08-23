@@ -1,6 +1,6 @@
 import { app } from "/scripts/app.js";
 import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
-import { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
+import { availableReferenceTags, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
@@ -373,7 +373,7 @@ function renderAsset(asset, index) {
   const overlay = asset.type === "video" ? `<span class="h3ps-play">${icon("play", 18)}</span>` : "";
   const duration = formatDuration(asset.duration);
   return `
-    <div class="h3ps-asset" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}">
+    <div class="h3ps-asset" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}" data-replace-label="Replace ${escapeHtml(asset.reference)}">
       <span class="h3ps-asset-preview h3ps-${asset.type}">${visual}${overlay}</span>
       <span class="h3ps-asset-copy">
         <strong>${escapeHtml(asset.reference)}</strong>
@@ -383,7 +383,7 @@ function renderAsset(asset, index) {
       <button class="h3ps-more" type="button" data-asset-menu-toggle="${asset.id}" title="Asset actions">${icon("dots", 16)}</button>
       <div class="h3ps-asset-menu" data-asset-menu="${asset.id}" hidden>
         <button type="button" data-preview-asset="${asset.id}">Preview</button>
-        ${asset.mode !== "Reference" ? `<button type="button" data-replace-asset="${asset.id}" ${destructiveDisabled}>Replace image</button>` : ""}
+        <button type="button" data-replace-asset="${asset.id}" ${destructiveDisabled}>Replace ${escapeHtml(asset.type)}</button>
         <button type="button" data-remove-asset="${asset.id}" ${destructiveDisabled}>Remove</button>
       </div>
     </div>`;
@@ -606,9 +606,18 @@ function bindMediaActions(mode) {
       media.classList.remove("is-reordering");
       studio.dragGhost?.remove();
       studio.dragGhost = null;
-      studio.root.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after").forEach((item) => item.classList.remove("is-dragging", "is-drop-before", "is-drop-after"));
+      studio.root.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after, .is-file-replace-target").forEach((item) => item.classList.remove("is-dragging", "is-drop-before", "is-drop-after", "is-file-replace-target"));
     });
     card.addEventListener("dragover", (event) => {
+      if (!studio.draggedAssetId && [...(event.dataTransfer.types || [])].includes("Files")) {
+        event.preventDefault();
+        studio.root.querySelectorAll(".is-file-replace-target").forEach((item) => item.classList.remove("is-file-replace-target"));
+        if (replacementTargetForFileDrop(card.dataset.assetId, fileCountFromDataTransfer(event.dataTransfer))) {
+          card.classList.add("is-file-replace-target");
+        }
+        event.dataTransfer.dropEffect = "copy";
+        return;
+      }
       if (!studio.draggedAssetId || studio.draggedAssetId === card.dataset.assetId) return;
       studio.root.querySelectorAll(".is-drop-before, .is-drop-after").forEach((item) => item.classList.remove("is-drop-before", "is-drop-after"));
       const modeAssets = studio.assets.filter((asset) => asset.mode === mode);
@@ -616,6 +625,9 @@ function bindMediaActions(mode) {
       const targetIndex = modeAssets.findIndex((asset) => asset.id === card.dataset.assetId);
       const after = sourceIndex < targetIndex;
       card.classList.add(after ? "is-drop-after" : "is-drop-before");
+    });
+    card.addEventListener("dragleave", (event) => {
+      if (!card.contains(event.relatedTarget)) card.classList.remove("is-file-replace-target");
     });
   });
   replaceEventListener(media, "dragover", "media", (event) => {
@@ -627,6 +639,7 @@ function bindMediaActions(mode) {
     if (studio.requestBusy) return;
     const sourceId = event.dataTransfer.getData("application/x-h3ps-asset") || studio.draggedAssetId;
     const targetId = event.target.closest("[data-asset-id]")?.dataset.assetId;
+    studio.root.querySelectorAll(".is-file-replace-target").forEach((item) => item.classList.remove("is-file-replace-target"));
     if (sourceId) {
       if (!targetId || sourceId === targetId) return;
       const modeAssets = studio.assets.filter((asset) => asset.mode === mode);
@@ -640,7 +653,8 @@ function bindMediaActions(mode) {
       }
       return;
     }
-    uploadFiles(mode, [...event.dataTransfer.files]);
+    const files = [...event.dataTransfer.files];
+    uploadFiles(mode, files, replacementTargetForFileDrop(targetId, files.length));
   });
 }
 
@@ -654,7 +668,7 @@ function previewAsset(asset) {
 function chooseMedia(mode, replaceAssetId = null) {
   const input = document.createElement("input");
   input.type = "file";
-  input.multiple = mode === "Reference" || mode === "FL2VA";
+  input.multiple = !replaceAssetId && (mode === "Reference" || mode === "FL2VA");
   input.accept = mode === "Reference" ? "image/*,video/*,audio/*" : "image/*";
   input.addEventListener("change", () => uploadFiles(mode, [...input.files], replaceAssetId));
   input.click();

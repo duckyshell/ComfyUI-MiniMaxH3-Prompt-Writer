@@ -552,6 +552,26 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         prepare_add.assert_not_called()
         commit_add.assert_not_called()
 
+    async def test_replace_rejects_multiple_files_before_committing(self):
+        fields = [
+            _MultipartField("session_id", text=self.session_id),
+            _MultipartField("mode", text="Reference"),
+            _MultipartField("file", filename="first.png", content=b"first", content_type="image/png"),
+            _MultipartField("file", filename="second.png", content=b"second", content_type="image/png"),
+        ]
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(routes, "CACHE_ROOT", Path(directory)),
+            patch.object(routes.STORE, "get", return_value={"id": "old", "mode": "Reference"}),
+            patch.object(routes.STORE, "prepare_replace", return_value={"type": "image", "mode": "Reference"}),
+            patch.object(routes.STORE, "commit_replace") as commit_replace,
+        ):
+            response = await routes.upload_media(_MultipartRequest(fields, query={"replace_asset_id": "old"}))
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(self.payload(response)["error"]["code"], "INVALID_REPLACEMENT")
+        commit_replace.assert_not_called()
+
     async def test_upload_processing_runs_off_loop_and_blocks_generation_admission(self):
         fields = [
             _MultipartField("session_id", text=self.session_id),

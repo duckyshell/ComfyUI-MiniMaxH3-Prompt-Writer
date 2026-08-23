@@ -866,12 +866,16 @@ async def upload_media(request: web.Request) -> web.Response:
     uploaded: list[dict[str, Any]] = []
     uploaded_ids: list[str] = []
     asset_dir: Path | None = None
+    pending_replacement: dict[str, Any] | None = None
+    pending_replacement_dir: Path | None = None
     media_claimed = False
     replace_asset_id: str | None = request.query.get("replace_asset_id") or None
 
     def rollback_upload() -> None:
         if asset_dir is not None:
             shutil.rmtree(asset_dir, ignore_errors=True)
+        if pending_replacement_dir is not None:
+            shutil.rmtree(pending_replacement_dir, ignore_errors=True)
         if session_id is not None and not replace_asset_id:
             for asset_id in uploaded_ids:
                 try:
@@ -889,7 +893,7 @@ async def upload_media(request: web.Request) -> web.Response:
                 continue
             if field.name == "replace_asset_id":
                 multipart_replace_asset_id = (await field.text()).strip() or None
-                if uploaded:
+                if uploaded or pending_replacement is not None:
                     raise MediaError("INVALID_REPLACEMENT", "Replacement metadata must be provided before the file.")
                 replace_asset_id = multipart_replace_asset_id
                 continue
@@ -899,6 +903,8 @@ async def upload_media(request: web.Request) -> web.Response:
                 session_id = parse_session_id(None)
             if mode not in MODE_LIMITS:
                 raise MediaError("INVALID_MODE", "Select a valid mode before uploading media.")
+            if replace_asset_id and pending_replacement is not None:
+                raise MediaError("INVALID_REPLACEMENT", "Replace accepts exactly one file.")
 
             asset_dir = CACHE_ROOT / session_id / str(uuid4())
             asset_dir.mkdir(parents=True, exist_ok=False)
@@ -915,8 +921,6 @@ async def upload_media(request: web.Request) -> web.Response:
                 raise MediaError("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.")
             media_claimed = True
             if replace_asset_id:
-                if uploaded:
-                    raise MediaError("INVALID_REPLACEMENT", "Replace accepts exactly one file.")
                 old_asset = STORE.get(session_id, replace_asset_id)
                 if old_asset["mode"] != mode:
                     raise MediaError("INVALID_REPLACEMENT", "The replacement must stay in the same mode.")
@@ -930,7 +934,10 @@ async def upload_media(request: web.Request) -> web.Response:
                 )
                 if cancellation is not None:
                     raise cancellation
-                asset = STORE.commit_replace(session_id, replace_asset_id, prepared)
+                pending_replacement = prepared
+                pending_replacement_dir = asset_dir
+                asset_dir = None
+                continue
             else:
                 prepared, cancellation = await _run_thread_worker(
                     STORE.prepare_add,
@@ -946,6 +953,11 @@ async def upload_media(request: web.Request) -> web.Response:
             uploaded.append(asset)
             uploaded_ids.append(asset["id"])
             asset_dir = None
+        if replace_asset_id and pending_replacement is not None:
+            asset = STORE.commit_replace(session_id, replace_asset_id, pending_replacement)
+            uploaded.append(asset)
+            pending_replacement = None
+            pending_replacement_dir = None
     except (MediaError, ValueError) as error:
         rollback_upload()
         if isinstance(error, MediaError):

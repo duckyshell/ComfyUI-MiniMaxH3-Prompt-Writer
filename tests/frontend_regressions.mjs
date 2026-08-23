@@ -4,7 +4,7 @@ import test from "node:test";
 
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");
-const { availableReferenceTags, createSessionId, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replaceEventListener, vramReleaseReachedTarget } = await import(`data:text/javascript;base64,${encoded}`);
+const { availableReferenceTags, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } = await import(`data:text/javascript;base64,${encoded}`);
 const responseSource = await readFile(new URL("../web/api/response.js", import.meta.url), "utf8");
 const responseEncoded = Buffer.from(responseSource).toString("base64");
 const { readApiResponse } = await import(`data:text/javascript;base64,${responseEncoded}`);
@@ -505,6 +505,21 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(state.settingsProvider, "api");
   assert.equal(state.keepModelLoaded, false);
   assert.equal(state.keepModelLoaded, false);
+});
+
+test("Reference assets replace one dropped file and append multiple dropped files", () => {
+  assert.match(mainSource, /data-replace-asset="\$\{asset\.id\}"[^>]*>Replace \$\{escapeHtml\(asset\.type\)\}/);
+  assert.doesNotMatch(mainSource, /asset\.mode !== "Reference"[^\n]+data-replace-asset/);
+  assert.match(mainSource, /input\.multiple = !replaceAssetId/);
+  assert.match(mainSource, /is-file-replace-target/);
+  assert.doesNotMatch(mainSource, /Choose one replacement/);
+  assert.match(mainSource, /uploadFiles\(mode, files, replacementTargetForFileDrop\(targetId, files\.length\)\)/);
+
+  assert.equal(fileCountFromDataTransfer({ items: [{ kind: "file" }] }), 1);
+  assert.equal(fileCountFromDataTransfer({ items: [{ kind: "file" }, { kind: "file" }] }), 2);
+  assert.equal(fileCountFromDataTransfer({ files: [{}, {}, {}] }), 3);
+  assert.equal(replacementTargetForFileDrop("asset-2", 1), "asset-2");
+  assert.equal(replacementTargetForFileDrop("asset-2", 2), null);
 });
 
 test("VRAM retry waits for the required free-memory target", () => {

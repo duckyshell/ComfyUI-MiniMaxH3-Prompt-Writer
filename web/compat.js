@@ -33,6 +33,16 @@ export function vramReleaseReachedTarget(beforeFreeMb, currentFreeMb, requiredFr
   return Number.isFinite(beforeFreeMb) && currentFreeMb - beforeFreeMb >= 64;
 }
 
+export function fileCountFromDataTransfer(dataTransfer) {
+  const items = [...(dataTransfer?.items || [])];
+  if (items.length) return items.filter((item) => item?.kind === "file").length;
+  return [...(dataTransfer?.files || [])].length;
+}
+
+export function replacementTargetForFileDrop(targetId, fileCount) {
+  return targetId && fileCount === 1 ? targetId : null;
+}
+
 export function moveOntoTarget(items, sourceId, targetId, getId = (item) => item.id) {
   const sourceIndex = items.findIndex((item) => getId(item) === sourceId);
   const targetIndex = items.findIndex((item) => getId(item) === targetId);

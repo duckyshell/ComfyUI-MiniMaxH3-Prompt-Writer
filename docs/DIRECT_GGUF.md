@@ -10,7 +10,9 @@ This is an optional advanced path. Most users should start with [Ollama](OLLAMA.
 
 - A compatible native `llama-cpp-python` runtime installed in the Python environment that starts ComfyUI.
 - One supported model GGUF.
-- The matching multimodal projector (`mmproj`) from the same model class.
+- For image and video-reference modes, the matching multimodal projector (`mmproj`) from the same model class.
+
+A model without an active projector remains usable as text-only Direct GGUF. Writer keeps T2VA and Refine available, disables I2VA, FL2VA, L2VA, Reference, and Music 3, and shows why vision is unavailable.
 
 Workflow safetensors, checkpoints, and text encoders are unrelated to the Direct prompt model.
 
@@ -37,9 +39,9 @@ This command was validated on the official NVIDIA Windows Portable build used fo
 
 The prebuilt native wheel is not validated for every CPU, CUDA version, Python version, or ComfyUI distribution. Keep `--only-binary=:all:` in the command so an unavailable wheel fails instead of starting an unplanned local C++ build.
 
-## Add a model and projector
+## Add a model and optional projector
 
-Open **Browse verified models** in Direct settings. Download both files from the same listed model row and place them together under:
+Open **Browse verified models** in Direct settings. Download the model file and, for visual modes, its projector from the same listed model row. Place them together under:
 
 ```text
 ComfyUI/models/LLM/
@@ -57,7 +59,7 @@ ComfyUI/models/LLM/
     └── mmproj-BF16.gguf
 ```
 
-Do not share an `mmproj` across model classes because the filenames happen to match. Writer accepts a directory only when it can pair one model GGUF with one projector unambiguously.
+Do not share an `mmproj` across model classes because the filenames happen to match. Writer enables vision only when it can pair one model GGUF with one projector unambiguously. A missing or ambiguous projector does not hide the model; it leaves the model available in text-only T2VA mode and reports the pairing problem in Direct settings and Scan details.
 
 Select **Refresh** after adding files. Expand **Scan details** if the model does not appear.
 

@@ -21,14 +21,19 @@ def runtime_plan():
     }
 
 
-def model_info(*, ready=True):
+def model_info(*, ready=True, projector="mmproj.gguf"):
     return {
         "id": "verified-gemma4",
+        "family": "gguf",
         "path": "model.gguf",
-        "projector": "mmproj.gguf",
+        "projector": projector,
         "runtime_ready": ready,
         "missing_dependencies": [],
-        "capabilities": {"images": True, "video_frames": True, "audio": False},
+        "capabilities": {
+            "images": projector is not None,
+            "video_frames": projector is not None,
+            "audio": False,
+        },
     }
 
 
@@ -163,10 +168,10 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         self.assertEqual(model.kwargs["type_k"], _FakeGGMLType.GGML_TYPE_Q8_0.value)
         self.assertEqual(model.kwargs["type_v"], _FakeGGMLType.GGML_TYPE_Q8_0.value)
 
-    def test_generate_selects_text_only_only_for_music(self):
+    def test_generate_selects_text_only_for_music_or_missing_projector(self):
         selections = []
 
-        def exercise(mode):
+        def exercise(mode, info):
             backend = GGUFBackend()
 
             def fake_load(info, plan, *, text_only=False):
@@ -190,13 +195,32 @@ class DirectMusicRuntimeTests(unittest.TestCase):
                 patch("backend.models.gguf_backend.run_h3_pipeline", return_value={"prompt": "result"}),
             ):
                 backend.generate(
-                    model_info(), assembled, "session",
+                    info, assembled, "session",
                     thinking=False, seed=1, unload_after=False, runtime_plan=runtime_plan(),
                 )
 
-        exercise("Music3")
-        exercise("T2VA")
-        self.assertEqual(selections, [("Music3", True), ("T2VA", False)])
+        exercise("Music3", model_info())
+        exercise("T2VA", model_info())
+        exercise("T2VA", model_info(projector=None))
+        self.assertEqual(selections, [("Music3", True), ("T2VA", False), ("T2VA", True)])
+
+    def test_text_only_direct_model_rejects_non_t2va_mode_before_load(self):
+        backend = GGUFBackend()
+        assembled = {
+            "messages": [{"role": "user", "content": "brief"}],
+            "media_inputs": [],
+            "input": {"mode": "Music3", "creative_brief": "brief"},
+        }
+
+        with self.assertRaises(ModelError) as raised:
+            backend.generate(
+                model_info(projector=None), assembled, "session",
+                thinking=False, seed=1, unload_after=False, runtime_plan=runtime_plan(),
+            )
+
+        self.assertEqual(raised.exception.code, "DIRECT_VISION_REQUIRED")
+        self.assertEqual(raised.exception.details["supported_modes"], ["T2VA"])
+        self.assertIsNone(backend.model)
 
     def test_direct_console_reports_lifecycle_without_prompt_content(self):
         backend = GGUFBackend()

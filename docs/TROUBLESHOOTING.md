@@ -125,25 +125,27 @@ The clean reinstall does not rebuild the wheel or disable AVX512.
 
 A real Direct model load completes without terminating ComfyUI.
 
-## Direct model or projector is not found
+## Direct model or vision projector is not found
 
 **Symptom**
 
-Direct shows no ready models, a missing `mmproj`, or an ambiguous pairing.
+Direct shows no models, or an installed model is marked text-only because its `mmproj` is missing or ambiguous.
 
 **Cause**
 
-Writer needs one model GGUF and one matching model-class projector in the same scanned folder. It does not guess among several candidates.
+Writer needs a model GGUF and the Direct runtime for text generation. Visual modes additionally need one matching model-class projector in the same scanned folder. Writer does not guess among several projector candidates.
 
 **Fix**
 
-Put the verified pair together under `ComfyUI/models/LLM`. Use a separate subfolder for each pair, then select **Refresh**. Open **Scan details** to see every searched path and file.
+Put the model under `ComfyUI/models/LLM`. To enable I2VA, FL2VA, L2VA, or Reference, put its verified projector beside it. Use a separate subfolder for each pair, then select **Refresh**. Open **Scan details** to see every searched path and file.
 
 Do not reuse a same-named `mmproj` from another model class.
 
+Without an unambiguous compatible projector, the model remains available for T2VA and Refine. Writer disables the visual modes and Music 3 instead of blocking all Direct work.
+
 **Verify**
 
-The model appears under **Installed models**, has no missing dependency, and completes a real image request.
+The model appears under **Installed models**. A text-only setup completes a T2VA request; a paired vision setup also completes a real image request.
 
 ## Ollama is not running
 

@@ -62,6 +62,8 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-modes button { position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 108px; height: 36px; padding: 0 13px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #a8adb6; font-size: 12px; font-weight: 680; letter-spacing: .1px; cursor: pointer; }
 .h3ps-modes button small { color: var(--h3ps-dim); font-size: 10px; font-weight: 500; }
 .h3ps-modes button:hover { background: #20232a; color: var(--h3ps-text); }
+.h3ps-modes button:disabled { border-color:transparent; background:transparent; color:#555b65; opacity:.5; cursor:not-allowed; box-shadow:none; }
+.h3ps-modes button:disabled:hover { background:transparent; color:#555b65; }
 .h3ps-modes button.is-active { border-color: #3b404a; background: #292c34; color: var(--h3ps-text); box-shadow: inset 0 -2px var(--h3ps-accent); }
 .h3ps-modes button.is-active small { color: #aeb3bc; }
 .h3ps-modes button[data-mode="Reference"] { margin-left:12px; }.h3ps-modes button[data-mode="Reference"]::before { content:""; position:absolute; left:-9px; top:8px; width:1px; height:18px; background:#343841; pointer-events:none; }
@@ -322,6 +324,8 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-installed-model-source { margin:6px 2px 0; color:var(--h3ps-muted); font-size:8.5px; }
 .h3ps-direct-model-warning { display:flex; gap:3px; margin-top:8px; padding:8px 9px; flex-direction:column; border:1px solid rgba(224,170,87,.25); border-radius:7px; background:rgba(224,170,87,.05); }
 .h3ps-direct-model-warning strong { color:#e1bd84; font-size:9.5px; }.h3ps-direct-model-warning span { color:var(--h3ps-muted); font-size:8.5px; line-height:1.4; }
+.h3ps-direct-model-note { display:flex; gap:3px; margin-top:8px; padding:8px 9px; flex-direction:column; border:1px solid rgba(99,212,155,.2); border-radius:7px; background:rgba(99,212,155,.045); }
+.h3ps-direct-model-note strong { color:#9cddc0; font-size:9.5px; }.h3ps-direct-model-note span { color:var(--h3ps-muted); font-size:8.5px; line-height:1.4; }
 .h3ps-direct-model-empty { margin-top:8px; padding:9px; border:1px solid #343943; border-radius:7px; background:#191b20; }
 .h3ps-model-utilities { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px; }
 .h3ps-model-utilities:empty { display:none; }

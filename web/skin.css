@@ -1206,6 +1206,8 @@
   cursor: pointer;
 }
 .h3ps-workspaces button:hover { color: #bdbdc3; background: #121215; }
+.h3ps-workspaces button:disabled,
+.h3ps-workspaces button:disabled:hover { color:#4f4f57; background:transparent; opacity:.5; cursor:not-allowed; }
 .h3ps-workspaces button.is-active {
   border-color: #34343a;
   background: #17171b;

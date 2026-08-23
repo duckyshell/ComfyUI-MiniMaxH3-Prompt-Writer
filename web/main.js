@@ -8,7 +8,9 @@ import {
   buildRefinePayload,
   audioWasAdded,
   createStudioState,
+  isGenerationModeAvailable,
   isPersistedDraftMode,
+  isTextOnlyDirectModel,
   saveApiProviderConfig,
   saveCustomSystemPrompts,
   saveExternalServerConfig,
@@ -390,6 +392,7 @@ function renderAsset(asset, index) {
 function renderMedia(mode) {
   if (mode === "Music3") {
     studio.root.querySelectorAll("[data-mode]").forEach((button) => button.classList.remove("is-active"));
+    syncModeAvailability();
     return;
   }
   const data = MODES[mode];
@@ -432,6 +435,7 @@ function renderMedia(mode) {
   }
   bindMediaActions(mode);
   syncReferenceInsertControl();
+  syncModeAvailability();
 }
 
 function setMusicSystemPromptProfile(profile) {
@@ -920,6 +924,37 @@ function syncWorkspace() {
     toggleLyricsRefine(false);
     setMusicSystemPromptExpanded(false);
   }
+  syncModeAvailability();
+}
+
+function syncModeAvailability() {
+  if (!studio?.root) return;
+  const textOnlyDirect = isTextOnlyDirectModel(studio.selectedModel);
+  studio.root.querySelectorAll("[data-mode]").forEach((control) => {
+    const unavailable = !isGenerationModeAvailable(studio.selectedModel, control.dataset.mode);
+    control.disabled = studio.requestBusy || unavailable;
+    control.setAttribute("aria-disabled", String(control.disabled));
+    control.title = unavailable && textOnlyDirect
+      ? "This Direct GGUF is text-only. Add its matching mmproj to enable visual modes."
+      : "";
+  });
+  studio.root.querySelectorAll("[data-workspace]").forEach((control) => {
+    const unavailable = textOnlyDirect && control.dataset.workspace === "music";
+    control.disabled = studio.requestBusy || unavailable;
+    control.setAttribute("aria-disabled", String(control.disabled));
+    control.title = unavailable
+      ? "This Direct GGUF is text-only. Only H3 Video · T2VA is available."
+      : "";
+  });
+}
+
+function generationModeIsAvailable() {
+  if (isGenerationModeAvailable(studio.selectedModel, studio.mode)) return true;
+  showToast(
+    "Text-only Direct GGUF",
+    "Use H3 Video · T2VA, or add the matching mmproj to enable visual modes.",
+  );
+  return false;
 }
 
 function disarmDraftDefaults() {
@@ -976,8 +1011,7 @@ function setGenerationState(state, label, detail) {
   const busy = state === "busy";
   studio.requestBusy = busy;
   studio.root.querySelector("[data-clear-media]").disabled = busy;
-  studio.root.querySelectorAll("[data-mode]").forEach((control) => { control.disabled = busy; });
-  studio.root.querySelectorAll("[data-workspace]").forEach((control) => { control.disabled = busy; });
+  syncModeAvailability();
   studio.root.querySelector("[data-lyrics-refine-toggle]").disabled = busy;
   const comfyMemory = studio.root.querySelector("[data-comfy-memory-action]");
   comfyMemory.disabled = busy;
@@ -1139,6 +1173,7 @@ async function startGenerationPreview() {
     showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}. Open the model menu to finish setup.`);
     return;
   }
+  if (!generationModeIsAvailable()) return;
   if (!await inspectDirectRuntime()) return;
   const modelName = studio.selectedModel.name.split("/").pop();
   const external = studio.selectedModel.family === "external";
@@ -1662,7 +1697,12 @@ function renderInferenceSettings() {
   select.innerHTML = models.length
     ? models.map((model) => {
       const modelFileNeedsSetup = (model.missing_dependencies || []).some((dependency) => dependency !== "llama-cpp-python");
-      const suffix = [modelVramLabel(model), model.format, modelFileNeedsSetup ? "Needs setup" : ""].filter(Boolean).join(" · ");
+      const suffix = [
+        modelVramLabel(model),
+        model.format,
+        modelFileNeedsSetup ? "Needs setup" : "",
+        isTextOnlyDirectModel(model) ? "Text only" : "",
+      ].filter(Boolean).join(" · ");
       return `<option value="${escapeHtml(model.id)}" ${model.id === directModel?.id ? "selected" : ""}>${escapeHtml(model.name.split("/").pop())}${suffix ? ` — ${escapeHtml(suffix)}` : ""}</option>`;
     }).join("")
     : "<option>No compatible model found</option>";
@@ -1674,7 +1714,9 @@ function renderInferenceSettings() {
     const missingModelFiles = (directModel.missing_dependencies || []).filter((dependency) => dependency !== "llama-cpp-python");
     directStatus.innerHTML = missingModelFiles.length
       ? `<div class="h3ps-direct-model-warning"><strong>Model needs attention</strong><span>${escapeHtml(directModel.setup_message || `Missing ${missingModelFiles.join(", ")}`)}</span></div>`
-      : "";
+      : isTextOnlyDirectModel(directModel)
+        ? `<div class="h3ps-direct-model-note"><strong>Text-only model · T2VA available</strong><span>${escapeHtml(directModel.capability_message || "No compatible vision projector is active.")}</span></div>`
+        : "";
   } else {
     directStatus.innerHTML = "";
   }
@@ -1763,6 +1805,14 @@ function selectSettingsProvider(provider) {
 function selectModel(model, { preserveSettingsProvider = false } = {}) {
   rememberRuntimePreferences();
   selectModelState(studio, model, { preserveSettingsProvider });
+  const switchedToT2VA = !isGenerationModeAvailable(model, studio.mode);
+  if (switchedToT2VA) {
+    stashCurrentModeDraft();
+    studio.mode = "T2VA";
+    studio.lastVideoMode = "T2VA";
+    syncWorkspace();
+    restoreModeDraft(studio.mode);
+  }
   applyRuntimePreferences(studio.settingsProvider);
   if (model?.family === "gguf") studio.preferredDirectModelId = model.id;
   const remote = ["external", "api"].includes(model?.family);
@@ -1791,6 +1841,12 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
   syncRuntimeSummary();
   syncThinkingAvailability();
   saveUserPreferences(localStorage, studio);
+  if (switchedToT2VA && !studio.preferencesRestoring) {
+    showToast(
+      "Switched to T2VA",
+      model?.capability_message || "The selected Direct GGUF has no compatible vision projector.",
+    );
+  }
 }
 
 function rememberRuntimePreferences(provider = studio.settingsProvider) {
@@ -2196,6 +2252,7 @@ async function submitLyricsRefinement() {
     showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}.`);
     return;
   }
+  if (!generationModeIsAvailable()) return;
   if (!await inspectDirectRuntime()) return;
 
   studio.activeRequestFamily = studio.selectedModel.family;
@@ -2259,6 +2316,7 @@ async function submitRefinement() {
     showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}.`);
     return;
   }
+  if (!generationModeIsAvailable()) return;
   if (!await inspectDirectRuntime()) return;
 
   const previousPrompt = output.value;
@@ -2581,6 +2639,7 @@ function createStudio() {
   root.querySelectorAll("[data-close-image-preview]").forEach((el) => el.addEventListener("click", closeImagePreview));
   root.querySelectorAll("[data-workspace]").forEach((button) => button.addEventListener("click", () => {
     const nextMode = button.dataset.workspace === "music" ? "Music3" : studio.lastVideoMode;
+    if (!isGenerationModeAvailable(studio.selectedModel, nextMode)) return;
     if (nextMode === studio.mode) return;
     stashCurrentModeDraft();
     if (studio.mode !== "Music3") studio.lastVideoMode = studio.mode;
@@ -2592,6 +2651,7 @@ function createStudio() {
     saveUserPreferences(localStorage, studio);
   }));
   root.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
+    if (!isGenerationModeAvailable(studio.selectedModel, button.dataset.mode)) return;
     if (button.dataset.mode === studio.mode) return;
     stashCurrentModeDraft();
     studio.mode = button.dataset.mode;

@@ -212,7 +212,7 @@ class GGUFBackend:
         if not model_info.get("runtime_ready", True):
             raise ModelError(
                 "MODEL_DEPENDENCY_MISSING",
-                "The selected GGUF model needs its optional runtime or multimodal projector.",
+                "The selected GGUF model is not ready for Direct inference.",
                 {"packages": model_info.get("missing_dependencies", [])},
             )
         self.unload()
@@ -309,7 +309,10 @@ class GGUFBackend:
                     kv_cache=kv_cache,
                     thinking=thinking,
                 )
-                text_only = assembled.get("input", {}).get("mode") == "Music3"
+                text_only = (
+                    assembled.get("input", {}).get("mode") == "Music3"
+                    or model_info.get("capabilities", {}).get("images") is False
+                )
                 runtime_kind = "text" if text_only else "multimodal"
                 signature = (model_info["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"], runtime_kind)
                 cold_start = self.model is None or self.runtime_signature != signature

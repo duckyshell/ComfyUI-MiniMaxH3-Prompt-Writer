@@ -80,8 +80,10 @@ class ModelDiscoveryTests(unittest.TestCase):
 
             self.assertEqual(len(models), 2)
             self.assertTrue(all(model["projector"] is None for model in models))
-            self.assertTrue(all(not model["runtime_ready"] for model in models))
-            self.assertTrue(all("separate subfolder" in model["setup_message"] for model in models))
+            self.assertTrue(all(model["runtime_ready"] for model in models))
+            self.assertTrue(all(model["vision_status"] == "ambiguous" for model in models))
+            self.assertTrue(all(model["capabilities"]["images"] is False for model in models))
+            self.assertTrue(all("separate subfolder" in model["capability_message"] for model in models))
 
     def test_multiple_projectors_next_to_one_model_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -92,9 +94,10 @@ class ModelDiscoveryTests(unittest.TestCase):
 
             model = self.discover(root)[0]
 
-            self.assertIsNone(model["projector"])
-            self.assertFalse(model["runtime_ready"])
-            self.assertIn("separate subfolder", model["setup_message"])
+        self.assertIsNone(model["projector"])
+        self.assertTrue(model["runtime_ready"])
+        self.assertEqual(model["vision_status"], "ambiguous")
+        self.assertIn("separate subfolder", model["capability_message"])
 
     def test_separate_subfolders_pair_locally(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -135,7 +138,25 @@ class ModelDiscoveryTests(unittest.TestCase):
             self.assertEqual(diagnostics["roots"][0]["model_files"], [str(model_path.resolve())])
             self.assertEqual(diagnostics["roots"][0]["projector_files"], [])
             self.assertIn("no mmproj GGUF", diagnostics["roots"][0]["issues"][0])
-            self.assertEqual(diagnostics["totals"]["incomplete_models"], 1)
+            self.assertTrue(models[0]["runtime_ready"])
+            self.assertEqual(models[0]["vision_status"], "projector_missing")
+            self.assertEqual(models[0]["capabilities"], {"images": False, "video_frames": False, "audio": False})
+            self.assertEqual(diagnostics["totals"]["incomplete_models"], 0)
+
+    def test_missing_runtime_still_blocks_text_only_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "gemma-4-test.gguf").touch()
+
+            with (
+                patch.object(catalog.folder_paths, "get_folder_paths", return_value=[str(root)]),
+                patch.object(catalog.importlib.util, "find_spec", return_value=None),
+            ):
+                model = catalog.discover_models()[0]
+
+            self.assertFalse(model["runtime_ready"])
+            self.assertEqual(model["missing_dependencies"], ["llama-cpp-python"])
+            self.assertEqual(model["vision_status"], "projector_missing")
 
     def test_discovery_summary_preserves_ready_pairing(self):
         with tempfile.TemporaryDirectory() as directory:

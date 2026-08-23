@@ -168,6 +168,21 @@ def _audit(
 
 
 def validate_media_capabilities(model_info: dict[str, Any], assembled: dict[str, Any]) -> None:
+    mode = assembled.get("input", {}).get("mode")
+    if (
+        model_info.get("family") == "gguf"
+        and model_info.get("capabilities", {}).get("images") is False
+        and mode != "T2VA"
+    ):
+        raise ModelError(
+            "DIRECT_VISION_REQUIRED",
+            "This Direct GGUF model is running without a compatible vision projector. Only T2VA is available.",
+            {
+                "mode": mode,
+                "supported_modes": ["T2VA"],
+                "suggestion": "Switch to T2VA or add the matching mmproj GGUF beside the model.",
+            },
+        )
     required = {item["requires_capability"] for item in assembled["media_inputs"]}
     unsupported = sorted(name for name in required if model_info["capabilities"].get(name) is not True)
     if unsupported:

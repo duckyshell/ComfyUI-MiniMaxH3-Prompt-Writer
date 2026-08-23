@@ -1,7 +1,9 @@
 # Model adapters
 
-The local adapter uses llama-cpp-python/GGUF for Gemma 4 images and ordered video
-contact sheets, including projector validation and CUDA offload.
+The local adapter uses llama-cpp-python/GGUF for text generation and, with a
+compatible projector, Gemma 4 images and ordered video contact sheets. Projector
+discovery controls vision capabilities instead of blocking text-only T2VA, and
+the adapter owns CUDA offload.
 
 `gguf_backend.py` owns local llama-cpp-python loading, tokenization,
 cancellation, and unloading. `external_server_backend.py` independently owns

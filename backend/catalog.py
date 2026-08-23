@@ -66,6 +66,10 @@ def _gemma_capabilities(name: str) -> dict[str, bool | None]:
     return {"images": True, "video_frames": True, "audio": False}
 
 
+def _text_only_capabilities() -> dict[str, bool]:
+    return {"images": False, "video_frames": False, "audio": False}
+
+
 def _display_name(path: Path) -> str:
     return path.stem
 
@@ -87,12 +91,15 @@ def _model_candidate(
     if not runtime_available:
         missing_dependencies.append("llama-cpp-python")
     if ambiguous_projector:
-        missing_dependencies.append("unambiguous mmproj GGUF")
-        setup_message = "Multiple models or vision projectors share this folder. Keep each model and its matching projector in a separate subfolder."
-        pairing_issue = f"{model_path.parent}: multiple model or mmproj files make pairing ambiguous."
+        pairing_issue = f"{model_path.parent}: vision is disabled because multiple model or mmproj files make pairing ambiguous."
     elif projector is None:
-        missing_dependencies.append("mmproj GGUF")
         pairing_issue = f"{model_path}: no mmproj GGUF was found in the same folder."
+    vision_status = "ready" if projector else "ambiguous" if ambiguous_projector else "projector_missing"
+    capability_message = None
+    if vision_status == "ambiguous":
+        capability_message = "Text-only because the vision projector cannot be paired unambiguously. Keep each model and matching mmproj in a separate subfolder to enable vision."
+    elif vision_status == "projector_missing":
+        capability_message = "Text-only because no matching mmproj was found in the same folder. T2VA remains available."
     configured = _configured_models().get(model_path.name, {})
     return {
         "id": model_id,
@@ -109,7 +116,9 @@ def _model_candidate(
         "runtime_ready": not missing_dependencies,
         "missing_dependencies": missing_dependencies,
         "setup_message": setup_message,
-        "capabilities": _gemma_capabilities(name),
+        "vision_status": vision_status,
+        "capability_message": capability_message,
+        "capabilities": _gemma_capabilities(name) if projector else _text_only_capabilities(),
     }, pairing_issue
 
 

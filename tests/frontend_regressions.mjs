@@ -23,6 +23,8 @@ const {
   audioWasAdded,
   createStudioState,
   currentSystemPromptOverride,
+  isGenerationModeAvailable,
+  isTextOnlyDirectModel,
   loadCustomSystemPrompts,
   loadApiProviderConfig,
   loadExternalServerConfig,
@@ -505,6 +507,30 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(state.keepModelLoaded, false);
 });
 
+test("text-only Direct models expose only T2VA", () => {
+  const textOnly = {
+    id: "direct-text-only",
+    family: "gguf",
+    projector: null,
+    capabilities: { images: false, video_frames: false, audio: false },
+  };
+  const vision = {
+    id: "direct-vision",
+    family: "gguf",
+    projector: "mmproj.gguf",
+    capabilities: { images: true, video_frames: true, audio: false },
+  };
+
+  assert.equal(isTextOnlyDirectModel(textOnly), true);
+  assert.equal(isGenerationModeAvailable(textOnly, "T2VA"), true);
+  for (const mode of ["I2VA", "FL2VA", "L2VA", "Reference", "Music3"]) {
+    assert.equal(isGenerationModeAvailable(textOnly, mode), false);
+  }
+  assert.equal(isTextOnlyDirectModel(vision), false);
+  assert.equal(isGenerationModeAvailable(vision, "Reference"), true);
+  assert.equal(isGenerationModeAvailable({ family: "external", capabilities: { images: false } }, "Reference"), true);
+});
+
 test("Generate and Refine payloads are built from state rather than Settings DOM", () => {
   const state = createStudioState({ sessionId: "11111111-2222-4333-8444-555555555555", storage: memoryStorage() });
   state.mode = "Reference";
@@ -844,7 +870,18 @@ test("active requests block add, reorder, and mode switching", () => {
   assert.match(mainSource, /dragstart[\s\S]{0,180}if \(studio\.requestBusy\)/);
   assert.match(mainSource, /drop[\s\S]{0,180}if \(studio\.requestBusy\) return/);
   assert.match(mainSource, /if \(!files\.length \|\| studio\.requestBusy\) return/);
-  assert.match(mainSource, /querySelectorAll\("\[data-mode\]"\)[\s\S]{0,120}control\.disabled = busy/);
+  assert.match(mainSource, /studio\.requestBusy = busy;[\s\S]{0,120}syncModeAvailability\(\)/);
+  assert.match(mainSource, /const unavailable = !isGenerationModeAvailable[\s\S]{0,180}control\.disabled = studio\.requestBusy \|\| unavailable/);
+});
+
+test("text-only Direct UI disables visual and Music modes and explains the fallback", () => {
+  assert.match(mainSource, /function syncModeAvailability\(\)/);
+  assert.match(mainSource, /data-workspace[\s\S]{0,220}control\.dataset\.workspace === "music"/);
+  assert.match(mainSource, /Text-only model · T2VA available/);
+  assert.match(mainSource, /Switched to T2VA/);
+  assert.match(mainSource, /if \(!generationModeIsAvailable\(\)\) return/);
+  assert.match(stylesSource, /\.h3ps-modes button:disabled/);
+  assert.match(skinSource, /\.h3ps-workspaces button:disabled/);
 });
 
 test("fullscreen reuses the studio root and persists its UI state", () => {

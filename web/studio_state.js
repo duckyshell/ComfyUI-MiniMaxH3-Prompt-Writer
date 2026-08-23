@@ -21,6 +21,14 @@ export function audioWasAdded(previousAssets, nextAssets) {
     && nextAssets.some((asset) => asset.type === "audio");
 }
 
+export function isTextOnlyDirectModel(model) {
+  return model?.family === "gguf" && model?.capabilities?.images === false;
+}
+
+export function isGenerationModeAvailable(model, mode) {
+  return !isTextOnlyDirectModel(model) || mode === "T2VA";
+}
+
 export function isModeDraftDirty(mode, draft, defaults) {
   return isPersistedDraftMode(mode)
     && Boolean(draft)

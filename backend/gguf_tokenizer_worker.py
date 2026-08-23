@@ -4,6 +4,16 @@ import json
 import sys
 from pathlib import Path
 
+if __package__:
+    from .text_normalization import normalize_unicode_text
+else:
+    # Windows embeddable Python can omit the executed script directory from
+    # sys.path. This mutation is confined to this child worker and exposes only
+    # the plugin package root; the main ComfyUI process is never modified.
+    package_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(package_root))
+    from backend.text_normalization import normalize_unicode_text
+
 
 def _write(value: dict) -> None:
     print(json.dumps(value, ensure_ascii=False), flush=True)
@@ -33,7 +43,8 @@ def main() -> int:
                     return 0
                 if request.get("operation") != "count" or not isinstance(request.get("text"), str):
                     raise ValueError("Invalid tokenizer request.")
-                count = len(model.tokenize(request["text"].encode("utf-8"), add_bos=True))
+                text = normalize_unicode_text(request["text"])
+                count = len(model.tokenize(text.encode("utf-8"), add_bos=True))
                 _write({"id": request.get("id"), "count": count})
             except Exception as error:
                 _write({"id": request.get("id") if isinstance(request, dict) else None, "error": str(error)})

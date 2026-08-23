@@ -10,6 +10,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from .text_normalization import normalize_unicode_text
+
 
 class TokenizerPreflightError(RuntimeError):
     pass
@@ -41,7 +43,7 @@ class VocabOnlyTokenizerClient:
         environment["CUDA_VISIBLE_DEVICES"] = "-1"
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
         self.process = subprocess.Popen(
-            [sys.executable, str(worker), self.identity[0]],
+            [sys.executable, "-X", "utf8", str(worker), self.identity[0]],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -86,6 +88,7 @@ class VocabOnlyTokenizerClient:
         return message
 
     def count(self, text: str) -> int:
+        text = normalize_unicode_text(text)
         with self._lock:
             if self.process.poll() is not None:
                 raise TokenizerPreflightError("The vocab-only tokenizer is no longer running.")

@@ -7,6 +7,7 @@ from .guides import MODE_GUIDES, guide_for_mode, load_guide, reference_base_exce
 from .media import STORE, MediaError, parse_session_id
 from .references import canonical_reference_tags
 from .system_prompts import SystemPromptError, resolve_system_prompt
+from .text_normalization import normalize_unicode_text
 
 
 ASPECT_RATIOS = {"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"}
@@ -26,7 +27,7 @@ def _required_text(body: dict[str, Any], key: str, label: str) -> str:
     value = body.get(key)
     if not isinstance(value, str) or not value.strip():
         raise AssemblyError("INVALID_REQUEST", f"{label} is required.", {"field": key})
-    return value.strip()
+    return normalize_unicode_text(value).strip()
 
 
 def _media_line(asset: dict[str, Any]) -> str:
@@ -84,7 +85,7 @@ def _validated_music_caption_context(source: dict[str, Any]) -> tuple[str, str]:
     lyrics = source.get("lyrics", "")
     if not isinstance(lyrics, str):
         raise AssemblyError("INVALID_REQUEST", "Lyrics must be text.", {"field": "lyrics"})
-    lyrics = lyrics.strip()
+    lyrics = normalize_unicode_text(lyrics).strip()
     if len(lyrics) > 4000:
         raise AssemblyError("LYRICS_TOO_LONG", "Lyrics cannot exceed 4,000 characters.")
     return brief, lyrics
@@ -386,9 +387,9 @@ def assemble_lyrics_request(body: dict[str, Any]) -> dict[str, Any]:
         raise AssemblyError("INVALID_REQUEST", "Use Music Brief must be a boolean.", {"field": "use_music_brief"})
     if not isinstance(brief, str):
         raise AssemblyError("INVALID_REQUEST", "Music Brief must be text.", {"field": "creative_brief"})
-    current_lyrics = current_lyrics.strip()
-    instruction = instruction.strip()
-    brief = brief.strip() if use_music_brief else ""
+    current_lyrics = normalize_unicode_text(current_lyrics).strip()
+    instruction = normalize_unicode_text(instruction).strip()
+    brief = normalize_unicode_text(brief).strip() if use_music_brief else ""
     if len(current_lyrics) > 4000:
         raise AssemblyError("LYRICS_TOO_LONG", "Lyrics cannot exceed 4,000 characters.")
     if len(instruction) > 2000:

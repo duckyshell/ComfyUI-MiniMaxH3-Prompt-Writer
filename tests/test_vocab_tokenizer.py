@@ -1,13 +1,35 @@
+import json
 import os
+import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
 
+from backend.text_normalization import normalize_unicode_text
 from backend.vocab_tokenizer import VocabOnlyTokenizerClient, model_identity
 
 
 class VocabTokenizerTests(unittest.TestCase):
+    def test_worker_imports_sibling_normalizer_in_isolated_python(self):
+        worker = Path(__file__).parents[1] / "backend" / "gguf_tokenizer_worker.py"
+        result = subprocess.run(
+            [sys.executable, "-I", "-X", "utf8", str(worker)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=10,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"ready": False, "error": "Expected one GGUF model path."},
+        )
+        self.assertNotIn("ModuleNotFoundError", result.stderr)
+
     def test_cached_worker_protocol_forces_cpu_vocab_only_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -35,6 +57,8 @@ class VocabTokenizerTests(unittest.TestCase):
             try:
                 self.assertEqual(client.count("four"), 4)
                 self.assertEqual(client.count("sixsix"), 6)
+                multilingual = "Русский 中文 العربية 😀 broken:\udc90"
+                self.assertEqual(client.count(multilingual), len(normalize_unicode_text(multilingual)))
                 self.assertTrue(client.startup["vocab_only"])
                 self.assertEqual(client.startup["n_gpu_layers"], 0)
                 self.assertEqual(client.startup["cuda_visible_devices"], "-1")

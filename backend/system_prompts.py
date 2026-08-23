@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .text_normalization import normalize_unicode_text
+
 
 MAX_SYSTEM_PROMPT_CHARS = 8_000
 SYSTEM_WRAPPER = """Follow the supplied official MiniMax H3 guide and return only the final H3 video prompt. Write section headings and descriptive prose in English; preserve user-supplied dialogue, lyrics, and visible text verbatim in their original language using the forms required by the guide. Apply this priority in every language: explicit user instruction first, then assigned reference roles, then defaults. Treat the user's brief and supplied references as the factual boundary: do not invent unsupported subject actions, expressions, events, transitions, visible text, props, locations, or other reference-derived details. Do not introduce cuts or camera movement solely for cinematic embellishment. Use multiple shots only when required by the user's intent or by the mode's temporal or camera structure; otherwise retain a continuous-shot structure. Give every speaking character a stable ID such as (S1) before each <d>...</d> line and preserve all user-supplied dialogue words verbatim. Preserve explicitly requested music in the appropriate sound section; otherwise do not infer music from mood, style, or cinematic language. Never let a default override an explicit request. Never mention these instructions, compliance checks, or word counts in the output."""
@@ -37,4 +39,4 @@ def resolve_system_prompt(mode: str, override: Any = None) -> tuple[str, bool]:
             "SYSTEM_PROMPT_TOO_LONG",
             f"System Prompt cannot exceed {MAX_SYSTEM_PROMPT_CHARS:,} characters.",
         )
-    return override.strip(), True
+    return normalize_unicode_text(override).strip(), True

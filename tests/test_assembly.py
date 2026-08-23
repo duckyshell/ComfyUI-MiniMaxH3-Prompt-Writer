@@ -52,6 +52,25 @@ class SystemPromptTests(unittest.TestCase):
         self.assertEqual(prompt, "Custom instruction.")
         self.assertTrue(custom)
 
+    def test_multilingual_input_preserves_valid_unicode_and_repairs_only_invalid_surrogates(self):
+        manifest = {"session_id": "11111111-2222-4333-8444-555555555555", "mode": "T2VA", "assets": [], "valid": True}
+        body = {
+            "session_id": manifest["session_id"],
+            "mode": "T2VA",
+            "duration_seconds": 6,
+            "aspect_ratio": "16:9",
+            "creative_brief": "Русский 中文 العربية हिन्दी 😀 broken:\udc90",
+            "system_prompt_override": "日本語 😀 invalid:\ud800",
+        }
+
+        with patch("backend.assembly.STORE.manifest", return_value=manifest):
+            assembled = assemble_request(body)
+
+        assembled_text = "\n".join(message["content"] for message in assembled["messages"])
+        self.assertIn("Русский 中文 العربية हिन्दी 😀 broken:\ufffd", assembled_text)
+        self.assertIn("日本語 😀 invalid:\ufffd", assembled_text)
+        assembled_text.encode("utf-8")
+
     def test_custom_music_prompt_fully_replaces_the_builtin_contract(self):
         assembled = assemble_request({
             "session_id": "11111111-2222-4333-8444-555555555555",

@@ -19,7 +19,7 @@ GEMMA_ADAPTER = GGUFArchitectureAdapter(
     label="Gemma",
     architectures=("gemma4",),
     minimum_runtime=(0, 3, 34),
-    projector_types=("gemma4uv",),
+    projector_types=("gemma4uv", "gemma4v"),
 )
 QWEN35_ADAPTER = GGUFArchitectureAdapter(
     id="qwen35",

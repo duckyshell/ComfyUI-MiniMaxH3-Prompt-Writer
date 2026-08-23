@@ -36,6 +36,18 @@ class GGUFAdapterTests(unittest.TestCase):
         self.assertFalse(runtime_supports(QWEN35_ADAPTER, "0.3.35", module_available=False))
         self.assertFalse(runtime_supports(None, "0.3.35", module_available=True))
 
+    def test_gemma_accepts_both_upstream_projector_variants(self):
+        model = {"embedding_length": 3_840}
+        projector = {
+            "architecture": "clip",
+            "has_vision_encoder": True,
+            "projector_projection_dim": 3_840,
+        }
+
+        self.assertEqual(GEMMA_ADAPTER.projector_types, ("gemma4uv", "gemma4v"))
+        self.assertTrue(projector_is_compatible(GEMMA_ADAPTER, model, {**projector, "projector_type": "gemma4uv"}))
+        self.assertTrue(projector_is_compatible(GEMMA_ADAPTER, model, {**projector, "projector_type": "gemma4v"}))
+
     def test_qwen_projector_requires_type_vision_and_matching_projection(self):
         model = {"embedding_length": 5_120}
         projector = {

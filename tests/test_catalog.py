@@ -191,6 +191,33 @@ class ModelDiscoveryTests(unittest.TestCase):
             self.assertEqual(models[0]["capabilities"], {"images": False, "video_frames": False, "audio": False})
             self.assertEqual(diagnostics["totals"]["incomplete_models"], 0)
 
+    def test_discovery_ignores_directories_whose_names_end_in_gguf(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            misleading_directory = root / "Qwen3.8-27B.gguf"
+            misleading_directory.mkdir()
+            model_path = misleading_directory / "Qwen3.8-27B.gguf"
+            write_model(model_path, architecture="qwen35", dimension=5_120, name="Qwen3.8-27B")
+
+            models, diagnostics = self.discover_with_diagnostics([root])
+
+        self.assertEqual([model["path"] for model in models], [str(model_path.resolve())])
+        self.assertEqual(diagnostics["roots"][0]["model_files"], [str(model_path.resolve())])
+        self.assertNotIn(str(misleading_directory.resolve()), diagnostics["roots"][0]["model_files"])
+
+    def test_gemma4v_projector_is_compatible_when_projection_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(root / "gemma-4-test.gguf", dimension=2_816)
+            projector = root / "mmproj-Q8_0.gguf"
+            write_projector(projector, projector_type="gemma4v", dimension=2_816)
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["projector"], str(projector.resolve()))
+        self.assertEqual(model["vision_status"], "compatible")
+        self.assertTrue(model["capabilities"]["images"])
+
     def test_missing_runtime_still_blocks_text_only_model(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -269,6 +296,13 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertFalse(model["runtime_supported"])
         self.assertFalse(model["runtime_ready"])
         self.assertIn("llama-cpp-python>=0.3.35 for qwen35", model["missing_dependencies"])
+        self.assertTrue(model["model_ready"])
+        self.assertEqual(model["runtime_requirement"], {
+            "state": "update_required",
+            "installed_version": "0.3.34",
+            "minimum_version": "0.3.35",
+            "adapter": "qwen35",
+        })
 
     def test_qwen_context_choices_are_capped_by_declared_native_context(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -399,6 +433,18 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertEqual(model["metadata_status"], "invalid")
         self.assertFalse(model["runtime_ready"])
         self.assertIn("readable GGUF metadata", model["missing_dependencies"])
+
+    def test_invalid_header_cannot_inherit_a_verified_filename_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Qwen3.8-27B-UD-Q4_K_XL.gguf").write_bytes(b"not a gguf")
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["name"], "Qwen3.8-27B-UD-Q4_K_XL")
+        self.assertFalse(model["model_ready"])
+        self.assertFalse(model["configuration_verified"])
+        self.assertEqual(model["verification_status"], "unsupported")
 
     def test_discovery_summary_preserves_ready_pairing(self):
         with tempfile.TemporaryDirectory() as directory:

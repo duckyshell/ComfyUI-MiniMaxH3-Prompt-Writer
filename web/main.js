@@ -1326,6 +1326,21 @@ function renderModelSetup() {
     </div>`;
 }
 
+function directRuntimeActionCommand() {
+  const actions = studio.ggufRuntimeDiagnostics?.actions || {};
+  const onboarding = studio.ggufRuntimeDiagnostics?.onboarding || {};
+  return typeof actions.install_or_upgrade_command === "string"
+    ? actions.install_or_upgrade_command
+    : typeof onboarding.install_command === "string"
+      ? onboarding.install_command
+      : "";
+}
+
+function renderDirectRuntimeCommand(command, action = "installation") {
+  if (!command) return "";
+  return `<div class="h3ps-direct-runtime-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-direct-runtime-command="${escapeHtml(command)}" title="Copy ${escapeHtml(action)} command" aria-label="Copy ${escapeHtml(action)} command">${icon("copy", 13)}</button></div><small>Close ComfyUI, run this from your ComfyUI Portable folder containing <code>python_embeded</code>, then restart ComfyUI.</small>`;
+}
+
 function renderDirectRuntimeStatus() {
   const diagnostics = studio.ggufRuntimeDiagnostics;
   if (!diagnostics) {
@@ -1336,11 +1351,11 @@ function renderDirectRuntimeStatus() {
   const onboarding = diagnostics.onboarding || {};
   if (onboarding.state === "ready") return "";
   if (onboarding.state === "missing") {
-    const command = typeof onboarding.install_command === "string" ? onboarding.install_command : "";
+    const command = directRuntimeActionCommand();
     return `<section class="h3ps-direct-runtime-state is-missing">
       <header><span><small>Runtime</small><strong>llama-cpp-python is not installed.</strong></span></header>
       <p>Direct GGUF needs an additional native runtime. Ollama and API providers work without it.</p>
-      ${command ? `<div class="h3ps-direct-runtime-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-direct-runtime-command="${escapeHtml(command)}" title="Copy install command" aria-label="Copy install command">${icon("copy", 13)}</button></div><small>Run this from your ComfyUI Portable folder containing <code>python_embeded</code>. Restart ComfyUI after installation.</small>` : ""}
+      ${renderDirectRuntimeCommand(command)}
       <div class="h3ps-direct-runtime-links"><a href="${INSTALLATION_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Installation guide ↗</a><a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Troubleshooting guide ↗</a></div>
     </section>`;
   }
@@ -1361,7 +1376,8 @@ function localRuntimeLabel() {
     : diagnostics.gpu_offload === false
       ? "GPU offload unavailable"
       : "Runtime detected";
-  return `${offload}${diagnostics.backend ? ` · ${diagnostics.backend}` : ""}`;
+  const version = diagnostics.package_version ? ` ${diagnostics.package_version}` : "";
+  return `${offload === "Runtime detected" ? `Runtime${version} detected` : `${offload}${version}`}${diagnostics.backend ? ` · ${diagnostics.backend}` : ""}`;
 }
 
 function syncSelectedModelSourceLabel() {
@@ -1694,6 +1710,29 @@ function syncProviderSettings() {
   runtimeSettings.hidden = provider !== "direct";
 }
 
+function directModelRuntimeSuffix(model) {
+  const requirement = model.runtime_requirement || {};
+  if (requirement.state === "update_required") {
+    return `Runtime ${requirement.minimum_version}+ required`;
+  }
+  if (requirement.state === "missing") return "Runtime required";
+  if (requirement.state === "incompatible") return "Runtime incompatible";
+  return "";
+}
+
+function renderDirectModelRuntimeUpdate(model) {
+  const requirement = model.runtime_requirement || {};
+  const installed = requirement.installed_version || studio.ggufRuntimeDiagnostics?.package_version || "unknown";
+  const minimum = requirement.minimum_version || "a newer version";
+  const command = directRuntimeActionCommand();
+  return `<section class="h3ps-direct-runtime-state is-missing">
+    <header><span><small>Runtime</small><strong>Runtime update required</strong></span></header>
+    <p>Installed llama-cpp-python ${escapeHtml(installed)}. ${escapeHtml(model.name)} requires ${escapeHtml(minimum)} or newer.</p>
+    ${renderDirectRuntimeCommand(command, "update")}
+    ${command ? "" : `<div class="h3ps-direct-runtime-links"><a href="${INSTALLATION_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Installation guide ↗</a><a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Troubleshooting guide ↗</a></div>`}
+  </section>`;
+}
+
 function renderInferenceSettings() {
   const models = localModels();
   const directModel = directModelForSettings();
@@ -1701,11 +1740,12 @@ function renderInferenceSettings() {
   select.disabled = !models.length;
   select.innerHTML = models.length
     ? models.map((model) => {
-      const modelFileNeedsSetup = (model.missing_dependencies || []).some((dependency) => dependency !== "llama-cpp-python");
+      const modelFileNeedsSetup = model.model_ready === false;
       const suffix = [
         modelVramLabel(model),
         model.format,
         modelFileNeedsSetup ? "Needs setup" : "",
+        directModelRuntimeSuffix(model),
         isTextOnlyDirectModel(model) ? "Text only" : "",
       ].filter(Boolean).join(" · ");
       return `<option value="${escapeHtml(model.id)}" ${model.id === directModel?.id ? "selected" : ""}>${escapeHtml(model.name.split("/").pop())}${suffix ? ` — ${escapeHtml(suffix)}` : ""}</option>`;
@@ -1716,12 +1756,14 @@ function renderInferenceSettings() {
   if (!models.length) {
     directStatus.innerHTML = renderModelSetup();
   } else if (directModel) {
-    const missingModelFiles = (directModel.missing_dependencies || []).filter((dependency) => dependency !== "llama-cpp-python");
-    directStatus.innerHTML = missingModelFiles.length
-      ? `<div class="h3ps-direct-model-warning"><strong>Model needs attention</strong><span>${escapeHtml(directModel.setup_message || `Missing ${missingModelFiles.join(", ")}`)}</span></div>`
-      : isTextOnlyDirectModel(directModel)
-        ? `<div class="h3ps-direct-model-note"><strong>Text-only model · T2VA available</strong><span>${escapeHtml(directModel.capability_message || "No compatible vision projector is active.")}</span></div>`
-        : "";
+    const runtimeRequirement = directModel.runtime_requirement || {};
+    directStatus.innerHTML = directModel.model_ready === false
+      ? `<div class="h3ps-direct-model-warning"><strong>Model needs attention</strong><span>${escapeHtml(directModel.setup_message || "The GGUF metadata or architecture is not supported.")}</span></div>`
+      : runtimeRequirement.state === "update_required"
+        ? renderDirectModelRuntimeUpdate(directModel)
+        : isTextOnlyDirectModel(directModel)
+          ? `<div class="h3ps-direct-model-note"><strong>Text-only model · T2VA available</strong><span>${escapeHtml(directModel.capability_message || "No compatible vision projector is active.")}</span></div>`
+          : "";
   } else {
     directStatus.innerHTML = "";
   }

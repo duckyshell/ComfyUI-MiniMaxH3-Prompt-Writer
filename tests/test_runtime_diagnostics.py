@@ -70,6 +70,16 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         self.assertTrue(result["onboarding"]["install_command"].startswith(".\\python_embeded\\python.exe"))
         self.assertIn("llama-cpp-python>=0.3.35,<0.4", result["onboarding"]["install_command"])
 
+    def test_ready_tested_runtime_exposes_the_same_safe_upgrade_action(self):
+        with patch.object(runtime_diagnostics, "_is_tested_windows_cuda13_environment", return_value=True):
+            result = self.probe("0.3.34")
+
+        self.assertEqual(result["onboarding"]["state"], "ready")
+        self.assertEqual(result["actions"], {
+            "tested_environment": True,
+            "install_or_upgrade_command": runtime_diagnostics.TESTED_WINDOWS_CUDA13_INSTALL_COMMAND,
+        })
+
     def test_tested_environment_requires_windows_embedded_python_and_cuda13(self):
         with (
             patch.object(runtime_diagnostics.sys, "platform", "win32"),

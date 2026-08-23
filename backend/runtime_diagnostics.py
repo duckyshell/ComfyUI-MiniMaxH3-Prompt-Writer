@@ -59,6 +59,14 @@ def _runtime_onboarding(diagnostics: dict[str, Any]) -> dict[str, Any]:
     return {"state": "broken", "tested_environment": False, "install_command": None}
 
 
+def _runtime_actions(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    tested_environment = _is_tested_windows_cuda13_environment(diagnostics.get("accelerator"))
+    return {
+        "tested_environment": tested_environment,
+        "install_or_upgrade_command": TESTED_WINDOWS_CUDA13_INSTALL_COMMAND if tested_environment else None,
+    }
+
+
 def _module_available() -> bool:
     try:
         return importlib.util.find_spec("llama_cpp") is not None
@@ -117,6 +125,7 @@ def get_gguf_runtime_diagnostics(*, force: bool = False) -> dict[str, Any]:
     with _CACHE_LOCK:
         if _CACHE is None or force:
             _CACHE = _run_probe()
+            _CACHE["actions"] = _runtime_actions(_CACHE)
             _CACHE["onboarding"] = _runtime_onboarding(_CACHE)
         return copy.deepcopy(_CACHE)
 

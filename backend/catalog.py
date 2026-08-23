@@ -18,6 +18,7 @@ from .models.gguf_adapters import (
     architecture_adapter,
     projector_is_compatible,
     runtime_supports,
+    version_tuple,
 )
 from .models.gguf_policies import (
     identify_model_policy,
@@ -137,6 +138,18 @@ def _model_candidate(
     adapter = architecture_adapter(architecture)
     architecture_recognized = adapter is not None
     installed_runtime_support = runtime_supports(adapter, runtime_version, module_available=runtime_available)
+    minimum_runtime = ".".join(str(part) for part in adapter.minimum_runtime) if adapter else None
+    parsed_runtime = version_tuple(runtime_version)
+    if not architecture_recognized:
+        runtime_requirement_state = "not_applicable"
+    elif not runtime_available:
+        runtime_requirement_state = "missing"
+    elif installed_runtime_support:
+        runtime_requirement_state = "ready"
+    elif parsed_runtime and adapter and parsed_runtime < adapter.minimum_runtime:
+        runtime_requirement_state = "update_required"
+    else:
+        runtime_requirement_state = "incompatible"
 
     missing_dependencies: list[str] = []
     setup_message = None
@@ -149,8 +162,7 @@ def _model_candidate(
     elif not runtime_available:
         missing_dependencies.append("llama-cpp-python")
     elif not installed_runtime_support:
-        minimum = ".".join(str(part) for part in adapter.minimum_runtime)
-        missing_dependencies.append(f"llama-cpp-python>={minimum} for {adapter.id}")
+        missing_dependencies.append(f"llama-cpp-python>={minimum_runtime} for {adapter.id}")
         setup_message = f"The installed llama-cpp-python {runtime_version or 'version'} does not support the {adapter.id} Direct adapter."
 
     if metadata:
@@ -161,7 +173,7 @@ def _model_candidate(
     text_fallback = " T2VA remains available." if not missing_dependencies else ""
     capability_message = None if vision_status == "compatible" else f"Vision unavailable: {pairing_message}{text_fallback}"
 
-    configured = _configured_models().get(model_path.name, {})
+    configured = _configured_models().get(model_path.name, {}) if metadata and architecture_recognized else {}
     metadata_name = str((metadata or {}).get("name") or "") or None
     model_policy = identify_model_policy(architecture, metadata_name)
     qwen_context = adapter is not None and adapter.id in QWEN_VISION_ADAPTER_IDS
@@ -178,7 +190,7 @@ def _model_candidate(
         "enable_thinking": False,
         "reasoning_effort": False,
     }
-    configuration_verified = (
+    configuration_verified = bool(metadata) and architecture_recognized and (
         (bool(configured) and not qwen_context)
         or policy_is_verified_configuration(model_policy, model_path)
         or non_policy_verified
@@ -222,6 +234,13 @@ def _model_candidate(
         "runtime_version": runtime_version,
         "runtime_supported": installed_runtime_support,
         "runtime_ready": not missing_dependencies,
+        "model_ready": metadata is not None and architecture_recognized,
+        "runtime_requirement": {
+            "state": runtime_requirement_state,
+            "installed_version": runtime_version,
+            "minimum_version": minimum_runtime,
+            "adapter": adapter.id if adapter else None,
+        },
         "missing_dependencies": missing_dependencies,
         "setup_message": setup_message,
         "vision_status": vision_status,
@@ -269,8 +288,14 @@ def discover_models_with_diagnostics() -> tuple[list[dict[str, Any]], dict[str, 
             root_diagnostics["issues"].append("Directory does not exist.")
             continue
 
-        gguf_files = [path for path in root.rglob("*.gguf") if "mmproj" not in path.name.lower()]
-        projectors = [path for path in root.rglob("*.gguf") if "mmproj" in path.name.lower()]
+        gguf_files = [
+            path for path in root.rglob("*.gguf")
+            if path.is_file() and "mmproj" not in path.name.lower()
+        ]
+        projectors = [
+            path for path in root.rglob("*.gguf")
+            if path.is_file() and "mmproj" in path.name.lower()
+        ]
         root_diagnostics["model_files"] = [str(path.resolve()) for path in sorted(gguf_files)]
         root_diagnostics["projector_files"] = [str(path.resolve()) for path in sorted(projectors)]
         if not gguf_files and not projectors:
@@ -317,6 +342,8 @@ def discover_models() -> list[dict[str, Any]]:
 def _directory_signature(directory: Path) -> tuple[tuple[str, int, int], ...]:
     entries = []
     for path in directory.glob("*.gguf"):
+        if not path.is_file():
+            continue
         try:
             stat = path.stat()
         except OSError:

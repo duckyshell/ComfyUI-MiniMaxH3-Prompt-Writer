@@ -238,9 +238,9 @@ class GGUFBackend:
                 "verbose": False,
             }
             if not text_only:
-                from llama_cpp.llama_chat_format import Gemma4ChatHandler
+                from llama_cpp.llama_chat_format import MTMDChatHandler
 
-                self.chat_handler = Gemma4ChatHandler(
+                self.chat_handler = MTMDChatHandler(
                     clip_model_path=model_info["projector"],
                     verbose=False,
                     use_gpu=True,

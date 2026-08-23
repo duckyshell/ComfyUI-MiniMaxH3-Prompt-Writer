@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import importlib.metadata
 import importlib.util
 import json
 from functools import lru_cache
@@ -9,6 +10,9 @@ from typing import Any
 from urllib.parse import quote
 
 import folder_paths
+
+from .gguf_metadata import GGUFMetadataError, read_gguf_metadata
+from .models.gguf_adapters import architecture_adapter, projector_is_compatible, runtime_supports
 
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "models.json"
@@ -58,11 +62,7 @@ def model_setup_catalog() -> list[dict[str, Any]]:
     return result
 
 
-def _gemma_capabilities(name: str) -> dict[str, bool | None]:
-    normalized = name.lower().replace("_", "-")
-    is_gemma4 = "gemma-4" in normalized or "gemma4" in normalized
-    if not is_gemma4:
-        return {"images": None, "video_frames": None, "audio": None}
+def _vision_capabilities() -> dict[str, bool]:
     return {"images": True, "video_frames": True, "audio": False}
 
 
@@ -74,33 +74,88 @@ def _display_name(path: Path) -> str:
     return path.stem
 
 
+def _runtime_version() -> str | None:
+    try:
+        return importlib.metadata.version("llama-cpp-python")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _metadata_result(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        return read_gguf_metadata(path), None
+    except (GGUFMetadataError, OSError, RuntimeError) as error:
+        return None, str(error)
+
+
+def _pair_projector(
+    model_metadata: dict[str, Any],
+    sibling_models: list[Path],
+    sibling_projectors: list[Path],
+) -> tuple[Path | None, str, str | None]:
+    if not sibling_projectors:
+        return None, "missing", "No mmproj GGUF was found in the same folder."
+    if len(sibling_models) > 1:
+        return None, "ambiguous", "Multiple model GGUF files share this folder. Keep each model and its matching projector in a separate subfolder."
+
+    adapter = architecture_adapter(model_metadata.get("architecture"))
+    compatible: list[Path] = []
+    for projector_path in sibling_projectors:
+        projector_metadata, _error = _metadata_result(projector_path)
+        if projector_metadata and projector_is_compatible(adapter, model_metadata, projector_metadata):
+            compatible.append(projector_path)
+    if len(compatible) == 1:
+        return compatible[0], "compatible", None
+    if len(compatible) > 1:
+        return None, "ambiguous", "Multiple compatible vision projectors share this folder. Keep only the intended projector beside the model."
+    return None, "incompatible", "The mmproj files in this folder are not metadata-compatible with this model."
+
+
 def _model_candidate(
     model_path: Path,
     sibling_models: list[Path],
     sibling_projectors: list[Path],
     *,
     runtime_available: bool,
+    runtime_version: str | None,
 ) -> tuple[dict[str, Any], str | None]:
     model_id = str(model_path.resolve())
-    name = _display_name(model_path)
-    ambiguous_projector = len(sibling_models) > 1 or len(sibling_projectors) > 1
-    projector = sibling_projectors[0] if len(sibling_models) == 1 and len(sibling_projectors) == 1 else None
-    missing_dependencies = []
+    metadata, metadata_error = _metadata_result(model_path)
+    architecture = metadata.get("architecture") if metadata else None
+    adapter = architecture_adapter(architecture)
+    architecture_recognized = adapter is not None
+    installed_runtime_support = runtime_supports(adapter, runtime_version, module_available=runtime_available)
+
+    missing_dependencies: list[str] = []
     setup_message = None
-    pairing_issue = None
-    if not runtime_available:
+    if metadata is None:
+        missing_dependencies.append("readable GGUF metadata")
+        setup_message = f"Writer could not read this GGUF header: {metadata_error}"
+    elif not architecture_recognized:
+        missing_dependencies.append("supported GGUF architecture")
+        setup_message = f"Architecture {architecture or 'unknown'} is discoverable but not supported by Direct GGUF."
+    elif not runtime_available:
         missing_dependencies.append("llama-cpp-python")
-    if ambiguous_projector:
-        pairing_issue = f"{model_path.parent}: vision is disabled because multiple model or mmproj files make pairing ambiguous."
-    elif projector is None:
-        pairing_issue = f"{model_path}: no mmproj GGUF was found in the same folder."
-    vision_status = "ready" if projector else "ambiguous" if ambiguous_projector else "projector_missing"
-    capability_message = None
-    if vision_status == "ambiguous":
-        capability_message = "Text-only because the vision projector cannot be paired unambiguously. Keep each model and matching mmproj in a separate subfolder to enable vision."
-    elif vision_status == "projector_missing":
-        capability_message = "Text-only because no matching mmproj was found in the same folder. T2VA remains available."
+    elif not installed_runtime_support:
+        minimum = ".".join(str(part) for part in adapter.minimum_runtime)
+        missing_dependencies.append(f"llama-cpp-python>={minimum} for {adapter.id}")
+        setup_message = f"The installed llama-cpp-python {runtime_version or 'version'} does not support the {adapter.id} Direct adapter."
+
+    if metadata:
+        projector, vision_status, pairing_message = _pair_projector(metadata, sibling_models, sibling_projectors)
+    else:
+        projector, vision_status, pairing_message = None, "incompatible", "Vision is disabled because the model metadata could not be read."
+    pairing_issue = f"{model_path}: {pairing_message}" if pairing_message else None
+    text_fallback = " T2VA remains available." if not missing_dependencies else ""
+    capability_message = None if vision_status == "compatible" else f"Vision unavailable: {pairing_message}{text_fallback}"
+
     configured = _configured_models().get(model_path.name, {})
+    name = str((metadata or {}).get("name") or _display_name(model_path))
+    template_controls = (metadata or {}).get("template_controls") or {
+        "enable_thinking": False,
+        "reasoning_effort": False,
+    }
+    configuration_verified = bool(configured)
     return {
         "id": model_id,
         "name": name,
@@ -112,13 +167,41 @@ def _model_candidate(
         "recommended_context": configured.get("recommended_context", "standard"),
         "estimated_free_vram_mb": configured.get("estimated_free_vram_mb"),
         "f16_kv_extra_mb_16k": configured.get("f16_kv_extra_mb_16k", 0),
-        "thinking": "gemma-4" in name.lower(),
+        "thinking": bool(template_controls["enable_thinking"]),
+        "discovery_status": "found",
+        "metadata_status": "readable" if metadata else "invalid",
+        "metadata_error": metadata_error,
+        "architecture": architecture,
+        "architecture_adapter": adapter.id if adapter else "unknown",
+        "architecture_recognized": architecture_recognized,
+        "runtime_version": runtime_version,
+        "runtime_supported": installed_runtime_support,
         "runtime_ready": not missing_dependencies,
         "missing_dependencies": missing_dependencies,
         "setup_message": setup_message,
         "vision_status": vision_status,
         "capability_message": capability_message,
-        "capabilities": _gemma_capabilities(name) if projector else _text_only_capabilities(),
+        "configuration_verified": configuration_verified,
+        "verification_status": "verified" if configuration_verified else "compatible_unverified" if architecture_recognized else "unsupported",
+        "verified_capabilities": {
+            "text": configuration_verified,
+            "vision": configuration_verified and projector is not None,
+        },
+        "native_context_tokens": (metadata or {}).get("context_length"),
+        "embedding_length": (metadata or {}).get("embedding_length"),
+        "template_controls": template_controls,
+        "mtp_detected": bool((metadata or {}).get("mtp_detected")),
+        "detected_capabilities": {
+            "thinking": bool(template_controls["enable_thinking"]),
+            "reasoning_effort": bool(template_controls["reasoning_effort"]),
+            "vision_projector": projector is not None,
+        },
+        "projector_metadata": {
+            key: value
+            for key, value in ((_metadata_result(projector)[0] if projector else {}) or {}).items()
+            if key not in {"values", "chat_template"}
+        },
+        "capabilities": _vision_capabilities() if projector else _text_only_capabilities(),
     }, pairing_issue
 
 
@@ -150,6 +233,7 @@ def discover_models_with_diagnostics() -> tuple[list[dict[str, Any]], dict[str, 
         elif not gguf_files:
             root_diagnostics["issues"].append("Vision projector files were found, but no model GGUF was found.")
         runtime_available = importlib.util.find_spec("llama_cpp") is not None
+        runtime_version = _runtime_version() if runtime_available else None
         for model_path in gguf_files:
             model_id = str(model_path.resolve())
             if model_id in seen:
@@ -162,6 +246,7 @@ def discover_models_with_diagnostics() -> tuple[list[dict[str, Any]], dict[str, 
                 sibling_models,
                 sibling_projectors,
                 runtime_available=runtime_available,
+                runtime_version=runtime_version,
             )
             candidates.append(candidate)
             if pairing_issue:
@@ -200,6 +285,7 @@ def _find_model_in_directory(
     model_id: str,
     signature: tuple[tuple[str, int, int], ...],
     runtime_available: bool,
+    runtime_version: str | None,
 ) -> dict[str, Any] | None:
     model_path = Path(model_id)
     files = [model_path.parent / name for name, _size, _mtime in signature]
@@ -212,6 +298,7 @@ def _find_model_in_directory(
         sibling_models,
         sibling_projectors,
         runtime_available=runtime_available,
+        runtime_version=runtime_version,
     )
     return candidate
 
@@ -233,9 +320,11 @@ def find_model(model_id: str) -> dict[str, Any] | None:
     if not any(model_path.is_relative_to(root) for root in roots):
         return None
 
+    runtime_available = importlib.util.find_spec("llama_cpp") is not None
     candidate = _find_model_in_directory(
         str(model_path),
         _directory_signature(model_path.parent),
-        importlib.util.find_spec("llama_cpp") is not None,
+        runtime_available,
+        _runtime_version() if runtime_available else None,
     )
     return copy.deepcopy(candidate)

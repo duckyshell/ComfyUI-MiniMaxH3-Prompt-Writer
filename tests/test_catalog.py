@@ -8,11 +8,39 @@ from unittest.mock import patch
 
 sys.modules.setdefault(
     "folder_paths",
-    types.SimpleNamespace(get_folder_paths=lambda _name: []),
+    types.SimpleNamespace(
+        get_folder_paths=lambda _name: [],
+        get_temp_directory=lambda: tempfile.gettempdir(),
+    ),
 )
 
 from backend import catalog  # noqa: E402
 from backend.catalog import model_setup_catalog  # noqa: E402
+from tests.test_gguf_metadata import TYPE_BOOL, TYPE_STRING, TYPE_UINT32, write_gguf  # noqa: E402
+
+
+def write_model(path: Path, *, architecture: str = "gemma4", dimension: int = 3_840, name: str = "Gemma test") -> None:
+    write_gguf(path, [
+        ("general.architecture", TYPE_STRING, architecture),
+        ("general.name", TYPE_STRING, name),
+        (f"{architecture}.context_length", TYPE_UINT32, 262_144),
+        (f"{architecture}.embedding_length", TYPE_UINT32, dimension),
+        ("tokenizer.chat_template", TYPE_STRING, "{% if enable_thinking %}thinking{% endif %}"),
+    ])
+
+
+def write_projector(
+    path: Path,
+    *,
+    projector_type: str = "gemma4uv",
+    dimension: int = 3_840,
+) -> None:
+    write_gguf(path, [
+        ("general.architecture", TYPE_STRING, "clip"),
+        ("clip.has_vision_encoder", TYPE_BOOL, True),
+        ("clip.vision.projector_type", TYPE_STRING, projector_type),
+        ("clip.vision.projection_dim", TYPE_UINT32, dimension),
+    ])
 
 
 class ModelSetupCatalogTests(unittest.TestCase):
@@ -37,6 +65,7 @@ class ModelDiscoveryTests(unittest.TestCase):
         with (
             patch.object(catalog.folder_paths, "get_folder_paths", return_value=[str(root)]),
             patch.object(catalog.importlib.util, "find_spec", return_value=object()),
+            patch.object(catalog, "_runtime_version", return_value="0.3.35"),
         ):
             return catalog.discover_models()
 
@@ -44,6 +73,7 @@ class ModelDiscoveryTests(unittest.TestCase):
         with (
             patch.object(catalog.folder_paths, "get_folder_paths", return_value=[str(root) for root in roots]),
             patch.object(catalog.importlib.util, "find_spec", return_value=object()),
+            patch.object(catalog, "_runtime_version", return_value="0.3.35"),
         ):
             return catalog.discover_models_with_diagnostics()
 
@@ -51,15 +81,16 @@ class ModelDiscoveryTests(unittest.TestCase):
         with (
             patch.object(catalog.folder_paths, "get_folder_paths", return_value=[str(root)]),
             patch.object(catalog.importlib.util, "find_spec", return_value=object()),
+            patch.object(catalog, "_runtime_version", return_value="0.3.35"),
         ):
             return catalog.find_model(str(model_path.resolve()))
 
     def test_single_flat_pair_is_paired_automatically(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "gemma-4-test-Q4.gguf").touch()
+            write_model(root / "gemma-4-test-Q4.gguf")
             projector = root / "mmproj-BF16.gguf"
-            projector.touch()
+            write_projector(projector)
 
             models = self.discover(root)
 
@@ -71,10 +102,10 @@ class ModelDiscoveryTests(unittest.TestCase):
     def test_multiple_flat_pairs_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "gemma-4-a.gguf").touch()
-            (root / "gemma-4-b.gguf").touch()
-            (root / "mmproj-a.gguf").touch()
-            (root / "mmproj-b.gguf").touch()
+            write_model(root / "gemma-4-a.gguf")
+            write_model(root / "gemma-4-b.gguf")
+            write_projector(root / "mmproj-a.gguf")
+            write_projector(root / "mmproj-b.gguf")
 
             models = self.discover(root)
 
@@ -88,16 +119,16 @@ class ModelDiscoveryTests(unittest.TestCase):
     def test_multiple_projectors_next_to_one_model_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "gemma-4-test.gguf").touch()
-            (root / "mmproj-BF16.gguf").touch()
-            (root / "mmproj-F16.gguf").touch()
+            write_model(root / "gemma-4-test.gguf")
+            write_projector(root / "mmproj-BF16.gguf")
+            write_projector(root / "mmproj-F16.gguf")
 
             model = self.discover(root)[0]
 
         self.assertIsNone(model["projector"])
         self.assertTrue(model["runtime_ready"])
         self.assertEqual(model["vision_status"], "ambiguous")
-        self.assertIn("separate subfolder", model["capability_message"])
+        self.assertIn("Keep only the intended projector", model["capability_message"])
 
     def test_separate_subfolders_pair_locally(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -105,8 +136,8 @@ class ModelDiscoveryTests(unittest.TestCase):
             for name in ("a", "b"):
                 folder = root / name
                 folder.mkdir()
-                (folder / f"gemma-4-{name}.gguf").touch()
-                (folder / "mmproj-BF16.gguf").touch()
+                write_model(folder / f"gemma-4-{name}.gguf")
+                write_projector(folder / "mmproj-BF16.gguf")
 
             models = self.discover(root)
 
@@ -130,23 +161,23 @@ class ModelDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             model_path = root / "gemma-4-test.gguf"
-            model_path.touch()
+            write_model(model_path)
 
             models, diagnostics = self.discover_with_diagnostics([root])
 
             self.assertEqual(len(models), 1)
             self.assertEqual(diagnostics["roots"][0]["model_files"], [str(model_path.resolve())])
             self.assertEqual(diagnostics["roots"][0]["projector_files"], [])
-            self.assertIn("no mmproj GGUF", diagnostics["roots"][0]["issues"][0])
+            self.assertIn("No mmproj GGUF", diagnostics["roots"][0]["issues"][0])
             self.assertTrue(models[0]["runtime_ready"])
-            self.assertEqual(models[0]["vision_status"], "projector_missing")
+            self.assertEqual(models[0]["vision_status"], "missing")
             self.assertEqual(models[0]["capabilities"], {"images": False, "video_frames": False, "audio": False})
             self.assertEqual(diagnostics["totals"]["incomplete_models"], 0)
 
     def test_missing_runtime_still_blocks_text_only_model(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "gemma-4-test.gguf").touch()
+            write_model(root / "gemma-4-test.gguf")
 
             with (
                 patch.object(catalog.folder_paths, "get_folder_paths", return_value=[str(root)]),
@@ -156,13 +187,98 @@ class ModelDiscoveryTests(unittest.TestCase):
 
             self.assertFalse(model["runtime_ready"])
             self.assertEqual(model["missing_dependencies"], ["llama-cpp-python"])
-            self.assertEqual(model["vision_status"], "projector_missing")
+            self.assertEqual(model["vision_status"], "missing")
+
+    def test_qwen_architecture_is_detected_independently_from_lineage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(
+                root / "renamed-custom.gguf",
+                architecture="qwen35",
+                dimension=5_120,
+                name="Custom fine-tune",
+            )
+            write_projector(
+                root / "mmproj.gguf",
+                projector_type="qwen3vl_merger",
+                dimension=5_120,
+            )
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["name"], "Custom fine-tune")
+        self.assertEqual(model["architecture"], "qwen35")
+        self.assertEqual(model["architecture_adapter"], "qwen35")
+        self.assertTrue(model["architecture_recognized"])
+        self.assertTrue(model["runtime_supported"])
+        self.assertTrue(model["runtime_ready"])
+        self.assertEqual(model["vision_status"], "compatible")
+        self.assertTrue(model["detected_capabilities"]["thinking"])
+        self.assertFalse(model["detected_capabilities"]["reasoning_effort"])
+        self.assertFalse(model["configuration_verified"])
+        self.assertEqual(model["verification_status"], "compatible_unverified")
+
+    def test_unknown_architecture_is_discoverable_but_not_runtime_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(root / "future.gguf", architecture="future_arch")
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["discovery_status"], "found")
+        self.assertEqual(model["metadata_status"], "readable")
+        self.assertFalse(model["architecture_recognized"])
+        self.assertFalse(model["runtime_supported"])
+        self.assertFalse(model["runtime_ready"])
+        self.assertEqual(model["verification_status"], "unsupported")
+        self.assertIn("supported GGUF architecture", model["missing_dependencies"])
+
+    def test_qwen_adapter_requires_the_validated_runtime_floor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(root / "qwen.gguf", architecture="qwen35", dimension=5_120)
+
+            with (
+                patch.object(catalog.folder_paths, "get_folder_paths", return_value=[str(root)]),
+                patch.object(catalog.importlib.util, "find_spec", return_value=object()),
+                patch.object(catalog, "_runtime_version", return_value="0.3.34"),
+            ):
+                model = catalog.discover_models()[0]
+
+        self.assertTrue(model["architecture_recognized"])
+        self.assertFalse(model["runtime_supported"])
+        self.assertFalse(model["runtime_ready"])
+        self.assertIn("llama-cpp-python>=0.3.35 for qwen35", model["missing_dependencies"])
+
+    def test_incompatible_qwen_projector_disables_vision_without_blocking_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(root / "qwen.gguf", architecture="qwen35", dimension=5_120)
+            write_projector(root / "mmproj.gguf", projector_type="qwen3vl_merger", dimension=2_048)
+
+            model = self.discover(root)[0]
+
+        self.assertTrue(model["runtime_ready"])
+        self.assertEqual(model["vision_status"], "incompatible")
+        self.assertIsNone(model["projector"])
+        self.assertFalse(model["capabilities"]["images"])
+
+    def test_invalid_header_is_discoverable_but_not_runtime_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "broken.gguf").write_bytes(b"not a gguf")
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["metadata_status"], "invalid")
+        self.assertFalse(model["runtime_ready"])
+        self.assertIn("readable GGUF metadata", model["missing_dependencies"])
 
     def test_discovery_summary_preserves_ready_pairing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "gemma-4-test.gguf").touch()
-            (root / "mmproj-BF16.gguf").touch()
+            write_model(root / "gemma-4-test.gguf")
+            write_projector(root / "mmproj-BF16.gguf")
 
             models, diagnostics = self.discover_with_diagnostics([root])
 
@@ -179,8 +295,8 @@ class ModelDiscoveryTests(unittest.TestCase):
             root = Path(directory)
             model_path = root / "gemma-4-test.gguf"
             projector = root / "mmproj-BF16.gguf"
-            model_path.touch()
-            projector.touch()
+            write_model(model_path)
+            write_projector(projector)
 
             with patch.object(catalog.Path, "rglob", side_effect=AssertionError("recursive discovery was used")):
                 model = self.find(root, model_path)
@@ -193,13 +309,13 @@ class ModelDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             model_path = root / "gemma-4-test.gguf"
-            model_path.touch()
+            write_model(model_path)
 
             first = self.find(root, model_path)
             second = self.find(root, model_path)
             cache_after_repeat = catalog._find_model_in_directory.cache_info()
             projector = root / "mmproj-BF16.gguf"
-            projector.touch()
+            write_projector(projector)
             after_projector = self.find(root, model_path)
             cache_after_change = catalog._find_model_in_directory.cache_info()
 
@@ -213,7 +329,7 @@ class ModelDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root_directory, tempfile.TemporaryDirectory() as other_directory:
             root = Path(root_directory)
             model_path = Path(other_directory) / "gemma-4-test.gguf"
-            model_path.touch()
+            write_model(model_path)
 
             self.assertIsNone(self.find(root, model_path))
 

@@ -73,7 +73,7 @@ Select **Refresh** after adding files. Expand **Scan details** if the model does
 | 24 GB | [Gemma 4 26B-A4B Q4_K_M](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/blob/c099eb48e663fd284577b04978a94ffccb261841/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf) | [26B mmproj-BF16](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/blob/c099eb48e663fd284577b04978a94ffccb261841/mmproj-BF16.gguf) |
 | 32 GB | [Gemma 4 31B Q4_K_XL](https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/blob/c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-UD-Q4_K_XL.gguf) | [31B mmproj-BF16](https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/blob/c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mmproj-BF16.gguf) |
 
-These are measured starting tiers, not hard requirements or quality rankings. Direct GGUF currently supports only these verified Gemma 4 pairs. Its model loading and vision-projector integration are built specifically for Gemma 4. Use Ollama, External llama.cpp, or a compatible API endpoint to try Qwen or another multimodal model.
+These are measured starting tiers, not hard requirements or quality rankings. They are the currently published verified Gemma 4 pairs. Direct also recognizes the `qwen35` and `qwen35moe` runtime architectures from GGUF metadata. A recognized custom configuration is labeled compatible/unverified until that exact model policy and projector combination has been validated; an unknown architecture is visible in Scan details but is not loaded.
 
 ## Context and KV cache
 

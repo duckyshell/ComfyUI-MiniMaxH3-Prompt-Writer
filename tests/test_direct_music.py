@@ -98,7 +98,7 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         llama_cpp.Llama = _FakeModel
         llama_cpp.llama_log_callback = lambda callback: callback
         chat_format = types.ModuleType("llama_cpp.llama_chat_format")
-        chat_format.Gemma4ChatHandler = _FakeVisionHandler
+        chat_format.MTMDChatHandler = _FakeVisionHandler
         modules = {"llama_cpp": llama_cpp, "llama_cpp.llama_chat_format": chat_format}
         if top_level_ggml_types:
             llama_cpp.GGML_TYPE_F16 = _FakeGGMLType.GGML_TYPE_F16.value

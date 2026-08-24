@@ -97,6 +97,8 @@ Include a transcript when exact speech or lyrics matter. Writer preserves user-s
 
 Images are sent to the selected multimodal model in reference order. Reordering media renumbers tags within each type.
 
+In Reference mode, select **Replace** on an asset card or drop one new file directly on that card to replace it without changing its slot. The replacement can use a different media type; typed tags are recalculated from the resulting Picture, Video, and Audio order. Dropping multiple files on a card performs the normal add operation and appends them instead of replacing that card.
+
 For video, Writer prepares an ordered contact sheet. Open a video card to inspect **What the model sees** and choose the available frame-sampling options. The contact sheet still represents the same `<Video N>` reference; it does not create extra `<Picture N>` tags.
 
 Local providers and remote API providers use the prepared contact sheet instead of the original encoded video stream. API providers can receive the derived sheet, but not the original video bytes.

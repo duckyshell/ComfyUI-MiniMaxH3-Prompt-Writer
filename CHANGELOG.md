@@ -9,6 +9,16 @@
 - Added generic `qwen3vl` and `qwen3vlmoe` Direct adapters. The official Qwen3-VL 8B Q4_K_M/Q8 projector pair is verified; Qwen3-VL MoE remains custom/unverified and neither adapter inherits Qwen 3.8/3.6 policies.
 - Kept unknown architectures discoverable but not runnable, and labeled recognized custom configurations separately from verified model policies.
 
+### Interface
+
+- Added in-place replacement for Reference media from the asset menu or by dropping one file on a card. The asset keeps its slot and stable ID; dropping multiple files still appends them.
+
+### Fixes
+
+- Made Qwen tokenizer preflight safe for multilingual briefs, invalid Unicode surrogate input, and isolated Windows Portable worker imports.
+- Waited for ComfyUI VRAM to reach the required free-memory target before retrying generation.
+- Kept media duration badges above landscape thumbnails.
+
 ## 0.3.6 - 2026-08-22
 
 ### Fixes

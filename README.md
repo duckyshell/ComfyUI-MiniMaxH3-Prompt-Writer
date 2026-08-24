@@ -4,13 +4,13 @@
   <img src="web/assets/h3-prompt-writer-launcher.svg" width="96" alt="H3 Prompt Writer">
 </p>
 
-Current release: **0.3.6** | [MIT License](LICENSE)
+Current release: **0.4.0** | [MIT License](LICENSE)
 
 H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. Start with a plain-language Creative Brief, add optional image, video, or audio references, and generate an editable prompt in the format expected by H3.
 
 It is a ComfyUI UI extension, not a workflow node. It writes prompt text for your existing H3 workflow. It does not run MiniMax H3, change the graph, or queue a video.
 
-## What's new
+## What's new in v0.4.0
 
 - Added Qwen 3.8 support for Direct GGUF, including vision references and optional Thinking.
 - Added support for compatible Qwen 3.8 fine-tunes and Qwen3-VL models.

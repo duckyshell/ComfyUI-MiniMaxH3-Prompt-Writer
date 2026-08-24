@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 - 2026-08-24
+
+### Fixes
+
+- Improved Direct GGUF tokenizer startup and runtime compatibility in Windows Portable installations.
+
 ## 0.4.0 - 2026-08-24
 
 ### Features

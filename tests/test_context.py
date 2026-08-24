@@ -263,6 +263,20 @@ class ContextPlanTests(unittest.TestCase):
         self.assertEqual(raised.exception.details["context_profile"], "large")
         self.assertIsNone(raised.exception.details["suggested_context_profile"])
 
+    def test_native_context_below_the_smallest_tier_is_rejected(self):
+        with self.assertRaises(ContextPlanError) as raised:
+            plan_context(
+                request(),
+                self.qwen_model(native_context=4_096),
+                requested_context="auto",
+                requested_kv_cache="q8",
+                thinking=False,
+            )
+
+        self.assertEqual(raised.exception.code, "MODEL_NATIVE_CONTEXT_UNSUPPORTED")
+        self.assertEqual(raised.exception.details["native_context_tokens"], 4_096)
+        self.assertEqual(raised.exception.details["minimum_context_tokens"], 16_384)
+
     def test_48k_manual_profile_is_qwen_only(self):
         result = plan_context(
             request(),

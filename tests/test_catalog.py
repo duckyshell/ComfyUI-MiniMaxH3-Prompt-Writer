@@ -331,6 +331,11 @@ class ModelDiscoveryTests(unittest.TestCase):
                 name="Qwen3.8-27B",
                 reasoning_effort=True,
             )
+            write_projector(
+                root / "mmproj-BF16.gguf",
+                projector_type="qwen3vl_merger",
+                dimension=5_120,
+            )
 
             model = self.discover(root)[0]
 
@@ -339,6 +344,28 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertTrue(model["configuration_verified"])
         self.assertEqual(model["verification_status"], "verified")
         self.assertTrue(model["template_controls"]["reasoning_effort"])
+
+    def test_qwen38_model_with_an_arbitrary_compatible_projector_is_not_verified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(
+                root / "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+                architecture="qwen35",
+                dimension=5_120,
+                name="Qwen3.8-27B",
+                reasoning_effort=True,
+            )
+            write_projector(
+                root / "mmproj-custom.gguf",
+                projector_type="qwen3vl_merger",
+                dimension=5_120,
+            )
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["vision_status"], "compatible")
+        self.assertFalse(model["configuration_verified"])
+        self.assertEqual(model["verification_status"], "compatible_unverified")
 
     def test_verified_qwen_filename_does_not_override_custom_metadata_lineage(self):
         with tempfile.TemporaryDirectory() as directory:

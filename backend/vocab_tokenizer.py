@@ -55,10 +55,13 @@ class VocabOnlyTokenizerClient:
         )
         threading.Thread(target=self._read_stdout, daemon=True).start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
-        startup = self._next_message(startup_timeout)
-        if startup.get("ready") is not True:
+        try:
+            startup = self._next_message(startup_timeout)
+            if startup.get("ready") is not True:
+                raise TokenizerPreflightError(startup.get("error") or "The vocab-only tokenizer did not start.")
+        except BaseException:
             self.close()
-            raise TokenizerPreflightError(startup.get("error") or "The vocab-only tokenizer did not start.")
+            raise
         self.startup = startup
 
     def _read_stdout(self) -> None:
@@ -115,18 +118,35 @@ class VocabOnlyTokenizerClient:
             return
         try:
             if process.poll() is None and process.stdin is not None:
-                process.stdin.write('{"operation":"shutdown"}\n')
-                process.stdin.flush()
+                try:
+                    process.stdin.write('{"operation":"shutdown"}\n')
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    pass
             if process.poll() is None:
-                process.wait(timeout=2)
-        except Exception:
+                try:
+                    process.wait(timeout=2)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
             if process.poll() is None:
-                process.terminate()
-            try:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=2)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
                 process.wait(timeout=2)
-            except Exception:
-                pass
         finally:
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
-                    stream.close()
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass

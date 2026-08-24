@@ -23,6 +23,7 @@ class GGUFModelPolicy:
     non_thinking: SamplingPolicy
     reasoning_effort: str | None = None
     verified_filenames: tuple[str, ...] = ()
+    verified_projector_filenames: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ QWEN38_POLICY = GGUFModelPolicy(
     non_thinking=SamplingPolicy(0.7, 0.8, 20, 0.0, 1.5, 1.0),
     reasoning_effort="low",
     verified_filenames=("Qwen3.8-27B-UD-Q4_K_XL.gguf",),
+    verified_projector_filenames=("mmproj-BF16.gguf",),
 )
 QWEN36_POLICY = GGUFModelPolicy(
     id="qwen36-35b-a3b",
@@ -175,8 +177,17 @@ def identify_model_policy(
     return policy_for_lineage(match.lineage.id if match else None)
 
 
-def policy_is_verified_configuration(policy: GGUFModelPolicy | None, model_path: str | Path) -> bool:
-    return bool(policy and Path(model_path).name.casefold() in {name.casefold() for name in policy.verified_filenames})
+def policy_is_verified_configuration(
+    policy: GGUFModelPolicy | None,
+    model_path: str | Path,
+    projector_path: str | Path | None,
+) -> bool:
+    return bool(
+        policy
+        and projector_path
+        and Path(model_path).name.casefold() in {name.casefold() for name in policy.verified_filenames}
+        and Path(projector_path).name.casefold() in {name.casefold() for name in policy.verified_projector_filenames}
+    )
 
 
 def non_policy_configuration_is_verified(

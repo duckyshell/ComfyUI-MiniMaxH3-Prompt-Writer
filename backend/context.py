@@ -86,14 +86,27 @@ def context_profiles_for(model_info: dict[str, Any]) -> tuple[str, ...]:
     configured = model_info.get("context_profiles")
     if isinstance(configured, (list, tuple)):
         profiles = tuple(name for name in configured if name in CONTEXT_PROFILES)
-    elif model_info.get("architecture_adapter") in QWEN_VISION_ADAPTER_IDS:
-        profiles = QWEN_CONTEXT_PROFILES
     else:
+        profiles = ()
+    if not profiles and model_info.get("architecture_adapter") in QWEN_VISION_ADAPTER_IDS:
+        profiles = QWEN_CONTEXT_PROFILES
+    elif not profiles:
         profiles = LEGACY_CONTEXT_PROFILES
+    minimum_context_tokens = min(CONTEXT_PROFILES[name] for name in profiles)
     native_context = model_info.get("native_context_tokens")
     if isinstance(native_context, int) and native_context > 0:
         profiles = tuple(name for name in profiles if CONTEXT_PROFILES[name] <= native_context)
-    return profiles or ("standard",)
+    if not profiles:
+        raise ContextPlanError(
+            "MODEL_NATIVE_CONTEXT_UNSUPPORTED",
+            "The model's native context is smaller than the available Direct context profiles.",
+            {
+                "native_context_tokens": native_context,
+                "minimum_context_tokens": minimum_context_tokens,
+                "available_context_profiles": [],
+            },
+        )
+    return profiles
 
 
 def estimate_visual_tokens(

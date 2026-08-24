@@ -4,11 +4,14 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from backend import vocab_tokenizer
 from backend.text_normalization import normalize_unicode_text
-from backend.vocab_tokenizer import VocabOnlyTokenizerClient, model_identity
+from backend.vocab_tokenizer import TokenizerPreflightError, VocabOnlyTokenizerClient, model_identity
 
 
 class VocabTokenizerTests(unittest.TestCase):
@@ -75,6 +78,40 @@ class VocabTokenizerTests(unittest.TestCase):
             second = model_identity(path)
 
         self.assertNotEqual(first[1:], second[1:])
+
+    def test_startup_timeout_terminates_the_spawned_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "model.gguf"
+            model.write_bytes(b"fixture")
+            worker = root / "worker.py"
+            worker.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+            processes = []
+            real_popen = subprocess.Popen
+
+            def tracked_popen(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                processes.append(process)
+                return process
+
+            try:
+                with (
+                    patch.object(vocab_tokenizer.subprocess, "Popen", side_effect=tracked_popen),
+                    self.assertRaises(TokenizerPreflightError) as raised,
+                ):
+                    VocabOnlyTokenizerClient(model, worker_path=worker, startup_timeout=0.05)
+
+                self.assertIn("timed out", str(raised.exception))
+                self.assertEqual(len(processes), 1)
+                deadline = time.monotonic() + 2
+                while processes[0].poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertIsNotNone(processes[0].poll())
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=2)
 
 
 if __name__ == "__main__":

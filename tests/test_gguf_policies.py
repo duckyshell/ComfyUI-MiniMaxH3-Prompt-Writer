@@ -109,8 +109,26 @@ class GGUFPolicyTests(unittest.TestCase):
         )
 
     def test_only_the_live_spiked_quant_is_marked_verified(self):
-        self.assertTrue(policy_is_verified_configuration(QWEN38_POLICY, "Qwen3.8-27B-UD-Q4_K_XL.gguf"))
-        self.assertFalse(policy_is_verified_configuration(QWEN38_POLICY, "Qwen3.8-27B-Q8_0.gguf"))
+        self.assertTrue(policy_is_verified_configuration(
+            QWEN38_POLICY,
+            "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+            "mmproj-BF16.gguf",
+        ))
+        self.assertFalse(policy_is_verified_configuration(
+            QWEN38_POLICY,
+            "Qwen3.8-27B-Q8_0.gguf",
+            "mmproj-BF16.gguf",
+        ))
+        self.assertFalse(policy_is_verified_configuration(
+            QWEN38_POLICY,
+            "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+            "custom-projector.gguf",
+        ))
+        self.assertFalse(policy_is_verified_configuration(
+            QWEN38_POLICY,
+            "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+            None,
+        ))
 
     def test_qwen3vl_pair_verification_does_not_create_a_sampling_policy(self):
         self.assertTrue(non_policy_configuration_is_verified(

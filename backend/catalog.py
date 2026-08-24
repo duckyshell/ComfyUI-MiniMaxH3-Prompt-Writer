@@ -198,7 +198,7 @@ def _model_candidate(
     }
     configuration_verified = bool(metadata) and architecture_recognized and (
         (bool(configured) and not qwen_context)
-        or policy_is_verified_configuration(model_policy, model_path)
+        or policy_is_verified_configuration(model_policy, model_path, projector)
         or non_policy_verified
     )
     native_context = (metadata or {}).get("context_length")
@@ -212,8 +212,6 @@ def _model_candidate(
             profile for profile in context_profiles
             if CONTEXT_PROFILES[profile] <= native_context
         ]
-    if not context_profiles:
-        context_profiles = ["standard"]
     return {
         "id": model_id,
         "name": name,

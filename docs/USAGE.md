@@ -97,7 +97,7 @@ Include a transcript when exact speech or lyrics matter. Writer preserves user-s
 
 Images are sent to the selected multimodal model in reference order. Reordering media renumbers tags within each type.
 
-In Reference mode, select **Replace** on an asset card or drop one new file directly on that card to replace it without changing its slot. The replacement can use a different media type; typed tags are recalculated from the resulting Picture, Video, and Audio order. Dropping multiple files on a card performs the normal add operation and appends them instead of replacing that card.
+In Reference mode, select **Replace** on an asset card or drop one new file on the card. The new file keeps the same position in the list. It can be a different media type, so check any Picture, Video, or Audio tags in your brief after replacing it. Dropping several files on a card adds them to the end of the list instead.
 
 For video, Writer prepares an ordered contact sheet. Open a video card to inspect **What the model sees** and choose the available frame-sampling options. The contact sheet still represents the same `<Video N>` reference; it does not create extra `<Picture N>` tags.
 
@@ -138,7 +138,7 @@ Reference video and audio clips must be 2 to 15 seconds long. An audio-only Refe
 
 For Direct GGUF and compatible Ollama models, the **Thinking** switch asks the model to use a larger reasoning budget. Auto context plans for the assembled input, reasoning, and final answer rather than silently shrinking Thinking to save VRAM.
 
-Direct disables Thinking when a manually selected 8K context cannot provide the required budget. Gemma offers its existing 8K–24K tiers; supported Qwen models offer 16K–48K and use exact preflight token counting. Ollama shows the switch only when the model reports thinking support. API reasoning is provider managed; Gemini exposes **Minimal**, **Low**, **Medium**, and **High** in API Settings instead of using the general switch.
+Direct disables Thinking when a manually selected 8K context is too small. Gemma offers 8K, 16K, and 24K choices. Supported Qwen models offer 16K, 24K, 32K, and 48K choices. Writer counts Qwen input tokens before loading the full model. Ollama shows the switch only when the model reports Thinking support. API providers manage reasoning separately. Gemini exposes **Minimal**, **Low**, **Medium**, and **High** in API Settings.
 
 If a model still cannot complete Thinking, Writer reports the fallback. It does not present a standard-mode retry as though the full Thinking request succeeded.
 

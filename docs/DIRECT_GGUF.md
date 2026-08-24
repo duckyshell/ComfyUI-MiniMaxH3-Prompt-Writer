@@ -80,7 +80,7 @@ Select **Refresh** after adding files. Expand **Scan details** if the model does
 | 24 GB | [Gemma 4 26B-A4B Q4_K_M](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/blob/c099eb48e663fd284577b04978a94ffccb261841/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf) | [26B mmproj-BF16](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/blob/c099eb48e663fd284577b04978a94ffccb261841/mmproj-BF16.gguf) |
 | 32 GB | [Gemma 4 31B Q4_K_XL](https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/blob/c1ac76e99d5513b141e8adde7288b85c3f9c32ec/gemma-4-31B-it-UD-Q4_K_XL.gguf) | [31B mmproj-BF16](https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/blob/c1ac76e99d5513b141e8adde7288b85c3f9c32ec/mmproj-BF16.gguf) |
 
-These are measured starting tiers, not hard requirements or quality rankings. They are the currently published verified Gemma 4 pairs. Direct also recognizes the `qwen35`, `qwen35moe`, `qwen3vl`, and `qwen3vlmoe` runtime architectures from GGUF metadata. A recognized custom configuration is labeled compatible/unverified until that exact model and projector combination has been validated; an unknown architecture is visible in Scan details but is not loaded.
+These are measured starting tiers, not hard requirements or quality rankings. They are the currently published verified Gemma 4 pairs. Direct also recognizes compatible Qwen GGUF models from their metadata. A custom model and projector pair is labeled compatible/unverified until that exact combination has been tested. An unknown architecture remains visible in Scan details but is not loaded.
 
 The verified Qwen configuration is [Qwen 3.8 27B UD-Q4_K_XL](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_XL.gguf) with its matching [BF16 projector](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/mmproj-BF16.gguf). It is intentionally not assigned a Gemma-style GPU starting tier: it is a large model, and actual headroom depends strongly on the chosen 16K–48K context, KV format, display use, and other loaded GPU workloads. Measure it on the target machine.
 
@@ -88,13 +88,15 @@ The official [Qwen3-VL 8B Instruct Q4_K_M](https://huggingface.co/Qwen/Qwen3-VL-
 
 ## Qwen model policy
 
-Architecture and model policy are separate. `qwen35` and `qwen35moe` select a safe loading/MTMD adapter; they do not by themselves mean Qwen 3.8 or 3.6 and never enable version-specific defaults.
+Architecture, model lineage, and verified configuration are separate. The GGUF architecture selects the loading path. It does not by itself enable defaults for a specific Qwen release.
 
 The `qwen3vl` and `qwen3vlmoe` adapters also select only generic loading, MTMD, and `qwen3vl_merger` compatibility. They do not inherit Qwen 3.8/3.6 sampling, `reasoning_effort`, or Thinking policy. The verified Qwen3-VL 8B template exposes no Direct Thinking control.
 
-Direct recognizes the exact `Qwen3.8-27B` metadata lineage as a known policy. Thinking uses `temperature 1.0`, `top_p 0.95`, `top_k 20`, `min_p 0`, `presence_penalty 0`, and `repeat_penalty 1.0`; non-thinking uses `0.7`, `0.8`, `20`, `0`, `1.5`, and `1.0`. When both the known policy and embedded template advertise it, Thinking passes `reasoning_effort=low`. The verified local `Qwen3.8-27B-UD-Q4_K_XL.gguf` configuration is distinguished from other policy-compatible but unverified quants.
+Direct recognizes Qwen 3.8 27B from base-model provenance in the GGUF metadata. If provenance is absent, it accepts only a complete match for the model's key architecture values. This lets compatible fine-tunes use the Qwen 3.8 settings without treating every `qwen35` model as Qwen 3.8. Fine-tunes and other untested files remain compatible/unverified.
 
-The exact official `Qwen3.6-35B-A3B` metadata lineage has its own known sampling policy and does not receive `reasoning_effort`. A renamed or fine-tuned `qwen35`/`qwen35moe` model remains custom/unverified and uses the generic Direct fallback instead of inheriting either lineage policy.
+Thinking uses `temperature 1.0`, `top_p 0.95`, `top_k 20`, `min_p 0`, `presence_penalty 0`, and `repeat_penalty 1.0`; non-thinking uses `0.7`, `0.8`, `20`, `0`, `1.5`, and `1.0`. Thinking passes `reasoning_effort=low` only when the model lineage is Qwen 3.8 and the embedded template supports that option. The verified `Qwen3.8-27B-UD-Q4_K_XL.gguf` and `mmproj-BF16.gguf` pair is kept separate from compatible but unverified combinations.
+
+The exact official `Qwen3.6-35B-A3B` metadata lineage has its own sampling settings and does not receive `reasoning_effort`. Unknown `qwen35` and `qwen35moe` lineages remain custom/unverified and use the generic Direct settings.
 
 Qwen Thinking output is split from the final prompt whether the runtime returns `reasoning_content` separately or emits a completed `</think>` prefix. Private reasoning is never included in the returned H3 prompt. A missing closing tag is treated as truncated Thinking. MTP/`nextn` tensors are detected for diagnostics but intentionally remain disabled.
 

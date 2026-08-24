@@ -10,12 +10,13 @@ H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. St
 
 It is a ComfyUI UI extension, not a workflow node. It writes prompt text for your existing H3 workflow. It does not run MiniMax H3, change the graph, or queue a video.
 
-## What's new in v0.3.6
+## What's new
 
-- Added an optional Music 3 workspace with structured captions, Lyrics, and Lyrics Refine.
-- Added fullscreen Writer mode, improved Refine editing, Reference tag insertion, and text-only External llama.cpp support.
-- Improved prompt reliability and compatibility across Reference/audio handling, Direct GGUF, Custom API connections, media handling, and VRAM controls.
-- Stability and reliability fixes.
+- Added Qwen 3.8 support for Direct GGUF, including vision references and optional Thinking.
+- Added support for compatible Qwen 3.8 fine-tunes and Qwen3-VL models.
+- Reference assets can now be replaced without changing their position in the list.
+- Improved automatic context selection for large prompts and prompts with many references.
+- Improved Direct GGUF stability, memory handling, and tokenizer reliability.
 
 ## What's new in v0.3
 
@@ -57,7 +58,7 @@ See [Writing a useful Creative Brief](docs/USAGE.md#writing-a-useful-creative-br
 | Provider | Choose it when | Setup |
 | --- | --- | --- |
 | [Ollama](docs/OLLAMA.md) | You want the simplest local setup | Install Ollama and pull a vision model |
-| [Direct GGUF](docs/DIRECT_GGUF.md) | You want Writer to load a verified GGUF inside ComfyUI | Install the optional native runtime and add a matching GGUF + `mmproj` pair |
+| [Direct GGUF](docs/DIRECT_GGUF.md) | You want Writer to load a supported GGUF inside ComfyUI | Install the optional native runtime and add a matching GGUF + `mmproj` pair |
 | [External llama.cpp](docs/EXTERNAL_LLAMA_SERVER.md) | You already run llama.cpp or want full control over its runtime | Start `llama-server`; add a matching `mmproj` for images and video |
 | [API providers](docs/API_PROVIDERS.md) | You want Gemini, OpenAI, OpenRouter, or a Custom OpenAI-compatible endpoint | Connect a key or an existing endpoint such as LM Studio |
 
@@ -85,10 +86,10 @@ For Git, ZIP, Windows Portable, update, and provider-specific steps, see [Instal
 - Video understanding uses the ordered contact sheet shown in the preview, not every frame of the encoded video.
 - Prompt models do not listen to uploaded audio. Describe the soundtrack, voice, rhythm, or other audio role in the Creative Brief.
 - The interface and documentation are in English. Briefs can use other languages, and Writer preserves supplied dialogue and visible text.
-- Gemma 4 is the recommended local model family and has received the most testing. Qwen 3.6 also completed all five H3 modes through Ollama without special changes to Writer.
+- Gemma 4 remains the simplest tested local choice. Direct GGUF also supports Qwen 3.8, compatible Qwen 3.8 fine-tunes, and Qwen3-VL. Untested compatible models may behave differently from the verified pairs.
 - Ollama, External llama.cpp, and compatible API endpoints let you try other multimodal models that accept images. Compatibility does not guarantee a good H3 prompt.
 - External llama.cpp also accepts text-only models for Music 3, T2VA, and Refine. Image and video requests still need a vision model.
-- Direct GGUF recognizes Gemma 4 plus the `qwen35`, `qwen35moe`, `qwen3vl`, and `qwen3vlmoe` llama.cpp architectures from GGUF metadata. The Qwen 3.8 27B UD-Q4_K_XL and official Qwen3-VL 8B Q4_K_M pairs are verified; other recognized configurations stay clearly marked compatible/unverified. A missing projector leaves text-only T2VA available.
+- Direct GGUF supports Gemma 4, Qwen 3.8, compatible Qwen 3.8 fine-tunes, and Qwen3-VL. The tested Qwen 3.8 and Qwen3-VL model and projector pairs are marked as verified. Other compatible combinations are marked as unverified. A missing projector leaves text-only T2VA available.
 - Gemini and a Custom OpenAI-compatible endpoint were tested live. OpenAI and OpenRouter have automated contract coverage but were not tested live with commercial credentials. Comfy Cloud has not been validated for v0.3.
 
 ## Documentation

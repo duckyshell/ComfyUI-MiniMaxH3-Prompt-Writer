@@ -4,20 +4,22 @@
 
 ### Features
 
-- Added metadata-driven Direct GGUF support for Qwen architectures, with the Qwen 3.8 27B UD-Q4_K_XL configuration verified on `llama-cpp-python 0.3.35`.
-- Added text-only Direct fallback, generic MTMD projector handling, Qwen sampling/Thinking policies, exact CPU-only token preflight, and media-aware 16K–48K context planning.
-- Added generic `qwen3vl` and `qwen3vlmoe` Direct adapters. The official Qwen3-VL 8B Q4_K_M/Q8 projector pair is verified; Qwen3-VL MoE remains custom/unverified and neither adapter inherits Qwen 3.8/3.6 policies.
-- Kept unknown architectures discoverable but not runnable, and labeled recognized custom configurations separately from verified model policies.
+- Added Qwen 3.8 support for Direct GGUF with vision references and optional Thinking.
+- Added support for compatible Qwen 3.8 fine-tunes and Qwen3-VL models. Untested combinations are marked as compatible but unverified.
+- Added text-only fallback when a Direct model has no compatible vision projector.
+- Added automatic 16K, 24K, 32K, and 48K context selection for supported Qwen models.
 
 ### Interface
 
-- Added in-place replacement for Reference media from the asset menu or by dropping one file on a card. The asset keeps its slot and stable ID; dropping multiple files still appends them.
+- Added in-place replacement for Reference media. Use the asset menu or drop one file on a card. Dropping several files still adds them to the end of the list.
 
 ### Fixes
 
-- Made Qwen tokenizer preflight safe for multilingual briefs, invalid Unicode surrogate input, and isolated Windows Portable worker imports.
-- Waited for ComfyUI VRAM to reach the required free-memory target before retrying generation.
-- Kept media duration badges above landscape thumbnails.
+- Improved tokenizer reliability for multilingual briefs, unusual Unicode input, startup failures, and Windows Portable installs.
+- Rejected Direct models whose declared context is smaller than the available context choices.
+- Limited the verified label to the exact model and projector combinations that were tested.
+- Waited for enough ComfyUI VRAM to become free before retrying generation.
+- Kept media duration labels visible above landscape thumbnails.
 
 ## 0.3.6 - 2026-08-22
 

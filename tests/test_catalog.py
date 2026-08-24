@@ -28,6 +28,7 @@ def write_model(
     reasoning_effort: bool = False,
     thinking_control: bool = True,
     context_length: int = 262_144,
+    extra_entries: tuple[tuple[str, int, object], ...] = (),
 ) -> None:
     template = "{% if enable_thinking %}thinking{% endif %}" if thinking_control else "{{ messages }}"
     if reasoning_effort:
@@ -38,6 +39,7 @@ def write_model(
         (f"{architecture}.context_length", TYPE_UINT32, context_length),
         (f"{architecture}.embedding_length", TYPE_UINT32, dimension),
         ("tokenizer.chat_template", TYPE_STRING, template),
+        *extra_entries,
     ])
 
 
@@ -352,6 +354,42 @@ class ModelDiscoveryTests(unittest.TestCase):
             model = self.discover(root)[0]
 
         self.assertIsNone(model["model_policy"])
+        self.assertFalse(model["configuration_verified"])
+        self.assertEqual(model["verification_status"], "compatible_unverified")
+
+    def test_structural_qwen38_derivative_inherits_policy_without_becoming_verified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_model(
+                root / "custom-derivative.gguf",
+                architecture="qwen35",
+                dimension=5_120,
+                name="Abl 27b",
+                reasoning_effort=True,
+                extra_entries=(
+                    ("qwen35.block_count", TYPE_UINT32, 65),
+                    ("qwen35.feed_forward_length", TYPE_UINT32, 17_408),
+                    ("qwen35.attention.head_count", TYPE_UINT32, 24),
+                    ("qwen35.attention.head_count_kv", TYPE_UINT32, 4),
+                    ("qwen35.attention.key_length", TYPE_UINT32, 256),
+                    ("qwen35.attention.value_length", TYPE_UINT32, 256),
+                    ("qwen35.ssm.conv_kernel", TYPE_UINT32, 4),
+                    ("qwen35.ssm.state_size", TYPE_UINT32, 128),
+                    ("qwen35.ssm.group_count", TYPE_UINT32, 16),
+                    ("qwen35.ssm.time_step_rank", TYPE_UINT32, 48),
+                    ("qwen35.ssm.inner_size", TYPE_UINT32, 6_144),
+                    ("qwen35.full_attention_interval", TYPE_UINT32, 4),
+                    ("qwen35.rope.dimension_count", TYPE_UINT32, 64),
+                ),
+            )
+
+            model = self.discover(root)[0]
+
+        self.assertEqual(model["architecture_adapter"], "qwen35")
+        self.assertEqual(model["model_lineage"], "qwen38-27b")
+        self.assertEqual(model["model_lineage_source"], "structural_fingerprint")
+        self.assertEqual(model["model_policy"], "qwen38-27b")
+        self.assertTrue(model["model_policy_supported"])
         self.assertFalse(model["configuration_verified"])
         self.assertEqual(model["verification_status"], "compatible_unverified")
 

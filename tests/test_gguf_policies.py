@@ -2,10 +2,12 @@ import unittest
 
 from backend.models.gguf_policies import (
     QWEN36_POLICY,
+    QWEN38_LINEAGE,
     QWEN38_POLICY,
     identify_model_policy,
     non_policy_configuration_is_verified,
     policy_is_verified_configuration,
+    resolve_model_lineage,
     sampling_options,
     template_kwargs,
 )
@@ -20,6 +22,52 @@ class GGUFPolicyTests(unittest.TestCase):
         self.assertIsNone(identify_model_policy("qwen35moe", "Qwen3.8-27B"))
         self.assertIsNone(identify_model_policy("qwen3vl", "Qwen3Vl 8b Instruct"))
         self.assertIsNone(identify_model_policy("qwen3vlmoe", "Qwen3 VL MoE"))
+
+    def test_qwen38_derivative_uses_full_structural_fingerprint_without_names(self):
+        values = {
+            **dict(QWEN38_LINEAGE.structural_fingerprint),
+            "general.file_type": 17,
+            "tokenizer.chat_template": "custom template",
+        }
+
+        match = resolve_model_lineage("qwen35", "Abl 27b", values)
+
+        self.assertIsNotNone(match)
+        self.assertIs(match.lineage, QWEN38_LINEAGE)
+        self.assertEqual(match.source, "structural_fingerprint")
+        self.assertIs(identify_model_policy("qwen35", "Abl 27b", values), QWEN38_POLICY)
+
+    def test_qwen38_fingerprint_requires_every_architecture_value(self):
+        values = dict(QWEN38_LINEAGE.structural_fingerprint)
+        values["qwen35.ssm.inner_size"] = 6_143
+
+        self.assertIsNone(resolve_model_lineage("qwen35", "Abl 27b", values))
+        self.assertIsNone(identify_model_policy("qwen35", "Abl 27b", values))
+
+    def test_unknown_provenance_blocks_fingerprint_fallback(self):
+        values = {
+            **dict(QWEN38_LINEAGE.structural_fingerprint),
+            "general.base_model.count": 1,
+            "general.base_model.0.name": "Different qwen35 base",
+            "general.base_model.0.repo_url": "https://huggingface.co/example/different-base",
+        }
+
+        self.assertIsNone(resolve_model_lineage("qwen35", "Qwen3.8-27B", values))
+        self.assertIsNone(identify_model_policy("qwen35", "Qwen3.8-27B", values))
+
+    def test_matching_provenance_has_priority_over_structural_metadata(self):
+        values = {
+            "general.base_model.count": 1,
+            "general.base_model.0.name": "Qwen3.8 27B",
+            "general.base_model.0.repo_url": "https://huggingface.co/Qwen/Qwen3.8-27B/",
+            "qwen35.block_count": 1,
+        }
+
+        match = resolve_model_lineage("qwen35", "Renamed derivative", values)
+
+        self.assertIsNotNone(match)
+        self.assertIs(match.lineage, QWEN38_LINEAGE)
+        self.assertEqual(match.source, "provenance")
 
     def test_qwen38_sampling_uses_llama_cpp_parameter_names(self):
         fallback = {"temperature": 0.2, "top_p": 0.3, "top_k": 64}

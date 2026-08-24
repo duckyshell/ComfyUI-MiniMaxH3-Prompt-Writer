@@ -21,9 +21,10 @@ from .models.gguf_adapters import (
     version_tuple,
 )
 from .models.gguf_policies import (
-    identify_model_policy,
     non_policy_configuration_is_verified,
+    policy_for_lineage,
     policy_is_verified_configuration,
+    resolve_model_lineage,
 )
 
 
@@ -175,7 +176,12 @@ def _model_candidate(
 
     configured = _configured_models().get(model_path.name, {}) if metadata and architecture_recognized else {}
     metadata_name = str((metadata or {}).get("name") or "") or None
-    model_policy = identify_model_policy(architecture, metadata_name)
+    lineage_match = resolve_model_lineage(
+        architecture,
+        metadata_name,
+        (metadata or {}).get("values"),
+    )
+    model_policy = policy_for_lineage(lineage_match.lineage.id if lineage_match else None)
     qwen_context = adapter is not None and adapter.id in QWEN_VISION_ADAPTER_IDS
     non_policy_verified = non_policy_configuration_is_verified(
         architecture,
@@ -229,6 +235,8 @@ def _model_candidate(
         "architecture_adapter": adapter.id if adapter else "unknown",
         "architecture_recognized": architecture_recognized,
         "metadata_name": metadata_name,
+        "model_lineage": lineage_match.lineage.id if lineage_match else None,
+        "model_lineage_source": lineage_match.source if lineage_match else None,
         "model_policy": model_policy.id if model_policy else None,
         "model_policy_supported": model_policy is not None,
         "runtime_version": runtime_version,

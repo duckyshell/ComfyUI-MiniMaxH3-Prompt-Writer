@@ -1,72 +1,51 @@
-import json
 import os
-import subprocess
-import sys
 import tempfile
-import textwrap
-import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-from backend import vocab_tokenizer
 from backend.text_normalization import normalize_unicode_text
 from backend.vocab_tokenizer import TokenizerPreflightError, VocabOnlyTokenizerClient, model_identity
 
 
+class FakeTokenizerModel:
+    def __init__(self, **kwargs):
+        self.options = kwargs
+        self.closed = False
+
+    def tokenize(self, value, *, add_bos):
+        assert add_bos is True
+        return list(normalize_unicode_text(value.decode("utf-8")))
+
+    def close(self):
+        self.closed = True
+
+
 class VocabTokenizerTests(unittest.TestCase):
-    def test_worker_imports_sibling_normalizer_in_isolated_python(self):
-        worker = Path(__file__).parents[1] / "backend" / "gguf_tokenizer_worker.py"
-        result = subprocess.run(
-            [sys.executable, "-I", "-X", "utf8", str(worker)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=10,
-            check=False,
-        )
+    def test_cached_handle_forces_cpu_vocab_only_mode(self):
+        created = []
 
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertEqual(
-            json.loads(result.stdout),
-            {"ready": False, "error": "Expected one GGUF model path."},
-        )
-        self.assertNotIn("ModuleNotFoundError", result.stderr)
+        def factory(**kwargs):
+            model = FakeTokenizerModel(**kwargs)
+            created.append(model)
+            return model
 
-    def test_cached_worker_protocol_forces_cpu_vocab_only_mode(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            model = root / "model.gguf"
-            model.write_bytes(b"fixture")
-            worker = root / "worker.py"
-            worker.write_text(textwrap.dedent("""
-                import json
-                import os
-                import sys
-                print(json.dumps({
-                    "ready": True,
-                    "vocab_only": True,
-                    "n_gpu_layers": 0,
-                    "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-                }), flush=True)
-                for line in sys.stdin:
-                    request = json.loads(line)
-                    if request.get("operation") == "shutdown":
-                        break
-                    print(json.dumps({"id": request["id"], "count": len(request["text"])}), flush=True)
-            """), encoding="utf-8")
-
-            client = VocabOnlyTokenizerClient(model, worker_path=worker, startup_timeout=5, request_timeout=5)
+            model_path = Path(directory) / "model.gguf"
+            model_path.write_bytes(b"fixture")
+            client = VocabOnlyTokenizerClient(model_path, model_factory=factory)
             try:
                 self.assertEqual(client.count("four"), 4)
                 self.assertEqual(client.count("sixsix"), 6)
                 multilingual = "Русский 中文 العربية 😀 broken:\udc90"
                 self.assertEqual(client.count(multilingual), len(normalize_unicode_text(multilingual)))
-                self.assertTrue(client.startup["vocab_only"])
-                self.assertEqual(client.startup["n_gpu_layers"], 0)
-                self.assertEqual(client.startup["cuda_visible_devices"], "-1")
+                self.assertEqual(len(created), 1)
+                self.assertTrue(created[0].options["vocab_only"])
+                self.assertEqual(created[0].options["n_gpu_layers"], 0)
+                self.assertFalse(created[0].options["verbose"])
             finally:
                 client.close()
+
+        self.assertTrue(created[0].closed)
 
     def test_model_identity_changes_with_file_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -79,39 +58,18 @@ class VocabTokenizerTests(unittest.TestCase):
 
         self.assertNotEqual(first[1:], second[1:])
 
-    def test_startup_timeout_terminates_the_spawned_worker(self):
+    def test_model_startup_failure_is_normalized(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            model = root / "model.gguf"
-            model.write_bytes(b"fixture")
-            worker = root / "worker.py"
-            worker.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
-            processes = []
-            real_popen = subprocess.Popen
+            path = Path(directory) / "model.gguf"
+            path.write_bytes(b"fixture")
 
-            def tracked_popen(*args, **kwargs):
-                process = real_popen(*args, **kwargs)
-                processes.append(process)
-                return process
+            def failing_factory(**_kwargs):
+                raise RuntimeError("bad fixture")
 
-            try:
-                with (
-                    patch.object(vocab_tokenizer.subprocess, "Popen", side_effect=tracked_popen),
-                    self.assertRaises(TokenizerPreflightError) as raised,
-                ):
-                    VocabOnlyTokenizerClient(model, worker_path=worker, startup_timeout=0.05)
+            with self.assertRaises(TokenizerPreflightError) as raised:
+                VocabOnlyTokenizerClient(path, model_factory=failing_factory)
 
-                self.assertIn("timed out", str(raised.exception))
-                self.assertEqual(len(processes), 1)
-                deadline = time.monotonic() + 2
-                while processes[0].poll() is None and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                self.assertIsNotNone(processes[0].poll())
-            finally:
-                for process in processes:
-                    if process.poll() is None:
-                        process.kill()
-                        process.wait(timeout=2)
+        self.assertIn("bad fixture", str(raised.exception))
 
 
 if __name__ == "__main__":

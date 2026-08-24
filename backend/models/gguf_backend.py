@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from ..context import ContextPlanError, plan_context
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
+from ..native_logging import suppress_known_llama_noise
 from ..runtime_diagnostics import cached_gguf_runtime_diagnostics
 from ..vocab_tokenizer import TokenizerPreflightError, VocabOnlyTokenizerClient, model_identity
 from .contract import ModelError
@@ -462,7 +463,7 @@ class GGUFBackend:
                             response = self.model.create_chat_completion(**options)
                     else:
                         self.chat_handler.verbose = False
-                        with _quiet_mtmd_info():
+                        with _quiet_mtmd_info(), suppress_known_llama_noise():
                             response = self.chat_handler(
                                 llama=self.model,
                                 **options,

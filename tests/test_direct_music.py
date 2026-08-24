@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.models import gguf_backend
+from backend.native_logging import suppress_known_llama_noise
 from backend.models.contract import ModelError
 from backend.models.gguf_backend import GGUFBackend
 
@@ -232,6 +233,18 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         self.assertIn("[H3 Prompt Writer] MTMD warning: vision memory is low", console)
         self.assertIn("[H3 Prompt Writer] MTMD error: vision evaluation failed", console)
         self.assertIn("OTHER_NODE_INFO", console)
+
+    def test_native_log_filter_removes_only_known_llama_noise(self):
+        output = StringIO()
+        with redirect_stderr(output), suppress_known_llama_noise():
+            print("find_slot: non-consecutive token position 7298 after 6751", file=sys.stderr)
+            print("llama_context: n_ctx_seq (512) > n_ctx_train (0) -- possible training context overflow", file=sys.stderr)
+            print("real llama warning", file=sys.stderr)
+
+        console = output.getvalue()
+        self.assertNotIn("find_slot", console)
+        self.assertNotIn("n_ctx_train (0)", console)
+        self.assertIn("real llama warning", console)
 
     def test_text_only_load_keeps_verified_runtime_validation(self):
         backend = GGUFBackend()

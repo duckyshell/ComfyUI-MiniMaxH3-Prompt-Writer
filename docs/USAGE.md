@@ -149,7 +149,7 @@ Writer saves stable preferences in the browser used to open ComfyUI:
 - mode, duration, and aspect ratio;
 - selected provider and available model preference;
 - Direct Context and KV preference;
-- Ollama model tag;
+- Ollama host and the selected model tag for each host;
 - External URL and optional Model ID;
 - API preset, URL, model ID, Gemini Thinking level, and Custom capabilities;
 - custom Standard, Reference, Music 3 Caption, and Music 3 Lyrics system-prompt overrides.

@@ -16,11 +16,13 @@ function post(path, body = {}) {
   });
 }
 
-export const getStatus = () => request("/status");
+const ollamaQuery = (name, host) => host ? `?${name}=${encodeURIComponent(host)}` : "";
+
+export const getStatus = (ollamaHost = null) => request(`/status${ollamaQuery("ollama_host", ollamaHost)}`);
 export const getModels = () => request("/models");
 export const diagnoseGGUFRuntime = (refresh = false) => post("/runtime/gguf/diagnostics", { refresh });
 export const probeExternalServer = (payload) => post("/external-server/probe", payload);
-export const getOllamaStatus = () => request("/ollama/status");
+export const getOllamaStatus = (host = null) => request(`/ollama/status${ollamaQuery("host", host)}`);
 export const getApiProviderPresets = () => request("/api-provider/presets");
 export const probeApiProvider = (payload) => post("/api-provider/probe", payload);
 export const getApiProviderModels = (connectionId) => post("/api-provider/models", { connection_id: connectionId });

@@ -81,7 +81,7 @@ For Git, ZIP, Windows Portable, update, and provider-specific steps, see [Instal
 
 ## Privacy and limitations
 
-- With Ollama, Direct GGUF, External llama.cpp, or a local Custom endpoint, the prompt request and prepared media stay on the local machine.
+- With Direct GGUF, External llama.cpp, a local Custom endpoint, or Ollama on this computer, the prompt request and prepared media stay on the local machine. A remote Ollama host receives the brief, instructions, and prepared visual inputs.
 - With a remote API provider, the required brief, instructions, prepared images, and video contact sheets are sent to the selected provider. Original video and audio bytes are not uploaded by Writer. Read [What leaves this computer](docs/API_PROVIDERS.md#what-leaves-this-computer) before using private media.
 - Video understanding uses the ordered contact sheet shown in the preview, not every frame of the encoded video.
 - Prompt models do not listen to uploaded audio. Describe the soundtrack, voice, rhythm, or other audio role in the Creative Brief.

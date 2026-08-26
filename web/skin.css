@@ -737,6 +737,14 @@
 .h3ps-ollama-storage-help p { max-width: 620px; margin: 7px 0 0; line-height: 1.55; }
 .h3ps-ollama-storage-help code { color: var(--h3ps-muted); }
 .h3ps-ollama-storage-help a { color: var(--h3ps-muted); text-decoration: none; }
+.h3ps-ollama-host-settings { margin-top: 12px; border-top: 1px solid #242429; color: var(--h3ps-dim); font-size: 9.5px; }
+.h3ps-ollama-host-settings > summary { width: fit-content; max-width: 100%; padding-top: 10px; overflow: hidden; cursor: pointer; color: var(--h3ps-dim); text-overflow: ellipsis; white-space: nowrap; }
+.h3ps-ollama-host-settings[open] > summary { color: var(--h3ps-muted); }
+.h3ps-ollama-host-settings form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: end; max-width: 560px; margin-top: 9px; }
+.h3ps-ollama-host-settings label span { display: block; margin-bottom: 5px; color: var(--h3ps-dim); }
+.h3ps-ollama-host-settings input { width: 100%; height: 34px; padding: 0 10px; border: 1px solid #2b2b31; border-radius: 7px; background: #111114; color: var(--h3ps-text); font: inherit; }
+.h3ps-root .h3ps-ollama-host-settings button { height: 34px; padding: 0 13px; border: 1px solid #35353c; border-radius: 7px; background: #19191d; color: var(--h3ps-muted); font-size: 9.5px; }
+.h3ps-ollama-host-settings > small { display: block; max-width: 560px; margin-top: 7px; line-height: 1.5; }
 .h3ps-ollama-ready {
   padding: 0;
   border-top: 1px solid #1a1a1e;

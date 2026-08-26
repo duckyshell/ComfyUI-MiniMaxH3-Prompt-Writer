@@ -10,7 +10,7 @@ External llama.cpp can also use a text-only model for requests without images or
 
 | Provider | Best for | Model runs | Extra setup |
 | --- | --- | --- | --- |
-| [Ollama](OLLAMA.md) | Most local users | Local Ollama service | Install Ollama and pull a vision model |
+| [Ollama](OLLAMA.md) | Most local users | Ollama on this computer or another host | Install Ollama and pull a vision model |
 | [Direct GGUF](DIRECT_GGUF.md) | Advanced users who want the model inside ComfyUI | ComfyUI Python process | Optional `llama-cpp-python`, GGUF, and matching `mmproj` |
 | [External llama.cpp](EXTERNAL_LLAMA_SERVER.md) | Maximum control over build, GPU placement, context, and KV cache | Your local `llama-server` | Start the server; add a matching `mmproj` for images and video |
 | [API providers](API_PROVIDERS.md) | No local prompt-model runtime, or an existing OpenAI-compatible endpoint | Remote provider or your Custom server | API key for commercial providers; endpoint and model ID for Custom |
@@ -20,6 +20,8 @@ External llama.cpp can also use a text-only model for requests without images or
 Choose Ollama if you want a local model without managing Python wheels, GGUF projector pairing, or llama.cpp build flags inside ComfyUI. Prompt Writer detects installed compatible vision models. Its built-in Gemma 4 list marks exact tags tested with H3; it is not a whitelist. Qwen 3.6 has also completed all five H3 modes through Ollama as a compatibility test, not a quality ranking.
 
 Prompt Writer does not install or start Ollama, and it never pulls a model automatically.
+
+The default Ollama host is on this computer. If you choose a remote host, it receives the brief, instructions, and prepared visual inputs.
 
 ## Direct GGUF
 

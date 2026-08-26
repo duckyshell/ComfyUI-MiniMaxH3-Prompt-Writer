@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import json
 import shutil
 import sys
@@ -31,6 +32,73 @@ OLLAMA_MODEL_TIERS = (
     {"label": "24 GB", "vram_tiers": [24], "model": "gemma4:26b"},
     {"label": "32 GB", "vram_tiers": [32], "model": "gemma4:31b"},
 )
+PRIVATE_LAN_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "fc00::/7",
+))
+
+
+def _is_loopback(hostname: str) -> bool:
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_private_lan(hostname: str) -> bool:
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return any(address.version == network.version and address in network for network in PRIVATE_LAN_NETWORKS)
+
+
+def normalize_ollama_url(value: str | None) -> str:
+    raw = (value or DEFAULT_OLLAMA_URL).strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ModelError(
+            "INVALID_OLLAMA_URL",
+            "Enter an Ollama host URL such as http://127.0.0.1:11434.",
+        )
+    if parsed.path.rstrip("/") or parsed.query or parsed.fragment or parsed.username or parsed.password:
+        raise ModelError(
+            "INVALID_OLLAMA_URL",
+            "Use the Ollama host root URL without credentials, an API path, a query, or a fragment.",
+        )
+    if parsed.scheme == "http" and not (_is_loopback(parsed.hostname) or _is_private_lan(parsed.hostname)):
+        raise ModelError(
+            "OLLAMA_URL_INSECURE",
+            "Ollama HTTP hosts must use loopback or a private LAN address. Use HTTPS for public remote hosts.",
+        )
+    lowered_host = parsed.hostname.lower()
+    if lowered_host in {"metadata.google.internal", "instance-data", "instance-data.ec2.internal"}:
+        raise ModelError("OLLAMA_URL_BLOCKED", "Cloud metadata endpoints cannot be used as Ollama hosts.")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_link_local or address.is_multicast or address.is_unspecified):
+        raise ModelError("OLLAMA_URL_BLOCKED", "This network address cannot be used as an Ollama host.")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 11434)
+    except ValueError as error:
+        raise ModelError("INVALID_OLLAMA_URL", "The Ollama host URL has an invalid port.") from error
+    hostname = "127.0.0.1" if parsed.hostname.lower() in {"localhost", "::1"} else parsed.hostname
+    host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
+    return f"{parsed.scheme}://{host}:{port}"
+
+
+def _ollama_model_id(endpoint: str, model_name: str) -> str:
+    if endpoint == DEFAULT_OLLAMA_URL:
+        return f"ollama::{model_name}"
+    return f"ollama::{endpoint}::{model_name}"
 
 
 def _ollama_cli_installed() -> bool:
@@ -91,17 +159,25 @@ class OllamaBackend:
     externally_managed = False
 
     def __init__(self, endpoint: str = DEFAULT_OLLAMA_URL) -> None:
-        self.endpoint = endpoint.rstrip("/")
+        self.endpoint = normalize_ollama_url(endpoint)
         self.model_name: str | None = None
+        self.model_endpoint: str | None = None
         self.cancel_event = threading.Event()
         self.force_unload_event = threading.Event()
         self.lock = threading.RLock()
         self._connection: http.client.HTTPConnection | None = None
         self._connection_lock = threading.Lock()
-        self._details_cache: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._details_cache: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
         self._last_load_duration = 0
-        self.retained_models: set[str] = set()
+        self._retained_models: dict[str, set[str]] = {self.endpoint: set()}
         self._retained_lock = threading.Lock()
+
+    @property
+    def retained_models(self) -> set[str]:
+        return self._retained_models.setdefault(self.endpoint, set())
+
+    def _retained_for(self, endpoint: str) -> set[str]:
+        return self._retained_models.setdefault(endpoint, set())
 
     def prepare_request(self) -> None:
         self.cancel_event.clear()
@@ -122,9 +198,10 @@ class OllamaBackend:
         self.force_unload_event.set()
         return self.cancel()
 
-    def _connection_for(self, timeout: int) -> http.client.HTTPConnection:
-        parsed = urlsplit(self.endpoint)
-        return http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=timeout)
+    def _connection_for(self, timeout: int, endpoint: str | None = None) -> http.client.HTTPConnection:
+        parsed = urlsplit(endpoint or self.endpoint)
+        connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        return connection_type(parsed.hostname, parsed.port, timeout=timeout)
 
     def _request_json(
         self,
@@ -132,10 +209,12 @@ class OllamaBackend:
         path: str,
         payload: dict[str, Any] | None = None,
         *,
+        endpoint: str | None = None,
         timeout: int = CONNECT_TIMEOUT_SECONDS,
         track: bool = False,
     ) -> dict[str, Any]:
-        connection = self._connection_for(timeout)
+        resolved_endpoint = normalize_ollama_url(endpoint or self.endpoint)
+        connection = self._connection_for(timeout, resolved_endpoint)
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers = {"Accept": "application/json"}
         if body is not None:
@@ -152,8 +231,10 @@ class OllamaBackend:
                 raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.") from error
             raise ModelError(
                 "OLLAMA_NOT_RUNNING",
-                "Ollama is installed but its local service is not responding.",
-                {"url": self.endpoint, "reason": str(error)},
+                "Ollama is installed but its local service is not responding."
+                if resolved_endpoint == DEFAULT_OLLAMA_URL
+                else "The selected Ollama host is not responding.",
+                {"url": resolved_endpoint, "reason": str(error)},
             ) from error
         finally:
             if track:
@@ -180,27 +261,33 @@ class OllamaBackend:
             raise ModelError("OLLAMA_INVALID_RESPONSE", "Ollama returned an unexpected response.")
         return data
 
-    def detect(self) -> dict[str, Any]:
-        cli_detected = _ollama_cli_installed()
+    def detect(self, endpoint: str | None = None) -> dict[str, Any]:
+        endpoint = normalize_ollama_url(endpoint or self.endpoint)
+        local_endpoint = endpoint == DEFAULT_OLLAMA_URL
+        cli_detected = _ollama_cli_installed() if local_endpoint else False
         try:
-            version = str(self._request_json("GET", "/api/version").get("version") or "")
+            version = str(self._request_json("GET", "/api/version", endpoint=endpoint).get("version") or "")
         except ModelError as error:
             return {
-                "state": "not_running" if cli_detected else "not_installed",
-                "installed": cli_detected,
+                "state": "not_running" if cli_detected or not local_endpoint else "not_installed",
+                "installed": cli_detected if local_endpoint else None,
                 "running": False,
+                "endpoint": endpoint,
+                "remote_host": not local_endpoint,
                 "version": None,
                 "models": [],
                 "compatible_models": [],
                 "error": {"code": error.code, "message": error.message, "details": error.details},
             }
         try:
-            tags = self._request_json("GET", "/api/tags").get("models")
+            tags = self._request_json("GET", "/api/tags", endpoint=endpoint).get("models")
         except ModelError as error:
             return {
                 "state": "error",
                 "installed": True,
                 "running": True,
+                "endpoint": endpoint,
+                "remote_host": not local_endpoint,
                 "version": version,
                 "models": [],
                 "compatible_models": [],
@@ -214,22 +301,26 @@ class OllamaBackend:
             digest = str(entry.get("digest") or "")
             if not name or not digest or not isinstance(entry.get("size"), int) or entry["size"] <= 0:
                 continue
-            cached = self._details_cache.get(name)
+            cache_key = (endpoint, name)
+            cached = self._details_cache.get(cache_key)
             if cached is not None and cached[0] == digest:
                 details = cached[1]
             else:
                 try:
-                    details = self._request_json("POST", "/api/show", {"model": name, "verbose": False})
+                    details = self._request_json(
+                        "POST", "/api/show", {"model": name, "verbose": False}, endpoint=endpoint,
+                    )
                 except ModelError as error:
                     models.append({
-                        "id": f"ollama::{name}", "name": name, "family": "ollama",
+                        "id": _ollama_model_id(endpoint, name), "name": name, "family": "ollama",
+                        "endpoint": endpoint,
                         "remote_model": name, "runtime_ready": False,
                         "capabilities": {"images": False, "video_frames": False, "audio": False},
                         "thinking": False, "available": True, "tested_for_h3": False,
                         "inspection_error": {"code": error.code, "message": error.message},
                     })
                     continue
-                self._details_cache[name] = (digest, details)
+                self._details_cache[cache_key] = (digest, details)
             capabilities = details.get("capabilities")
             if not isinstance(capabilities, list):
                 capabilities = entry.get("capabilities") if isinstance(entry.get("capabilities"), list) else []
@@ -237,12 +328,13 @@ class OllamaBackend:
             compatible = "completion" in capability_set and "vision" in capability_set
             detail = details.get("details") if isinstance(details.get("details"), dict) else {}
             models.append({
-                "id": f"ollama::{name}",
+                "id": _ollama_model_id(endpoint, name),
                 "name": name,
                 "family": "ollama",
                 "format": "OLLAMA",
                 "role": "ollama-compatible",
                 "remote_model": name,
+                "endpoint": endpoint,
                 "runtime_ready": compatible,
                 "missing_dependencies": [] if compatible else ["vision-capable Ollama model"],
                 "capabilities": {"images": compatible, "video_frames": compatible, "audio": False},
@@ -257,7 +349,7 @@ class OllamaBackend:
                 "digest": digest,
                 "available": True,
                 "tested_for_h3": name in TESTED_OLLAMA_TAGS,
-                "source_label": "Ollama · installed locally",
+                "source_label": "Ollama · installed locally" if local_endpoint else f"Ollama · {endpoint}",
             })
         compatible_models = [model for model in models if model["runtime_ready"]]
         state = "ready" if compatible_models else "no_compatible_model"
@@ -265,6 +357,8 @@ class OllamaBackend:
             "state": state,
             "installed": True,
             "running": True,
+            "endpoint": endpoint,
+            "remote_host": not local_endpoint,
             "version": version,
             "models": models,
             "compatible_models": compatible_models,
@@ -273,8 +367,8 @@ class OllamaBackend:
             "error": None,
         }
 
-    def probe_model(self, model_name: str) -> dict[str, Any]:
-        detected = self.detect()
+    def probe_model(self, model_name: str, endpoint: str | None = None) -> dict[str, Any]:
+        detected = self.detect(endpoint)
         if not detected["running"]:
             error = detected.get("error") or {}
             raise ModelError(error.get("code", "OLLAMA_NOT_RUNNING"), error.get("message", "Ollama is not running."), error.get("details"))
@@ -350,6 +444,7 @@ class OllamaBackend:
         model_name: str,
         runtime_plan: dict[str, Any],
         *,
+        endpoint: str | None = None,
         messages: list[dict[str, Any]],
         temperature: float,
         top_p: float,
@@ -374,7 +469,8 @@ class OllamaBackend:
         }
         if seed is not None:
             payload["options"]["seed"] = seed
-        connection = self._connection_for(REQUEST_TIMEOUT_SECONDS)
+        endpoint = normalize_ollama_url(endpoint or self.endpoint)
+        connection = self._connection_for(REQUEST_TIMEOUT_SECONDS, endpoint)
         body = json.dumps(payload).encode("utf-8")
         with self._connection_lock:
             self._connection = connection
@@ -441,59 +537,68 @@ class OllamaBackend:
             },
         }
 
-    def _running_models(self) -> list[dict[str, Any]]:
-        data = self._request_json("GET", "/api/ps")
+    def _running_models(self, endpoint: str | None = None) -> list[dict[str, Any]]:
+        endpoint = normalize_ollama_url(endpoint or self.endpoint)
+        data = self._request_json("GET", "/api/ps", endpoint=endpoint)
         models = data.get("models")
         return [item for item in models if isinstance(item, dict)] if isinstance(models, list) else []
 
-    def status(self) -> dict[str, Any]:
+    def status(self, endpoint: str | None = None) -> dict[str, Any]:
+        endpoint = normalize_ollama_url(endpoint or self.endpoint)
         try:
-            running = self._running_models()
+            running = self._running_models(endpoint)
             running_names = {
                 str(item.get("model") or item.get("name"))
                 for item in running
                 if item.get("model") or item.get("name")
             }
             with self._retained_lock:
-                self.retained_models.intersection_update(running_names)
-                retained_models = sorted(self.retained_models)
-            loaded = next((item for item in running if str(item.get("model") or item.get("name")) == self.model_name), None)
+                retained = self._retained_for(endpoint)
+                retained.intersection_update(running_names)
+                retained_models = sorted(retained)
+            active_model = self.model_name if self.model_endpoint == endpoint else None
+            loaded = next((item for item in running if str(item.get("model") or item.get("name")) == active_model), None)
             return {
-                "loaded_model_id": f"ollama::{self.model_name}" if loaded and self.model_name else None,
+                "loaded_model_id": _ollama_model_id(endpoint, active_model) if loaded and active_model else None,
                 "loaded": loaded is not None,
                 "loaded_context_tokens": loaded.get("context_length") if loaded else None,
                 "loaded_kv_cache": "ollama" if loaded else None,
                 "ollama_running": True,
-                "ollama_model": self.model_name,
+                "ollama_model": active_model,
+                "ollama_endpoint": endpoint,
                 "writer_retained_models": retained_models,
             }
         except ModelError as error:
             return {
                 "loaded_model_id": None, "loaded": False,
                 "loaded_context_tokens": None, "loaded_kv_cache": None,
-                "ollama_running": False, "ollama_model": self.model_name,
+                "ollama_running": False, "ollama_model": self.model_name if self.model_endpoint == endpoint else None,
+                "ollama_endpoint": endpoint,
                 "writer_retained_models": [],
                 "ollama_error": {"code": error.code, "message": error.message},
             }
 
-    def retained_status(self) -> dict[str, Any]:
+    def retained_status(self, endpoint: str | None = None) -> dict[str, Any]:
+        endpoint = normalize_ollama_url(endpoint or self.endpoint)
         with self._retained_lock:
-            has_retained_models = bool(self.retained_models)
+            has_retained_models = bool(self._retained_for(endpoint))
         if not has_retained_models:
-            return {"ollama_running": False, "writer_retained_models": []}
-        return self.status()
+            return {"ollama_running": False, "ollama_endpoint": endpoint, "writer_retained_models": []}
+        return self.status(endpoint)
 
-    def unload(self, model_name: str | None = None) -> None:
-        model_name = model_name or self.model_name
+    def unload(self, model_name: str | None = None, endpoint: str | None = None) -> None:
+        endpoint = normalize_ollama_url(endpoint or self.model_endpoint or self.endpoint)
+        model_name = model_name or (self.model_name if self.model_endpoint == endpoint else None)
         if not model_name:
             return
         self._request_json(
             "POST", "/api/generate",
             {"model": model_name, "keep_alive": 0, "stream": False},
+            endpoint=endpoint,
             timeout=30,
         )
         with self._retained_lock:
-            self.retained_models.discard(model_name)
+            self._retained_for(endpoint).discard(model_name)
 
     def generate(
         self,
@@ -511,7 +616,9 @@ class OllamaBackend:
     ) -> dict[str, Any]:
         with self.lock:
             validate_media_capabilities(model_info, assembled)
+            endpoint = normalize_ollama_url(model_info.get("endpoint") or self.endpoint)
             self.model_name = model_info["remote_model"]
+            self.model_endpoint = endpoint
             runtime_plan = runtime_plan or self.preflight(
                 model_info, assembled,
                 context_profile=context_profile, kv_cache=kv_cache, thinking=thinking,
@@ -519,14 +626,14 @@ class OllamaBackend:
             try:
                 cold_start = not any(
                     str(item.get("model") or item.get("name")) == self.model_name
-                    for item in self._running_models()
+                    for item in self._running_models(endpoint)
                 )
                 if on_phase:
                     on_phase("loading_model")
 
                 def complete(**kwargs: Any) -> dict[str, Any]:
                     kwargs.pop("purpose", None)
-                    return self._chat_completion(self.model_name, runtime_plan, **kwargs)
+                    return self._chat_completion(self.model_name, runtime_plan, endpoint=endpoint, **kwargs)
 
                 result = run_h3_pipeline(
                     model_info, assembled, session_id, runtime_plan,
@@ -557,13 +664,13 @@ class OllamaBackend:
                 force_unload = self.force_unload_event.is_set()
                 if unload_after or force_unload:
                     try:
-                        self.unload()
+                        self.unload(endpoint=endpoint)
                     except ModelError:
                         if not active_error:
                             raise
                 elif self.model_name:
                     with self._retained_lock:
-                        self.retained_models.add(self.model_name)
+                        self._retained_for(endpoint).add(self.model_name)
                 self.force_unload_event.clear()
 
 

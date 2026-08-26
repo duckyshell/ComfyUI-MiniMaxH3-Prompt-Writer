@@ -11,9 +11,13 @@ import {
   isGenerationModeAvailable,
   isPersistedDraftMode,
   isTextOnlyDirectModel,
+  DEFAULT_OLLAMA_HOST,
+  loadOllamaModel,
+  normalizeOllamaHost,
   saveApiProviderConfig,
   saveCustomSystemPrompts,
   saveExternalServerConfig,
+  saveOllamaHost,
   saveOllamaModel,
   saveModeDrafts,
   saveUserPreferences,
@@ -1065,7 +1069,7 @@ function updatePromptResidency(status) {
 function lifecycleTargets() {
   const targets = [];
   if (studio.promptResidency.direct) targets.push({ family: "gguf", modelId: studio.promptResidency.direct.modelId });
-  studio.promptResidency.ollama.forEach((modelId) => targets.push({ family: "ollama", modelId }));
+  studio.promptResidency.ollama.forEach((modelId) => targets.push({ family: "ollama", modelId, endpoint: studio.ollamaHost }));
   return targets;
 }
 
@@ -1105,7 +1109,7 @@ async function releaseComfyVram({ retry = null, requiredFreeMb = null } = {}) {
   button.disabled = true;
   button.innerHTML = `<span class="h3ps-spinner"></span>Releasing…`;
   try {
-    const before = await getStatus();
+    const before = await getStatus(studio.ollamaHost);
     const beforeFree = Number(before.gpu_memory?.free_mb);
     const requiredFree = requiredFreeMb == null ? null : Number(requiredFreeMb);
     await freeComfyVram();
@@ -1114,7 +1118,7 @@ async function releaseComfyVram({ retry = null, requiredFreeMb = null } = {}) {
     let targetReached = vramReleaseReachedTarget(beforeFree, beforeFree, requiredFree);
     for (let attempt = 0; attempt < 60 && !targetReached; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500));
-      latest = await getStatus();
+      latest = await getStatus(studio.ollamaHost);
       const currentFree = Number(latest.gpu_memory?.free_mb);
       targetReached = vramReleaseReachedTarget(beforeFree, currentFree, requiredFree);
     }
@@ -1167,7 +1171,7 @@ async function runLifecycleAction(event) {
   if (stop) setGenerationState("busy", "Stopping & unloading", "Cancelling the request and unloading its prompt model");
   button.disabled = true;
   try {
-    await unloadModel({ family, model_id: modelId });
+    await unloadModel({ family, model_id: modelId, ollama_host: family === "ollama" ? studio.ollamaHost : null });
     if (family === "gguf") studio.promptResidency.direct = null;
     else studio.promptResidency.ollama = studio.promptResidency.ollama.filter((name) => name !== modelId);
     showToast(
@@ -1208,7 +1212,7 @@ async function startGenerationPreview() {
   setGenerationState("busy", remote ? "Contacting provider" : "Loading model", generationDetail);
   studio.statusTimer = setInterval(async () => {
     try {
-      const status = await getStatus();
+      const status = await getStatus(studio.ollamaHost);
       const labels = { loading_model: remote ? "Contacting provider" : "Loading model", processing_media: "Processing references", generating: "Generating", cancelling: "Cancelling" };
       if (labels[status.phase]) setGenerationState("busy", labels[status.phase], generationDetail);
     } catch {}
@@ -1272,7 +1276,7 @@ async function startGenerationPreview() {
     clearInterval(studio.statusTimer);
     studio.statusTimer = null;
     try {
-      const status = await getStatus();
+      const status = await getStatus(studio.ollamaHost);
       updatePromptResidency(status);
     } catch {}
     studio.activeRequestFamily = null;
@@ -1518,10 +1522,22 @@ function ollamaModels() {
 
 function ollamaModelForSettings() {
   const models = ollamaModels();
-  if (studio.selectedModel?.family === "ollama") {
+  if (studio.selectedModel?.family === "ollama" && studio.selectedModel.endpoint === studio.ollamaHost) {
     return models.find((model) => model.id === studio.selectedModel.id) || studio.selectedModel;
   }
   return models.find((model) => model.remote_model === studio.ollamaModelName) || models[0] || null;
+}
+
+function ollamaHostControlMarkup() {
+  const custom = studio.ollamaHost !== DEFAULT_OLLAMA_HOST;
+  return `<details class="h3ps-ollama-host-settings" data-ollama-host-settings ${studio.ollamaHostSettingsOpen ? "open" : ""}>
+    <summary>${custom ? `Remote host · ${escapeHtml(studio.ollamaHost)}` : "Use Ollama on another computer"}</summary>
+    <form data-ollama-host-form>
+      <label><span>Host URL</span><input name="host" type="url" value="${escapeHtml(studio.ollamaHost)}" placeholder="${DEFAULT_OLLAMA_HOST}" required></label>
+      <button type="submit">Apply</button>
+    </form>
+    <small>Keep the default URL for Ollama on this computer. Remote hosts must allow connections from this machine.</small>
+  </details>`;
 }
 
 function ollamaJourneyMarkup(step) {
@@ -1555,33 +1571,36 @@ function renderOllamaModelTiers(status) {
 
 function renderOllamaProviderControl() {
   const status = studio.ollamaStatus;
+  const hostControl = ollamaHostControlMarkup();
+  const remoteHost = studio.ollamaHost !== DEFAULT_OLLAMA_HOST;
+  const serviceLabel = remoteHost ? "Remote service" : "Local service";
   if (!status) {
-    return `<header class="h3ps-settings-section-heading"><span><small>Local service</small><strong>Ollama</strong></span></header>
-      ${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state"><span class="h3ps-spinner"></span><span class="h3ps-ollama-state-copy"><strong>Checking Ollama…</strong><p>Looking for the local service and installed models.</p></span></div>`;
+    return `<header class="h3ps-settings-section-heading"><span><small>${serviceLabel}</small><strong>Ollama</strong></span></header>
+      ${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state"><span class="h3ps-spinner"></span><span class="h3ps-ollama-state-copy"><strong>Checking Ollama…</strong><p>${remoteHost ? "Looking for the selected service and installed models." : "Looking for the local service and installed models."}</p></span></div>${hostControl}`;
   }
   const ready = status.state === "ready";
   const refresh = ready ? `<button type="button" data-ollama-refresh>${icon("refresh", 13)} Refresh</button>` : "";
-  const header = `<header class="h3ps-settings-section-heading"><span><small>Local service</small><strong>Ollama</strong></span>${refresh}</header>`;
+  const header = `<header class="h3ps-settings-section-heading"><span><small>${serviceLabel}</small><strong>Ollama</strong></span>${refresh}</header>`;
   if (status.state === "not_installed") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state">
       <span class="h3ps-ollama-state-icon">1</span><span class="h3ps-ollama-state-copy"><strong>Get Ollama</strong>
       <p>Install the official Ollama app, open it once, then return here. This page will detect it automatically.</p></span>
       <a class="h3ps-ollama-primary" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Official download ↗</a>
-    </div>`;
+    </div>${hostControl}`;
   }
   if (status.state === "not_running") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state">
       <span class="h3ps-ollama-state-icon">1</span><span class="h3ps-ollama-state-copy"><strong>Start Ollama</strong>
-      <p>Ollama is installed, but its local service is not responding. Open the Ollama app; this page checks automatically.</p></span>
+      <p>${remoteHost ? `The Ollama service at ${escapeHtml(studio.ollamaHost)} is not responding.` : "Ollama is installed, but its local service is not responding. Open the Ollama app; this page checks automatically."}</p></span>
       <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Check now</button>
-    </div>`;
+    </div>${hostControl}`;
   }
   if (status.state === "error") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state is-error">
       <span class="h3ps-ollama-state-icon">!</span><span class="h3ps-ollama-state-copy"><strong>Ollama could not be inspected</strong>
       <p>${escapeHtml(status.error?.message || "The service returned an unexpected response.")}</p></span>
       <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Try again</button>
-    </div>`;
+    </div>${hostControl}`;
   }
   const models = ollamaModels();
   if (!models.length) {
@@ -1591,21 +1610,21 @@ function renderOllamaProviderControl() {
       <div class="h3ps-ollama-tier-heading">Choose a model for your GPU</div>
       ${renderOllamaModelTiers(status)}
       <small>Copy a command and run it in Terminal or PowerShell. This page detects the model automatically.</small>
-      <details class="h3ps-ollama-storage-help"><summary>Need models on another drive?</summary><p>Ollama manages one global model store. Set <code>OLLAMA_MODELS</code> before pulling a model, then restart Ollama. <a href="https://docs.ollama.com/windows#changing-model-location" target="_blank" rel="noopener noreferrer">Official instructions ↗</a></p></details></span>
-    </div>`;
+      <details class="h3ps-ollama-storage-help" data-ollama-storage-help ${studio.ollamaStorageHelpOpen ? "open" : ""}><summary>Need models on another drive?</summary><p>Ollama manages one global model store. Set <code>OLLAMA_MODELS</code> before pulling a model, then restart Ollama. <a href="https://docs.ollama.com/windows#changing-model-location" target="_blank" rel="noopener noreferrer">Official instructions ↗</a></p></details></span>
+    </div>${hostControl}`;
   }
   const selected = ollamaModelForSettings();
   const tested = selected?.tested_for_h3 === true;
   const addModelOpen = studio.ollamaAddModelOpen === true;
   return `${header}${ollamaJourneyMarkup("ready")}<div class="h3ps-ollama-ready">
-    <div class="h3ps-ollama-ready-heading"><span class="h3ps-provider-icon" data-provider-icon="ollama" aria-hidden="true"></span><span><strong>Ollama is ready</strong><small>Version ${escapeHtml(status.version || "unknown")} · local service</small></span><em>Running</em></div>
+    <div class="h3ps-ollama-ready-heading"><span class="h3ps-provider-icon" data-provider-icon="ollama" aria-hidden="true"></span><span><strong>Ollama is ready</strong><small>Version ${escapeHtml(status.version || "unknown")} · ${remoteHost ? escapeHtml(studio.ollamaHost) : "local service"}</small></span><em>Running</em></div>
     <div class="h3ps-ollama-model-heading"><span>Prompt model</span><button class="h3ps-ollama-add-model-toggle" type="button" data-ollama-add-model aria-expanded="${String(addModelOpen)}">${addModelOpen ? "− Hide models" : "+ Add model"}</button></div>
     <label class="h3ps-ollama-model-select"><select data-ollama-model>${models.map((model) => `<option value="${escapeHtml(model.remote_model)}" ${model.remote_model === selected?.remote_model ? "selected" : ""}>${escapeHtml(model.name)}${model.parameter_size ? ` · ${escapeHtml(model.parameter_size)}` : ""}${model.quantization_level ? ` · ${escapeHtml(model.quantization_level)}` : ""}</option>`).join("")}</select></label>
     ${addModelOpen ? `<div class="h3ps-ollama-add-model"><strong>Choose another tested model</strong>${renderOllamaModelTiers(status)}<small>Copy a command and run it in Terminal or PowerShell. Select Refresh after the pull completes.</small></div>` : ""}
     <div class="h3ps-ollama-badges"><span>Vision</span><span>${selected?.thinking_detected ? "Thinking detected" : "Standard generation"}</span><span class="${tested ? "is-tested" : ""}">${tested ? "Tested for H3" : "Compatible · not yet H3-tested"}</span></div>
     <p>${tested ? "This exact Ollama tag passed the focused H3 Generate and Refine smoke test." : "Compatibility comes from Ollama model metadata. It is not a quality guarantee for H3 prompts."}</p>
     <small>Use “Keep model loaded” on the Generate page to control whether Ollama retains this model after each request.</small>
-  </div>`;
+  </div>${hostControl}`;
 }
 
 const API_PROVIDER_UI = {
@@ -1899,7 +1918,7 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
   }
   if (model?.family === "ollama") {
     studio.ollamaModelName = model.remote_model;
-    saveOllamaModel(localStorage, model.remote_model);
+    saveOllamaModel(localStorage, model.remote_model, studio.ollamaHost);
   }
   if (model?.family === "api") {
     studio.contextProfile = "auto";
@@ -2207,8 +2226,8 @@ async function refreshModels() {
   try {
     const [result, status, ollamaStatus, apiPresets] = await Promise.all([
       getModels(),
-      getStatus(),
-      getOllamaStatus().catch((error) => ({ state: "error", running: false, compatible_models: [], error: { code: error.code, message: error.message } })),
+      getStatus(studio.ollamaHost),
+      getOllamaStatus(studio.ollamaHost).catch((error) => ({ state: "error", running: false, compatible_models: [], error: { code: error.code, message: error.message } })),
       getApiProviderPresets().catch(() => ({ presets: [] })),
     ]);
     const selectedId = studio.selectedModel?.id;
@@ -2237,7 +2256,7 @@ async function refreshModels() {
     selectModel(
       restoredModel
       || studio.models.find((model) => model.id === selectedId)
-      || (selectedBeforeRefresh?.family === "ollama" ? selectedBeforeRefresh : null)
+      || (selectedBeforeRefresh?.family === "ollama" && selectedBeforeRefresh.endpoint === studio.ollamaHost ? selectedBeforeRefresh : null)
       || (selectedBeforeRefresh?.family === "api" ? selectedBeforeRefresh : null)
       || restoredModelAfterDiscovery(studio),
       { preserveSettingsProvider: studio.root.classList.contains("is-settings-open") },
@@ -2248,6 +2267,51 @@ async function refreshModels() {
   } catch (error) {
     studio.preferencesRestoring = false;
     showToast(error.code || "Model scan failed", error.message, error.details);
+  }
+}
+
+async function configureOllamaHost(form) {
+  const submit = form.querySelector('[type="submit"]');
+  const requestedHost = normalizeOllamaHost(form.elements.host.value);
+  submit.disabled = true;
+  submit.textContent = "Checking…";
+  try {
+    const status = await getOllamaStatus(requestedHost);
+    const endpoint = normalizeOllamaHost(status.endpoint || requestedHost);
+    const changed = endpoint !== studio.ollamaHost;
+    const ollamaWasSelected = studio.selectedModel?.family === "ollama";
+    studio.ollamaHost = endpoint;
+    studio.ollamaModelName = loadOllamaModel(localStorage, endpoint);
+    studio.ollamaStatus = status;
+    studio.ollamaError = status.error || null;
+    studio.ollamaHostSettingsOpen = false;
+    studio.ollamaStorageHelpOpen = false;
+    saveOllamaHost(localStorage, endpoint);
+    studio.models = [...studio.models.filter((model) => model.family !== "ollama"), ...(status.compatible_models || [])];
+    studio.promptResidency.ollama = [];
+    const model = ollamaModelForSettings();
+    if (studio.settingsProvider === "ollama" && model) {
+      selectModel(model);
+    } else if (ollamaWasSelected) {
+      selectModel(
+        studio.models.find((candidate) => candidate.family !== "ollama" && candidate.runtime_ready) || null,
+        { preserveSettingsProvider: true },
+      );
+    } else {
+      renderInferenceSettings();
+      syncRuntimeSummary();
+    }
+    syncOllamaAutoDetection();
+    showToast(
+      changed ? "Ollama host updated" : "Ollama host checked",
+      endpoint === DEFAULT_OLLAMA_HOST ? "Using Ollama on this computer." : `Using ${endpoint}.`,
+    );
+  } catch (error) {
+    showToast(error.code || "Invalid Ollama host", error.message, error.details);
+    renderInferenceSettings();
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "Apply";
   }
 }
 
@@ -2263,7 +2327,9 @@ async function refreshOllama({ automatic = false } = {}) {
     refreshButton.textContent = "Checking…";
   }
   try {
-    const status = await getOllamaStatus();
+    const requestedHost = studio.ollamaHost;
+    const status = await getOllamaStatus(requestedHost);
+    if (requestedHost !== studio.ollamaHost) return;
     studio.ollamaStatus = status;
     studio.ollamaError = status.error || null;
     studio.models = [...studio.models.filter((model) => model.family !== "ollama"), ...(status.compatible_models || [])];
@@ -2273,7 +2339,9 @@ async function refreshOllama({ automatic = false } = {}) {
     if (!automatic && status.state !== "ready") {
       showToast(
         status.state === "not_installed" ? "Ollama is not installed" : "Ollama is not running",
-        status.state === "not_installed"
+        studio.ollamaHost !== DEFAULT_OLLAMA_HOST
+          ? `The Ollama service at ${studio.ollamaHost} is not responding.`
+          : status.state === "not_installed"
           ? "Install the official Ollama app, then return here."
           : "Open the Ollama app, wait for its local service to start, then select Check now again.",
       );
@@ -2382,7 +2450,7 @@ async function submitLyricsRefinement() {
     submit.disabled = false;
     submit.innerHTML = `${icon("spark", 13)} Refine`;
     try {
-      const status = await getStatus();
+      const status = await getStatus(studio.ollamaHost);
       updatePromptResidency(status);
     } catch {}
     studio.activeRequestFamily = null;
@@ -2462,7 +2530,7 @@ async function submitRefinement() {
     submit.disabled = false;
     submit.innerHTML = `${icon("spark", 13)} Refine`;
     try {
-      const status = await getStatus();
+      const status = await getStatus(studio.ollamaHost);
       updatePromptResidency(status);
     } catch {}
     studio.activeRequestFamily = null;
@@ -2901,6 +2969,16 @@ function createStudio() {
     selectModel(localModels().find((model) => model.id === event.target.value));
   });
   root.querySelector("[data-provider-detail]").addEventListener("click", (event) => {
+    const ollamaHostSummary = event.target.closest("[data-ollama-host-settings] summary");
+    if (ollamaHostSummary) {
+      studio.ollamaHostSettingsOpen = !ollamaHostSummary.closest("details").open;
+      return;
+    }
+    const ollamaStorageSummary = event.target.closest("[data-ollama-storage-help] summary");
+    if (ollamaStorageSummary) {
+      studio.ollamaStorageHelpOpen = !ollamaStorageSummary.closest("details").open;
+      return;
+    }
     const apiPreset = event.target.closest("[data-api-preset]");
     if (apiPreset) {
       chooseApiProviderPreset(apiPreset.dataset.apiPreset);
@@ -2980,6 +3058,12 @@ function createStudio() {
     }
   });
   root.querySelector("[data-provider-detail]").addEventListener("submit", (event) => {
+    const ollamaHostForm = event.target.closest("[data-ollama-host-form]");
+    if (ollamaHostForm) {
+      event.preventDefault();
+      configureOllamaHost(ollamaHostForm);
+      return;
+    }
     const apiForm = event.target.closest("[data-api-provider-form]");
     if (apiForm) {
       event.preventDefault();

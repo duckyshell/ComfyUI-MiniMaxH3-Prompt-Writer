@@ -13,6 +13,9 @@ const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
   EXTERNAL_SERVER_STORAGE_KEY,
   API_PROVIDER_STORAGE_KEY,
+  DEFAULT_OLLAMA_HOST,
+  OLLAMA_ENDPOINT_MODELS_STORAGE_KEY,
+  OLLAMA_HOST_STORAGE_KEY,
   OLLAMA_MODEL_STORAGE_KEY,
   MODE_DRAFTS_STORAGE_KEY,
   SYSTEM_PROMPT_STORAGE_KEY,
@@ -28,12 +31,14 @@ const {
   loadCustomSystemPrompts,
   loadApiProviderConfig,
   loadExternalServerConfig,
+  loadOllamaHost,
   loadOllamaModel,
   loadModeDrafts,
   loadUserPreferences,
   saveCustomSystemPrompts,
   saveApiProviderConfig,
   saveExternalServerConfig,
+  saveOllamaHost,
   saveOllamaModel,
   saveModeDrafts,
   saveUserPreferences,
@@ -173,6 +178,31 @@ test("settings storage preserves the existing keys and schemas", () => {
     [SYSTEM_PROMPT_STORAGE_KEY]: JSON.stringify({ standard: "Updated" }),
     [OLLAMA_MODEL_STORAGE_KEY]: "gemma4:27b",
   });
+});
+
+test("Ollama host and selected models persist independently per endpoint", () => {
+  const storage = memoryStorage();
+  const first = "http://192.168.1.20:11434";
+  const second = "http://192.168.1.21:11434";
+
+  assert.equal(loadOllamaHost(storage), DEFAULT_OLLAMA_HOST);
+  saveOllamaHost(storage, `${first}/`);
+  saveOllamaModel(storage, "gemma4:first", first);
+  saveOllamaModel(storage, "gemma4:second", second);
+
+  assert.equal(loadOllamaHost(storage), first);
+  assert.equal(loadOllamaModel(storage, first), "gemma4:first");
+  assert.equal(loadOllamaModel(storage, second), "gemma4:second");
+  assert.equal(loadOllamaModel(storage, DEFAULT_OLLAMA_HOST), null);
+  assert.equal(storage.entries()[OLLAMA_HOST_STORAGE_KEY], first);
+  assert.deepEqual(JSON.parse(storage.entries()[OLLAMA_ENDPOINT_MODELS_STORAGE_KEY]), {
+    [first]: "gemma4:first",
+    [second]: "gemma4:second",
+  });
+
+  const state = createStudioState({ sessionId: "remote-host", storage });
+  assert.equal(state.ollamaHost, first);
+  assert.equal(state.ollamaModelName, "gemma4:first");
 });
 
 test("API provider storage persists configuration but never secret values", () => {
@@ -592,6 +622,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     model_id: "external-model",
     external_server: state.externalServerConfig,
     ollama_model: null,
+    ollama_host: null,
     api_provider: null,
     thinking: true,
     context_profile: "auto",
@@ -611,6 +642,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     model_id: "external-model",
     external_server: state.externalServerConfig,
     ollama_model: null,
+    ollama_host: null,
     api_provider: null,
     thinking: true,
     context_profile: "auto",
@@ -628,6 +660,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   });
   const ollamaPayload = buildGeneratePayload(state, { creativeBrief: "A quiet shot.", seed: 3407 });
   assert.equal(ollamaPayload.ollama_model, "gemma4:12b");
+  assert.equal(ollamaPayload.ollama_host, DEFAULT_OLLAMA_HOST);
   assert.equal(ollamaPayload.external_server, null);
   assert.equal(ollamaPayload.api_provider, null);
   assert.equal(ollamaPayload.context_profile, "auto");
@@ -645,6 +678,17 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   assert.deepEqual(apiPayload.api_provider, { connection_id: "connection-id", model_id: "provider/model" });
   assert.equal(apiPayload.external_server, null);
   assert.equal(apiPayload.ollama_model, null);
+});
+
+test("Ollama remote host controls stay collapsed and disclosure state survives refresh renders", () => {
+  assert.match(mainSource, /data-ollama-host-settings[^>]*\$\{studio\.ollamaHostSettingsOpen \? "open" : ""\}/);
+  assert.match(mainSource, /data-ollama-host-form/);
+  assert.match(mainSource, /getOllamaStatus\(studio\.ollamaHost\)/);
+  assert.match(mainSource, /saveOllamaHost\(localStorage, endpoint\)/);
+  assert.match(mainSource, /studio\.promptResidency\.ollama = \[\]/);
+  assert.match(mainSource, /data-ollama-storage-help \$\{studio\.ollamaStorageHelpOpen \? "open" : ""\}/);
+  assert.match(mainSource, /studio\.ollamaStorageHelpOpen = !ollamaStorageSummary\.closest\("details"\)\.open/);
+  assert.match(skinSource, /\.h3ps-ollama-host-settings/);
 });
 
 test("background model discovery does not override an open Settings provider tab", () => {

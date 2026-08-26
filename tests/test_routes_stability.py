@@ -85,6 +85,7 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "cancel_requested": False,
             "pending_unload_family": None,
             "pending_unload_model_id": None,
+            "pending_unload_endpoint": None,
             "media_mutation_active": False,
         })
         routes.GENERATION_CACHE.clear()
@@ -99,6 +100,7 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "cancel_requested": False,
             "pending_unload_family": None,
             "pending_unload_model_id": None,
+            "pending_unload_endpoint": None,
             "media_mutation_active": False,
         })
         routes.GENERATION_CACHE.clear()
@@ -134,6 +136,25 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "aspect_ratio": "16:9",
             "model_id": "ollama::test-model",
         }
+
+    async def test_ollama_resolution_passes_the_selected_host_to_detection_and_inference(self):
+        host = "http://192.168.1.20:11434"
+        model = {
+            "id": f"ollama::{host}::gemma4:test",
+            "name": "gemma4:test",
+            "family": "ollama",
+            "remote_model": "gemma4:test",
+            "endpoint": host,
+        }
+        with patch.object(routes.OLLAMA_BACKEND, "probe_model", return_value=model) as probe:
+            resolved = await routes._resolve_model({
+                "model_id": model["id"],
+                "ollama_model": "gemma4:test",
+                "ollama_host": host,
+            })
+
+        self.assertEqual(resolved, model)
+        probe.assert_called_once_with("gemma4:test", host)
 
     async def test_invalid_canonical_tag_stops_generate_before_provider_resolution_or_backend_calls(self):
         body = self.generation_body("Use <Video 9> for the camera motion.")

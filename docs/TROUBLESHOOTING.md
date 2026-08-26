@@ -153,15 +153,15 @@ The model appears under **Installed models**. A text-only setup completes a T2VA
 
 **Symptom**
 
-Ollama Settings show **Start Ollama** and the local service does not respond.
+Ollama Settings show **Start Ollama** and the selected service does not respond.
 
 **Cause**
 
-Writer does not start the Ollama application or service.
+Writer does not start the Ollama application or service. A custom host may also be unavailable from this computer.
 
 **Fix**
 
-Open the Ollama app, wait for the local service to start, then select **Check now**.
+For the default host, open the Ollama app and wait for the local service to start. For a custom host, check its root URL, network listener, and firewall. Then select **Check now**.
 
 **Verify**
 

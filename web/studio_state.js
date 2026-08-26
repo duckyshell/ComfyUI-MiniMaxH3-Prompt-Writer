@@ -1,6 +1,9 @@
 export const SYSTEM_PROMPT_STORAGE_KEY = "h3ps-system-prompts-v1";
 export const EXTERNAL_SERVER_STORAGE_KEY = "h3ps-external-llama-server-v1";
 export const OLLAMA_MODEL_STORAGE_KEY = "h3ps-ollama-model-v1";
+export const OLLAMA_HOST_STORAGE_KEY = "h3ps-ollama-host-v1";
+export const OLLAMA_ENDPOINT_MODELS_STORAGE_KEY = "h3ps-ollama-endpoint-models-v1";
+export const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
 export const API_PROVIDER_STORAGE_KEY = "h3ps-api-provider-v1";
 export const USER_PREFERENCES_STORAGE_KEY = "h3ps-preferences-v1";
 export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
@@ -141,14 +144,53 @@ export function saveApiProviderConfig(storage, config) {
   storage?.setItem(API_PROVIDER_STORAGE_KEY, JSON.stringify(safe));
 }
 
-export function loadOllamaModel(storage = globalThis.localStorage) {
-  const value = storage?.getItem(OLLAMA_MODEL_STORAGE_KEY);
+export function normalizeOllamaHost(value) {
+  const host = typeof value === "string" ? value.trim().replace(/\/+$/, "") : "";
+  if (/^http:\/\/(localhost|\[::1\])(?::11434)?$/i.test(host)) return DEFAULT_OLLAMA_HOST;
+  return host || DEFAULT_OLLAMA_HOST;
+}
+
+export function loadOllamaHost(storage = globalThis.localStorage) {
+  return normalizeOllamaHost(storage?.getItem(OLLAMA_HOST_STORAGE_KEY));
+}
+
+export function saveOllamaHost(storage, host) {
+  const normalized = normalizeOllamaHost(host);
+  if (normalized === DEFAULT_OLLAMA_HOST) storage?.removeItem(OLLAMA_HOST_STORAGE_KEY);
+  else storage?.setItem(OLLAMA_HOST_STORAGE_KEY, normalized);
+}
+
+function loadEndpointModels(storage) {
+  try {
+    const value = JSON.parse(storage?.getItem(OLLAMA_ENDPOINT_MODELS_STORAGE_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+export function loadOllamaModel(storage = globalThis.localStorage, host = DEFAULT_OLLAMA_HOST) {
+  const endpoint = normalizeOllamaHost(host);
+  if (endpoint === DEFAULT_OLLAMA_HOST) {
+    const value = storage?.getItem(OLLAMA_MODEL_STORAGE_KEY);
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  const value = loadEndpointModels(storage)[endpoint];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function saveOllamaModel(storage, modelName) {
-  if (modelName) storage?.setItem(OLLAMA_MODEL_STORAGE_KEY, modelName);
-  else storage?.removeItem(OLLAMA_MODEL_STORAGE_KEY);
+export function saveOllamaModel(storage, modelName, host = DEFAULT_OLLAMA_HOST) {
+  const endpoint = normalizeOllamaHost(host);
+  if (endpoint === DEFAULT_OLLAMA_HOST) {
+    if (modelName) storage?.setItem(OLLAMA_MODEL_STORAGE_KEY, modelName);
+    else storage?.removeItem(OLLAMA_MODEL_STORAGE_KEY);
+    return;
+  }
+  const models = loadEndpointModels(storage);
+  if (modelName) models[endpoint] = modelName;
+  else delete models[endpoint];
+  if (Object.keys(models).length) storage?.setItem(OLLAMA_ENDPOINT_MODELS_STORAGE_KEY, JSON.stringify(models));
+  else storage?.removeItem(OLLAMA_ENDPOINT_MODELS_STORAGE_KEY);
 }
 
 export function loadExternalServerConfig(storage = globalThis.localStorage) {
@@ -204,6 +246,10 @@ export function selectedOllamaModel(state) {
   return state.selectedModel?.family === "ollama" ? state.selectedModel.remote_model : null;
 }
 
+export function selectedOllamaHost(state) {
+  return state.selectedModel?.family === "ollama" ? state.ollamaHost : null;
+}
+
 export function selectedApiProvider(state) {
   if (state.selectedModel?.family !== "api") return null;
   return {
@@ -255,6 +301,7 @@ function sharedInferencePayload(state) {
     model_id: state.selectedModel?.id,
     external_server: selectedExternalServer(state),
     ollama_model: selectedOllamaModel(state),
+    ollama_host: selectedOllamaHost(state),
     api_provider: selectedApiProvider(state),
     thinking: state.thinking,
     context_profile: directRuntime ? state.contextProfile : "auto",
@@ -275,6 +322,7 @@ export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }
     model_id: state.selectedModel?.id,
     external_server: selectedExternalServer(state),
     ollama_model: selectedOllamaModel(state),
+    ollama_host: selectedOllamaHost(state),
     api_provider: selectedApiProvider(state),
     thinking: state.thinking,
     context_profile: directRuntime ? state.contextProfile : "auto",
@@ -322,6 +370,7 @@ export function buildLyricsRefinePayload(state, {
 
 export function createStudioState({ sessionId, storage = globalThis.localStorage }) {
   const preferences = loadUserPreferences(storage);
+  const ollamaHost = loadOllamaHost(storage);
   return {
     mode: preferences?.mode || "Reference",
     lastVideoMode: preferences?.mode && preferences.mode !== "Music3" ? preferences.mode : "Reference",
@@ -368,10 +417,13 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     externalModel: null,
     externalServerError: null,
     ollamaStatus: null,
-    ollamaModelName: loadOllamaModel(storage),
+    ollamaHost,
+    ollamaModelName: loadOllamaModel(storage, ollamaHost),
     ollamaError: null,
     ollamaPollTimer: null,
     ollamaRefreshBusy: false,
+    ollamaHostSettingsOpen: false,
+    ollamaStorageHelpOpen: false,
     apiProviderConfig: loadApiProviderConfig(storage) || {
       preset: "gemini",
       base_url: "",

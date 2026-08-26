@@ -13,6 +13,7 @@ from backend.models.ollama_backend import (
     OllamaBackend,
     _ollama_cli_installed,
     _ollama_messages,
+    normalize_ollama_url,
 )
 
 
@@ -127,6 +128,13 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
         return
 
 
+class _SecondFakeOllamaHandler(_FakeOllamaHandler):
+    requests = []
+    running_models = []
+    slow_started = threading.Event()
+    stream_error = False
+
+
 class OllamaBackendTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -134,15 +142,23 @@ class OllamaBackendTests(unittest.TestCase):
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}"
+        cls.second_server = _QuietThreadingHTTPServer(("127.0.0.1", 0), _SecondFakeOllamaHandler)
+        cls.second_thread = threading.Thread(target=cls.second_server.serve_forever, daemon=True)
+        cls.second_thread.start()
+        cls.second_url = f"http://127.0.0.1:{cls.second_server.server_address[1]}"
 
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join(timeout=2)
+        cls.second_server.shutdown()
+        cls.second_server.server_close()
+        cls.second_thread.join(timeout=2)
 
     def setUp(self):
         _FakeOllamaHandler.reset()
+        _SecondFakeOllamaHandler.reset()
         self.backend = OllamaBackend(self.url)
 
     def _model(self):
@@ -164,6 +180,55 @@ class OllamaBackendTests(unittest.TestCase):
         with patch("backend.models.ollama_backend.shutil.which", return_value=None):
             self.assertFalse(_ollama_cli_installed())
         which.assert_called_once_with("ollama")
+
+    def test_normalizes_optional_remote_host_and_rejects_api_paths(self):
+        self.assertEqual(normalize_ollama_url(None), "http://127.0.0.1:11434")
+        self.assertEqual(normalize_ollama_url("http://localhost:11434"), "http://127.0.0.1:11434")
+        self.assertEqual(normalize_ollama_url(" http://192.168.1.20:11434/ "), "http://192.168.1.20:11434")
+        self.assertEqual(normalize_ollama_url("https://ollama.example"), "https://ollama.example:443")
+        for invalid in ("ftp://host:11434", "http://host:11434/api", "http://user:secret@host:11434"):
+            with self.subTest(invalid=invalid), self.assertRaises(ModelError) as raised:
+                normalize_ollama_url(invalid)
+            self.assertEqual(raised.exception.code, "INVALID_OLLAMA_URL")
+
+    def test_ollama_host_allows_private_http_and_public_https(self):
+        for value in (
+            "http://10.1.2.3:11434",
+            "http://172.16.0.1:11434",
+            "http://172.31.255.254:11434",
+            "http://192.168.1.25:11434",
+            "http://[fd00::25]:11434",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(normalize_ollama_url(value), value)
+        self.assertEqual(normalize_ollama_url("https://ollama.example"), "https://ollama.example:443")
+
+    def test_ollama_host_rejects_public_http(self):
+        for value in (
+            "http://example.com:11434",
+            "http://8.8.8.8:11434",
+            "http://172.32.0.1:11434",
+            "http://192.0.2.1:11434",
+        ):
+            with self.subTest(value=value), self.assertRaises(ModelError) as raised:
+                normalize_ollama_url(value)
+            self.assertEqual(raised.exception.code, "OLLAMA_URL_INSECURE")
+
+    def test_ollama_host_blocks_metadata_and_special_network_addresses(self):
+        for value in (
+            "https://metadata.google.internal",
+            "https://instance-data",
+            "https://instance-data.ec2.internal",
+            "https://169.254.169.254",
+            "https://0.0.0.0",
+            "https://224.0.0.1",
+            "https://[fe80::1]",
+            "https://[ff02::1]",
+            "https://[::]",
+        ):
+            with self.subTest(value=value), self.assertRaises(ModelError) as raised:
+                normalize_ollama_url(value)
+            self.assertEqual(raised.exception.code, "OLLAMA_URL_BLOCKED")
 
     def test_beginner_recommendations_match_the_live_tested_gpu_tiers(self):
         self.assertEqual(RECOMMENDED_OLLAMA_MODEL, "gemma4:e4b")
@@ -195,6 +260,45 @@ class OllamaBackendTests(unittest.TestCase):
         self.assertTrue(model["thinking_detected"])
         self.assertFalse(model["tested_for_h3"])
         self.assertFalse(model["capabilities"]["audio"])
+
+    def test_custom_endpoint_scopes_model_ids_metadata_cache_and_inference(self):
+        local = self.backend.detect(self.url)
+        remote = self.backend.detect(self.second_url)
+
+        local_model = local["compatible_models"][0]
+        remote_model = remote["compatible_models"][0]
+        self.assertEqual(local_model["endpoint"], self.url)
+        self.assertEqual(remote_model["endpoint"], self.second_url)
+        self.assertNotEqual(local_model["id"], remote_model["id"])
+        self.assertTrue(remote_model["id"].startswith(f"ollama::{self.second_url}::"))
+        self.assertTrue(remote["remote_host"])
+        self.assertTrue(any(path == "/api/show" for _, path, _ in _FakeOllamaHandler.requests))
+        self.assertTrue(any(path == "/api/show" for _, path, _ in _SecondFakeOllamaHandler.requests))
+
+        _FakeOllamaHandler.requests = []
+        _SecondFakeOllamaHandler.requests = []
+        result = self.backend._chat_completion(
+            "gemma4:test", {"context_tokens": 8192}, endpoint=self.second_url,
+            messages=[{"role": "user", "content": "remote"}],
+            temperature=1.0, top_p=0.95, top_k=64, max_tokens=128, seed=None, thinking=False,
+        )
+        self.assertEqual(result["choices"][0]["message"]["content"], "OLLAMA_OK")
+        self.assertFalse(any(path == "/api/chat" for _, path, _ in _FakeOllamaHandler.requests))
+        self.assertTrue(any(path == "/api/chat" for _, path, _ in _SecondFakeOllamaHandler.requests))
+
+    def test_retained_models_do_not_transfer_between_endpoints(self):
+        remote_model = self.backend.probe_model("gemma4:test", self.second_url)
+        plan = self.backend.preflight(remote_model, self._assembled(), context_profile="auto", kv_cache="auto", thinking=False)
+        self.backend.prepare_request()
+        with patch("backend.models.ollama_backend.run_h3_pipeline", return_value={"prompt": "OK"}):
+            self.backend.generate(
+                remote_model, self._assembled(), "session", thinking=False, seed=1,
+                unload_after=False, runtime_plan=plan,
+            )
+
+        self.assertEqual(self.backend.retained_models, set())
+        self.assertEqual(self.backend._retained_for(self.second_url), {"gemma4:test"})
+        self.assertEqual(self.backend.retained_status(self.url)["writer_retained_models"], [])
 
     def test_converts_openai_multimodal_parts_to_native_ollama_images(self):
         converted = _ollama_messages([{

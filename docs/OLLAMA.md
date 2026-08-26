@@ -13,7 +13,15 @@ Ollama is the recommended local provider. It keeps the prompt-model runtime outs
 5. Select **Check now** if the app is waiting for Ollama to start.
 6. After the pull completes, select **Refresh**, choose the installed model, and return to Generate.
 
-Prompt Writer only checks the local Ollama service and installed models. It does not start `ollama serve`, call `/api/pull`, or download models.
+Prompt Writer only checks the selected Ollama service and its installed models. It does not start `ollama serve`, call `/api/pull`, or download models.
+
+## Ollama on another computer
+
+The default host is `http://127.0.0.1:11434`. To use Ollama on another computer, open the collapsed **Use Ollama on another computer** control in Ollama Settings and enter that server's root URL, such as `http://192.168.1.25:11434`.
+
+The Ollama server must listen on the network and allow connections from the ComfyUI computer. Pull commands must be run on the computer that hosts Ollama. Writer remembers the selected model separately for each host.
+
+Plain HTTP is allowed only for this computer or a private LAN IP. Public remote hosts must use HTTPS. Writer rejects cloud metadata and special network addresses.
 
 ## Tested Gemma 4 tags
 
@@ -49,6 +57,6 @@ With **Keep model loaded** off, Writer asks Ollama to unload the model after the
 - **Stop & unload** cancels an active Ollama request and asks Ollama to unload that model.
 - **Cancel** stops the current request without changing a previously retained model.
 
-Ollama is a shared service. Writer only offers unload controls for models it intentionally used and retained during the current Writer session.
+Ollama is a shared service. Writer only offers unload controls for models it intentionally used and retained during the current Writer session. Retained-model state is tracked separately for each configured host.
 
 See [Troubleshooting](TROUBLESHOOTING.md#ollama-is-not-running) if the service or model is not detected.

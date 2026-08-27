@@ -2,3 +2,10 @@ __pycache__/
 *.py[cod]
 logs/
 .local-tech/
+dist/
+standalone/.venv/
+standalone/runtime/
+standalone/models/
+standalone/data/settings.json
+standalone/data/logs/
+standalone/data/tmp/

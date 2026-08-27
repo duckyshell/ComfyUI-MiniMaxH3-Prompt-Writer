@@ -1,5 +1,7 @@
 # Direct GGUF
 
+This guide is for Direct GGUF inside the ComfyUI extension. Standalone Local GGUF uses a selected `llama-server.exe`, not `llama-cpp-python`; see the [Standalone setup guide](../standalone/README.md#local-gguf).
+
 Direct GGUF loads a local multimodal model inside ComfyUI. Choose it when you want Writer to manage model loading, Context, KV cache, and unload without a separate model server.
 
 This is an optional advanced path. Most users should start with [Ollama](OLLAMA.md).

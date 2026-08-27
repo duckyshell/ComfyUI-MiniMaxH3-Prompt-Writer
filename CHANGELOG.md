@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2 - 2026-08-28
+
+### Packaging
+
+- Added the separate Standalone Windows release channel while keeping it out of the Comfy Registry package.
+- Added reproducible release ZIP builds and clearer installation links for both products.
+- Clarified which provider and troubleshooting instructions apply to ComfyUI and Standalone.
+
 ## 0.4.1 - 2026-08-24
 
 ### Fixes

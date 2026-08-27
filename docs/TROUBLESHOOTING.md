@@ -1,6 +1,8 @@
 # Troubleshooting
 
-Start by updating H3 Prompt Writer, restarting ComfyUI, and using `Ctrl+F5` if the browser still shows an older interface. The entries below describe problems that can still occur in v0.3.
+This page primarily covers the ComfyUI extension. Standalone users should start with the [Standalone setup guide](../standalone/README.md). The `llama-cpp-python` and ComfyUI VRAM instructions below do not apply to Standalone Local GGUF.
+
+Start by updating H3 Prompt Writer, restarting ComfyUI, and using `Ctrl+F5` if the browser still shows an older interface. The entries below describe problems that can still occur in v0.4.2.
 
 ## I installed it but cannot find a node
 

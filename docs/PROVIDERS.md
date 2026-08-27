@@ -4,6 +4,8 @@ Not sure? Start with Ollama. It's the simplest local setup.
 
 The provider determines how Writer reaches its prompt model. That prompt model reads the brief and references, then writes text. It is separate from the MiniMax H3 model in your video workflow. Tested Ollama tags are listed in the Ollama guide, and verified GGUF pairs are listed in the Direct guide.
 
+Provider setup can differ by host. Direct GGUF on this page means the ComfyUI extension path using `llama-cpp-python`. Standalone Local GGUF starts a user-selected `llama-server.exe` instead; see the [Standalone setup guide](../standalone/README.md#local-gguf).
+
 Ollama, External llama.cpp, and API providers can use other multimodal models when the provider and model accept image inputs. Gemma 4 is the recommended local family and has received the most testing, but it is not a whitelist for those three provider paths. Compatibility does not guarantee the same H3 prompt quality.
 
 External llama.cpp can also use a text-only model for requests without images or video. Direct GGUF supports its verified Gemma 4 pairs, a verified Qwen 3.8 configuration, and metadata-recognized custom configurations that remain labeled unverified.

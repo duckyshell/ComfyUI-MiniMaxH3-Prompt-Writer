@@ -54,7 +54,7 @@ Custom is a transport contract, not a claim that every OpenAI-compatible server 
 
 ## Keys and saved settings
 
-The key is sent once to the local H3 backend and held only in that ComfyUI process's memory. It is not read from environment variables and is not written to browser storage, model settings, developer notes, or request content. The backend uses it only to authenticate provider requests. Disconnecting removes the in-memory connection. The browser may save the preset, base URL, model ID, Gemini Thinking level, and Custom capability settings.
+The key is sent once to the local H3 backend and held only in the current Writer backend process's memory. It is not read from environment variables and is not written to browser storage, model settings, developer notes, or request content. The backend uses it only to authenticate provider requests. Disconnecting removes the in-memory connection. The browser may save the preset, base URL, model ID, Gemini Thinking level, and Custom capability settings.
 
 ## What leaves this computer
 

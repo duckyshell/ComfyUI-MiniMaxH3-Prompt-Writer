@@ -2,6 +2,8 @@
 
 H3 Prompt Writer is a ComfyUI UI extension. It does not add a node to the workflow graph.
 
+This page installs the ComfyUI extension. For the separate Windows application, use the [Standalone setup guide](../standalone/README.md).
+
 ## Install the extension
 
 ### ComfyUI Manager
@@ -18,13 +20,9 @@ git clone https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer.git
 
 ### ZIP
 
-Use **Code > Download ZIP** on GitHub. Extract the archive under `ComfyUI/custom_nodes` and, if needed, rename the folder to:
+For manual ZIP installation, use the clearly named `H3-Prompt-Writer-ComfyUI-vX.Y.Z.zip` asset linked from the repository README. Do not use the Standalone Windows ZIP.
 
-```text
-ComfyUI-MiniMaxH3-Prompt-Writer
-```
-
-The final path should be:
+Extract the archive under `ComfyUI/custom_nodes`. The final path should be:
 
 ```text
 ComfyUI/custom_nodes/ComfyUI-MiniMaxH3-Prompt-Writer/

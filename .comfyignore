@@ -2,5 +2,7 @@
 .pytest_cache/
 __pycache__/
 scripts/
+standalone/
 tests/
+docs/dev/standalone/
 *.pyc

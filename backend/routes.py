@@ -357,10 +357,18 @@ async def _prepare_generation_runtime(
         assembled,
         **runtime_options,
     )
-    _propagate_worker_cancellation(cancellation)
-    await _memory_preflight(backend, model, runtime_plan)
-    if _request_cancelled(request_id):
-        raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
+    try:
+        _propagate_worker_cancellation(cancellation)
+        await _memory_preflight(backend, model, runtime_plan)
+        if _request_cancelled(request_id):
+            raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
+    except BaseException:
+        if getattr(backend, "preflight_acquires_runtime", False):
+            try:
+                await _run_thread_worker(backend.unload)
+            except BaseException:
+                pass
+        raise
     return model, backend, runtime_plan
 
 

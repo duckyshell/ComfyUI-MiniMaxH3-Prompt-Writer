@@ -9,6 +9,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from backend.context import CONTEXT_SAFETY_TOKENS, LOCAL_THINKING_OUTPUT_TOKENS, non_thinking_output_tokens
+
 from .managed_runtime import ManagedLlamaServer
 
 
@@ -491,6 +493,7 @@ class ManagedGGUFController:
 class ManagedGGUFBackend:
     manages_gpu_memory = False
     externally_managed = False
+    preflight_acquires_runtime = True
 
     def __init__(
         self,
@@ -650,27 +653,36 @@ class ManagedGGUFBackend:
         except Exception:
             self.unload()
             raise
-        if generation_budget is not None:
-            safety_tokens = int(plan["reserved_output_tokens"]) - int(plan["max_output_tokens"])
-            minimum_required = int(plan["estimated_input_tokens"]) + generation_budget + safety_tokens
-            if minimum_required > selected_context_tokens:
-                self.unload()
-                raise self.model_error(
-                    "CONTEXT_BUDGET_EXCEEDED",
-                    "This request and Generation budget do not fit the selected Context.",
-                    {
-                        "estimated_input_tokens": plan["estimated_input_tokens"],
-                        "generation_budget": generation_budget,
-                        "safety_tokens": safety_tokens,
-                        "context_tokens": selected_context_tokens,
-                        "suggestion": "Reduce Generation budget, remove references, or shorten the creative brief.",
-                    },
-                )
-            plan.update({
-                "max_output_tokens": generation_budget,
-                "reserved_output_tokens": generation_budget + safety_tokens,
-                "generation_budget_manual": True,
-            })
+        safety_tokens = int(plan.get("reserved_output_tokens") or CONTEXT_SAFETY_TOKENS) - int(
+            plan.get("max_output_tokens") or 0
+        )
+        output_budget = generation_budget if generation_budget is not None else (
+            LOCAL_THINKING_OUTPUT_TOKENS if thinking else non_thinking_output_tokens(assembled)
+        )
+        minimum_required = int(plan["estimated_input_tokens"]) + output_budget + safety_tokens
+        if minimum_required > selected_context_tokens:
+            self.unload()
+            raise self.model_error(
+                "CONTEXT_BUDGET_EXCEEDED",
+                "This request and Generation budget do not fit the selected Context."
+                if generation_budget is not None
+                else "This request does not leave enough context for a complete MiniMax prompt.",
+                {
+                    "estimated_input_tokens": plan["estimated_input_tokens"],
+                    "generation_budget": generation_budget,
+                    "safety_tokens": safety_tokens,
+                    "context_tokens": selected_context_tokens,
+                    "suggestion": "Reduce Generation budget, remove references, or shorten the creative brief."
+                    if generation_budget is not None
+                    else "Remove references, shorten the creative brief, or select a larger Context.",
+                },
+            )
+        plan.update({
+            "max_output_tokens": output_budget,
+            "reserved_output_tokens": output_budget + safety_tokens,
+            "generation_budget_manual": generation_budget is not None,
+            "output_tokens_managed_by_server": False,
+        })
         plan.update({
             "requested_context_profile": requested_profile,
             "context_profile": profile,

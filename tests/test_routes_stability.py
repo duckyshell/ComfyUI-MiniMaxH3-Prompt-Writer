@@ -345,6 +345,25 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         backend.preflight.assert_not_called()
         self.assertIsNone(routes.STATE["active_request_id"])
 
+    async def test_cancel_after_preflight_unloads_runtime_acquired_by_preflight(self):
+        body = self.generation_body("Use <Video 1>.")
+        assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}
+        model = {"id": "test-model", "name": "Test", "family": "test"}
+        backend = MagicMock(manages_gpu_memory=False, preflight_acquires_runtime=True)
+        backend.preflight.return_value = {"context_profile": "auto", "kv_cache": "auto"}
+
+        with (
+            patch.object(routes, "_resolve_model", new_callable=AsyncMock, return_value=model),
+            patch.object(routes, "_request_cancelled", return_value=True),
+            patch.dict(routes.BACKENDS, {"test": backend}),
+        ):
+            with self.assertRaises(routes.ModelError) as raised:
+                await routes._prepare_generation_runtime(body, assembled, "request-id")
+
+        self.assertEqual(raised.exception.code, "GENERATION_CANCELLED")
+        backend.preflight.assert_called_once()
+        backend.unload.assert_called_once()
+
     async def test_unload_during_model_resolution_is_deferred_to_selected_backend(self):
         body = self.generation_body("Use <Video 1>.")
         assembled = {"input": {"duration_seconds": 10, "aspect_ratio": "16:9", "creative_brief": body["creative_brief"]}}

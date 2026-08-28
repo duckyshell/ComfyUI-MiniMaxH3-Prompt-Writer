@@ -9,10 +9,11 @@ from pathlib import Path
 from aiohttp.test_utils import TestClient, TestServer
 
 from backend.gguf_metadata import classify_gguf_file
+from backend.models.contract import ModelError
 from h3_standalone.app import create_app
 from h3_standalone.config import load_settings, validate_upstream
 from h3_standalone.external_backend import _ManagedChatHandler
-from h3_standalone.managed_gguf import ManagedGGUFController, managed_runtime_diagnostics
+from h3_standalone.managed_gguf import ManagedGGUFBackend, ManagedGGUFController, managed_runtime_diagnostics
 from h3_standalone.managed_runtime import ManagedLlamaServer
 
 
@@ -266,6 +267,88 @@ class ManagedGGUFTest(unittest.TestCase):
             {"enable_thinking": True, "reasoning_effort": "low"},
         )
         self.assertEqual(transport.payload["reasoning_format"], "deepseek-legacy")
+
+    def test_managed_local_server_restores_its_own_generation_budget(self) -> None:
+        class Runtime:
+            started = None
+
+            def start(self, **options):
+                self.started = options
+                return {"endpoint": "http://127.0.0.1:8080"}
+
+            def stop(self):
+                return {"stopped": True}
+
+            def status(self):
+                return {"running": True}
+
+        class Controller:
+            def __init__(self, binary):
+                self.binary = binary
+                self.runtime = Runtime()
+
+            def config(self):
+                return {"server_path": str(self.binary)}
+
+        class External:
+            def probe_model(self, _config):
+                return {"id": "managed", "server_context_tokens": 16_384}
+
+            def preflight(self, *_args, **_kwargs):
+                return {
+                    "estimated_input_tokens": 1_000,
+                    "max_output_tokens": None,
+                    "reserved_output_tokens": 512,
+                    "thinking_budget_reduced": False,
+                }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "llama-server.exe"
+            model_path = root / "model.gguf"
+            binary.touch()
+            model_path.touch()
+            controller = Controller(binary)
+            backend = ManagedGGUFBackend(
+                controller,
+                External(),
+                ModelError,
+                {"standard": 16_384},
+            )
+            model = {
+                "id": str(model_path),
+                "path": str(model_path),
+                "projector": None,
+                "recommended_context": "standard",
+                "context_profiles": ["standard"],
+                "reasoning_effort_values": ["low"],
+                "reasoning_effort": "low",
+            }
+            assembled = {"input": {"mode": "T2VA"}, "messages": [], "media_inputs": []}
+
+            automatic = backend.preflight(
+                model,
+                assembled,
+                context_profile="auto",
+                kv_cache="auto",
+                thinking=False,
+            )
+            self.assertEqual(automatic["max_output_tokens"], 2_048)
+            self.assertFalse(automatic["output_tokens_managed_by_server"])
+
+            manual = backend.preflight(
+                model,
+                assembled,
+                context_profile="standard",
+                kv_cache="q8",
+                thinking=True,
+                generation_budget=4_096,
+                reasoning_effort="low",
+            )
+            self.assertEqual(manual["max_output_tokens"], 4_096)
+            self.assertTrue(manual["generation_budget_manual"])
+            self.assertEqual(manual["reasoning_effort"], "low")
+            self.assertEqual(controller.runtime.started["kv_cache"], "q8")
 
     def test_managed_diagnostics_never_report_python_runtime_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

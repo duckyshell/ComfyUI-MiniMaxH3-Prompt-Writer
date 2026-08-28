@@ -210,6 +210,52 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         self.assertEqual(result["text_token_source"], "vocab_only")
         self.assertEqual(result["estimated_text_tokens"], 321)
 
+    def test_manual_reasoning_effort_requires_an_explicit_template_value(self):
+        info = {
+            **model_info(projector=None),
+            "template_controls": {"enable_thinking": True, "reasoning_effort": True},
+            "reasoning_effort_values": ["low", "medium", "xhigh"],
+        }
+        assembled = {
+            "messages": [{"role": "user", "content": "brief"}],
+            "media_inputs": [],
+            "input": {"mode": "T2VA", "creative_brief": "brief"},
+        }
+        backend = GGUFBackend()
+
+        plan = backend.preflight(
+            info,
+            assembled,
+            context_profile="standard",
+            kv_cache="q8",
+            thinking=True,
+            reasoning_effort="medium",
+        )
+        self.assertEqual(plan["reasoning_effort"], "medium")
+
+        with self.assertRaises(ModelError) as raised:
+            backend.preflight(
+                info,
+                assembled,
+                context_profile="standard",
+                kv_cache="q8",
+                thinking=True,
+                reasoning_effort="high",
+            )
+        self.assertEqual(raised.exception.code, "DIRECT_REASONING_EFFORT_UNAVAILABLE")
+
+    def test_thinking_off_ignores_a_saved_reasoning_effort(self):
+        info = {**model_info(projector=None), "reasoning_effort_values": []}
+        plan = GGUFBackend().preflight(
+            info,
+            {"messages": [{"role": "user", "content": "brief"}], "media_inputs": [], "input": {"mode": "T2VA"}},
+            context_profile="standard",
+            kv_cache="q8",
+            thinking=False,
+            reasoning_effort="xhigh",
+        )
+        self.assertIsNone(plan["reasoning_effort"])
+
     def test_mtmd_logging_suppresses_info_and_keeps_warnings_and_errors(self):
         with (
             patch.dict(sys.modules, self.fake_modules()),

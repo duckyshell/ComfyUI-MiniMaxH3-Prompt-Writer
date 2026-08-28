@@ -261,7 +261,11 @@ test("user preferences persist only stable non-secret settings", () => {
     settingsProvider: "api",
     preferredDirectModelId: "direct-model.gguf",
     directContextProfile: "extended",
+    directContextTokens: 20000,
     directKvCache: "q8",
+    directGenerationBudget: "custom",
+    directGenerationBudgetTokens: 6000,
+    directReasoningEffort: "medium",
     musicLyricsUseBrief: false,
     fullscreen: true,
     selectedModel: { id: "api::secret-connection::model", api_connection_id: "secret-connection" },
@@ -281,7 +285,11 @@ test("user preferences persist only stable non-secret settings", () => {
     active_provider: "api",
     direct_model_id: "direct-model.gguf",
     direct_context_profile: "extended",
+    direct_context_tokens: 20000,
     direct_kv_cache: "q8",
+    direct_generation_budget: "custom",
+    direct_generation_budget_tokens: 6000,
+    direct_reasoning_effort: "medium",
     music_lyrics_use_brief: false,
     fullscreen: true,
   });
@@ -311,7 +319,11 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     active_provider: "direct",
     direct_model_id: null,
     direct_context_profile: "auto",
+    direct_context_tokens: null,
     direct_kv_cache: "auto",
+    direct_generation_budget: "auto",
+    direct_generation_budget_tokens: null,
+    direct_reasoning_effort: "auto",
     music_lyrics_use_brief: true,
     fullscreen: false,
   });
@@ -327,7 +339,10 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
       active_provider: "ollama",
       direct_model_id: "direct-model.gguf",
       direct_context_profile: "extended",
+      direct_context_tokens: 20000,
       direct_kv_cache: "q8",
+      direct_generation_budget: "4096",
+      direct_reasoning_effort: "low",
       fullscreen: true,
       ollama_context_profile: "standard",
     }),
@@ -339,7 +354,10 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
   assert.equal(state.preferredProvider, "ollama");
   assert.equal(state.preferredDirectModelId, "direct-model.gguf");
   assert.equal(state.directContextProfile, "extended");
+  assert.equal(state.directContextTokens, 20000);
   assert.equal(state.directKvCache, "q8");
+  assert.equal(state.directGenerationBudget, "4096");
+  assert.equal(state.directReasoningEffort, "low");
   assert.equal(state.musicLyricsUseBrief, true);
   assert.equal(state.fullscreen, true);
   assert.equal(state.ollamaContextProfile, undefined);
@@ -445,6 +463,17 @@ test("all mode drafts persist independently across reloads", () => {
   });
   assert.match(storage.entries()[MODE_DRAFTS_STORAGE_KEY], /Reference brief|Reference prompt/);
   assert.deepEqual(createStudioState({ sessionId: "drafts", storage }).modeDrafts.T2VA, { brief: "Text brief", prompt: "Text prompt" });
+});
+
+test("video drafts preserve the 8000 character brief while Music keeps 2000", () => {
+  const storage = memoryStorage();
+  saveModeDrafts(storage, {
+    T2VA: { brief: "v".repeat(8000), prompt: "Video prompt" },
+    Music3: { brief: "m".repeat(8000), prompt: "Music prompt", lyrics: "Lyrics" },
+  });
+  const drafts = loadModeDrafts(storage);
+  assert.equal(drafts.T2VA.brief.length, 8000);
+  assert.equal(drafts.Music3.brief.length, 2000);
 });
 
 test("draft dirty state covers every mode", () => {
@@ -678,6 +707,21 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   assert.deepEqual(apiPayload.api_provider, { connection_id: "connection-id", model_id: "provider/model" });
   assert.equal(apiPayload.external_server, null);
   assert.equal(apiPayload.ollama_model, null);
+
+  selectModelState(state, { id: "direct.gguf", family: "gguf", capabilities: { audio: false } });
+  state.contextProfile = "custom";
+  state.contextTokens = 20000;
+  state.kvCache = "q8";
+  state.generationBudget = "custom";
+  state.generationBudgetTokens = 6000;
+  state.reasoningEffort = "medium";
+  const directPayload = buildGeneratePayload(state, { creativeBrief: "Direct brief", seed: 1 });
+  assert.equal(directPayload.context_profile, "custom");
+  assert.equal(directPayload.context_tokens, 20000);
+  assert.equal(directPayload.generation_budget, 6000);
+  assert.equal(directPayload.reasoning_effort, "medium");
+  state.thinking = false;
+  assert.equal(Object.hasOwn(buildGeneratePayload(state, { creativeBrief: "Direct brief", seed: 2 }), "reasoning_effort"), false);
 });
 
 test("Ollama remote host controls stay collapsed and disclosure state survives refresh renders", () => {
@@ -836,6 +880,10 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.match(settingsSource, /data-active-runtime-summary>Runtime · Auto</);
   assert.match(settingsSource, /data-runtime-option="context" data-value="large">32K</);
   assert.match(settingsSource, /data-runtime-option="context" data-value="maximum">48K</);
+  assert.match(settingsSource, /data-runtime-option="context" data-value="custom">Custom</);
+  assert.match(settingsSource, /Generation budget/);
+  assert.match(settingsSource, /data-reasoning-effort-control hidden/);
+  assert.match(mainSource, /reasoning_effort_values/);
   assert.match(mainSource, /const availableContexts = model\.context_profiles/);
   assert.match(mainSource, /studio\.directContextProfile = "auto"/);
   assert.match(mainSource, /button\.disabled = unavailable/);

@@ -50,7 +50,7 @@ def create_app(settings: Settings) -> web.Application:
 
     from backend import routes as upstream_routes  # noqa: PLC0415
     from backend.context import CONTEXT_PROFILES, estimate_text_tokens  # noqa: PLC0415
-    from backend.gguf_metadata import read_gguf_metadata  # noqa: PLC0415
+    from backend.gguf_metadata import classify_gguf_file, read_gguf_metadata  # noqa: PLC0415
     from backend.models.contract import ModelError  # noqa: PLC0415
     from backend.models.external_server_backend import ExternalServerBackend  # noqa: PLC0415
     from backend.models.gguf_policies import (  # noqa: PLC0415
@@ -71,6 +71,7 @@ def create_app(settings: Settings) -> web.Application:
         package_root=PACKAGE_ROOT,
         initial_roots=(local_models, *settings.model_roots),
         metadata_reader=read_gguf_metadata,
+        file_classifier=classify_gguf_file,
         policy_resolver=identify_model_policy,
     )
     managed_external_class = standalone_external_backend_class(

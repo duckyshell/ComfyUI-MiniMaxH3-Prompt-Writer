@@ -297,6 +297,74 @@ class ContextPlanTests(unittest.TestCase):
                 thinking=False,
             )
 
+    def test_custom_context_is_exact_and_never_snapped_to_a_tier(self):
+        result = plan_context(
+            request(),
+            self.qwen_model(native_context=262_144),
+            requested_context="custom",
+            requested_context_tokens=20_000,
+            requested_kv_cache="q8",
+            thinking=False,
+            count_text_tokens=lambda _text: 100,
+        )
+
+        self.assertEqual(result["context_profile"], "custom")
+        self.assertEqual(result["context_tokens"], 20_000)
+
+    def test_custom_context_cannot_exceed_known_native_context(self):
+        with self.assertRaises(ContextPlanError) as raised:
+            plan_context(
+                request(),
+                self.qwen_model(native_context=32_768),
+                requested_context="custom",
+                requested_context_tokens=32_769,
+                requested_kv_cache="q8",
+                thinking=False,
+            )
+        self.assertEqual(raised.exception.code, "CONTEXT_EXCEEDS_NATIVE")
+
+    def test_custom_context_can_use_a_native_size_below_the_preset_floor(self):
+        result = plan_context(
+            request(),
+            self.qwen_model(native_context=4_096),
+            requested_context="custom",
+            requested_context_tokens=4_096,
+            requested_kv_cache="q8",
+            requested_output_tokens=2_048,
+            thinking=False,
+            count_text_tokens=lambda _text: 100,
+        )
+        self.assertEqual(result["context_tokens"], 4_096)
+        self.assertEqual(result["available_context_profiles"], [])
+
+    def test_manual_generation_budget_is_reserved_in_preflight(self):
+        result = plan_context(
+            request(),
+            self.qwen_model(),
+            requested_context="custom",
+            requested_context_tokens=12_000,
+            requested_kv_cache="q8",
+            requested_output_tokens=9_000,
+            thinking=False,
+            count_text_tokens=lambda _text: 100,
+        )
+        self.assertEqual(result["max_output_tokens"], 9_000)
+        self.assertTrue(result["generation_budget_manual"])
+
+        with self.assertRaises(ContextPlanError) as raised:
+            plan_context(
+                request(),
+                self.qwen_model(),
+                requested_context="custom",
+                requested_context_tokens=10_000,
+                requested_kv_cache="q8",
+                requested_output_tokens=9_500,
+                thinking=False,
+                count_text_tokens=lambda _text: 100,
+            )
+        self.assertEqual(raised.exception.code, "CONTEXT_BUDGET_EXCEEDED")
+        self.assertEqual(raised.exception.details["generation_budget"], 9_500)
+
 
 if __name__ == "__main__":
     unittest.main()

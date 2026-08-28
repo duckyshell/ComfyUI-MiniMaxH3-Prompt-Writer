@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import folder_paths
 
-from .gguf_metadata import GGUFMetadataError, read_gguf_metadata
+from .gguf_metadata import GGUFMetadataError, classify_gguf_file, read_gguf_metadata
 from .context import CONTEXT_PROFILES
 from .models.gguf_adapters import (
     QWEN_VISION_ADAPTER_IDS,
@@ -100,6 +100,16 @@ def _metadata_result(path: Path) -> tuple[dict[str, Any] | None, str | None]:
         return read_gguf_metadata(path), None
     except (GGUFMetadataError, OSError, RuntimeError) as error:
         return None, str(error)
+
+
+def _classify_files(paths: list[Path]) -> tuple[list[Path], list[Path]]:
+    models: list[Path] = []
+    projectors: list[Path] = []
+    for path in paths:
+        metadata, _error = _metadata_result(path)
+        target = projectors if classify_gguf_file(metadata, path.name) == "projector" else models
+        target.append(path)
+    return models, projectors
 
 
 def _pair_projector(
@@ -196,6 +206,7 @@ def _model_candidate(
         "enable_thinking": False,
         "reasoning_effort": False,
     }
+    effort_values = list((metadata or {}).get("reasoning_effort_values") or [])
     configuration_verified = bool(metadata) and architecture_recognized and (
         (bool(configured) and not qwen_context)
         or policy_is_verified_configuration(model_policy, model_path, projector)
@@ -260,6 +271,7 @@ def _model_candidate(
         "native_context_tokens": native_context,
         "embedding_length": (metadata or {}).get("embedding_length"),
         "template_controls": template_controls,
+        "reasoning_effort_values": effort_values,
         "mtp_detected": bool((metadata or {}).get("mtp_detected")),
         "detected_capabilities": {
             "thinking": bool(template_controls["enable_thinking"]),
@@ -294,14 +306,8 @@ def discover_models_with_diagnostics() -> tuple[list[dict[str, Any]], dict[str, 
             root_diagnostics["issues"].append("Directory does not exist.")
             continue
 
-        gguf_files = [
-            path for path in root.rglob("*.gguf")
-            if path.is_file() and "mmproj" not in path.name.lower()
-        ]
-        projectors = [
-            path for path in root.rglob("*.gguf")
-            if path.is_file() and "mmproj" in path.name.lower()
-        ]
+        installed_files = [path for path in root.rglob("*.gguf") if path.is_file()]
+        gguf_files, projectors = _classify_files(installed_files)
         root_diagnostics["model_files"] = [str(path.resolve()) for path in sorted(gguf_files)]
         root_diagnostics["projector_files"] = [str(path.resolve()) for path in sorted(projectors)]
         if not gguf_files and not projectors:
@@ -367,8 +373,7 @@ def _find_model_in_directory(
 ) -> dict[str, Any] | None:
     model_path = Path(model_id)
     files = [model_path.parent / name for name, _size, _mtime in signature]
-    sibling_models = [path for path in files if "mmproj" not in path.name.lower()]
-    sibling_projectors = [path for path in files if "mmproj" in path.name.lower()]
+    sibling_models, sibling_projectors = _classify_files(files)
     if model_path not in sibling_models:
         return None
     candidate, _pairing_issue = _model_candidate(
@@ -386,7 +391,7 @@ def find_model(model_id: str) -> dict[str, Any] | None:
         model_path = Path(model_id).resolve(strict=True)
     except (OSError, RuntimeError):
         return None
-    if not model_path.is_file() or model_path.suffix.lower() != ".gguf" or "mmproj" in model_path.name.lower():
+    if not model_path.is_file() or model_path.suffix.lower() != ".gguf":
         return None
 
     roots = []
@@ -396,6 +401,9 @@ def find_model(model_id: str) -> dict[str, Any] | None:
         except (OSError, RuntimeError):
             continue
     if not any(model_path.is_relative_to(root) for root in roots):
+        return None
+    metadata, _metadata_error = _metadata_result(model_path)
+    if classify_gguf_file(metadata, model_path.name) != "model":
         return None
 
     runtime_available = importlib.util.find_spec("llama_cpp") is not None

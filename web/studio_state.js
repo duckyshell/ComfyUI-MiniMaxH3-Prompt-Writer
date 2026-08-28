@@ -11,8 +11,9 @@ export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
 const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
 const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
 const PROVIDERS = ["direct", "external", "ollama", "api"];
-const CONTEXT_PROFILES = ["auto", "low", "standard", "extended", "large", "maximum"];
+const CONTEXT_PROFILES = ["auto", "low", "standard", "extended", "large", "maximum", "custom"];
 const KV_CACHES = ["auto", "f16", "q8"];
+const GENERATION_BUDGETS = ["auto", "2048", "4096", "8192", "custom"];
 const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
 
 export function isPersistedDraftMode(mode) {
@@ -54,7 +55,8 @@ export function loadModeDrafts(storage = globalThis.localStorage) {
     return Object.fromEntries(DRAFT_MODES.flatMap((mode) => {
       const draft = value.drafts[mode];
       if (!draft || typeof draft.brief !== "string" || typeof draft.prompt !== "string") return [];
-      const safeDraft = { brief: draft.brief.slice(0, 2000), prompt: draft.prompt.slice(0, 16000) };
+      const briefLimit = mode === "Music3" ? 2000 : 8000;
+      const safeDraft = { brief: draft.brief.slice(0, briefLimit), prompt: draft.prompt.slice(0, 16000) };
       if (mode === "Music3") safeDraft.lyrics = typeof draft.lyrics === "string" ? draft.lyrics.slice(0, 4000) : "";
       return [[mode, safeDraft]];
     }));
@@ -67,7 +69,8 @@ export function saveModeDrafts(storage, drafts) {
   const safeDrafts = Object.fromEntries(DRAFT_MODES.flatMap((mode) => {
     const draft = drafts?.[mode];
     if (!draft || typeof draft.brief !== "string" || typeof draft.prompt !== "string") return [];
-    const safeDraft = { brief: draft.brief.slice(0, 2000), prompt: draft.prompt.slice(0, 16000) };
+    const briefLimit = mode === "Music3" ? 2000 : 8000;
+    const safeDraft = { brief: draft.brief.slice(0, briefLimit), prompt: draft.prompt.slice(0, 16000) };
     if (mode === "Music3") safeDraft.lyrics = typeof draft.lyrics === "string" ? draft.lyrics.slice(0, 4000) : "";
     return [[mode, safeDraft]];
   }));
@@ -86,7 +89,11 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       active_provider: PROVIDERS.includes(value.active_provider) ? value.active_provider : "direct",
       direct_model_id: typeof value.direct_model_id === "string" && value.direct_model_id ? value.direct_model_id : null,
       direct_context_profile: CONTEXT_PROFILES.includes(value.direct_context_profile) ? value.direct_context_profile : "auto",
+      direct_context_tokens: Number.isInteger(value.direct_context_tokens) && value.direct_context_tokens > 0 ? value.direct_context_tokens : null,
       direct_kv_cache: KV_CACHES.includes(value.direct_kv_cache) ? value.direct_kv_cache : "auto",
+      direct_generation_budget: GENERATION_BUDGETS.includes(value.direct_generation_budget) ? value.direct_generation_budget : "auto",
+      direct_generation_budget_tokens: Number.isInteger(value.direct_generation_budget_tokens) && value.direct_generation_budget_tokens > 0 ? value.direct_generation_budget_tokens : null,
+      direct_reasoning_effort: typeof value.direct_reasoning_effort === "string" && value.direct_reasoning_effort ? value.direct_reasoning_effort : "auto",
       music_lyrics_use_brief: value.music_lyrics_use_brief !== false,
       fullscreen: value.fullscreen === true,
     };
@@ -104,7 +111,11 @@ export function saveUserPreferences(storage, state) {
     active_provider: PROVIDERS.includes(state.settingsProvider) ? state.settingsProvider : "direct",
     direct_model_id: typeof state.preferredDirectModelId === "string" && state.preferredDirectModelId ? state.preferredDirectModelId : null,
     direct_context_profile: CONTEXT_PROFILES.includes(state.directContextProfile) ? state.directContextProfile : "auto",
+    direct_context_tokens: Number.isInteger(state.directContextTokens) && state.directContextTokens > 0 ? state.directContextTokens : null,
     direct_kv_cache: KV_CACHES.includes(state.directKvCache) ? state.directKvCache : "auto",
+    direct_generation_budget: GENERATION_BUDGETS.includes(state.directGenerationBudget) ? state.directGenerationBudget : "auto",
+    direct_generation_budget_tokens: Number.isInteger(state.directGenerationBudgetTokens) && state.directGenerationBudgetTokens > 0 ? state.directGenerationBudgetTokens : null,
+    direct_reasoning_effort: typeof state.directReasoningEffort === "string" && state.directReasoningEffort ? state.directReasoningEffort : "auto",
     music_lyrics_use_brief: state.musicLyricsUseBrief !== false,
     fullscreen: state.fullscreen === true,
   };
@@ -295,6 +306,10 @@ export function restoredModelAfterDiscovery(state) {
 
 function sharedInferencePayload(state) {
   const directRuntime = state.selectedModel?.family === "gguf";
+  const generationBudgetMode = state.generationBudget || "auto";
+  const generationBudget = generationBudgetMode === "custom"
+    ? (state.generationBudgetTokens ?? 0)
+    : generationBudgetMode === "auto" ? null : Number(generationBudgetMode);
   return {
     session_id: state.sessionId,
     mode: state.mode,
@@ -306,6 +321,11 @@ function sharedInferencePayload(state) {
     thinking: state.thinking,
     context_profile: directRuntime ? state.contextProfile : "auto",
     kv_cache: directRuntime ? state.kvCache : "auto",
+    ...(directRuntime ? {
+      context_tokens: state.contextProfile === "custom" ? state.contextTokens : null,
+      generation_budget: generationBudget,
+    } : {}),
+    ...(directRuntime && state.thinking ? { reasoning_effort: state.reasoningEffort || "auto" } : {}),
     system_prompt_override: currentSystemPromptOverride(state),
     unload_after: !state.keepModelLoaded,
   };
@@ -313,6 +333,10 @@ function sharedInferencePayload(state) {
 
 export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }) {
   const directRuntime = state.selectedModel?.family === "gguf";
+  const generationBudgetMode = state.generationBudget || "auto";
+  const generationBudget = generationBudgetMode === "custom"
+    ? (state.generationBudgetTokens ?? 0)
+    : generationBudgetMode === "auto" ? null : Number(generationBudgetMode);
   const payload = {
     session_id: state.sessionId,
     mode: state.mode,
@@ -327,6 +351,11 @@ export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }
     thinking: state.thinking,
     context_profile: directRuntime ? state.contextProfile : "auto",
     kv_cache: directRuntime ? state.kvCache : "auto",
+    ...(directRuntime ? {
+      context_tokens: state.contextProfile === "custom" ? state.contextTokens : null,
+      generation_budget: generationBudget,
+    } : {}),
+    ...(directRuntime && state.thinking ? { reasoning_effort: state.reasoningEffort || "auto" } : {}),
     system_prompt_override: currentSystemPromptOverride(state),
     seed,
     unload_after: !state.keepModelLoaded,
@@ -378,7 +407,11 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     durationSeconds: preferences?.duration_seconds || 10,
     aspectRatio: preferences?.aspect_ratio || "16:9",
     contextProfile: "auto",
+    contextTokens: null,
     kvCache: "auto",
+    generationBudget: "auto",
+    generationBudgetTokens: null,
+    reasoningEffort: "auto",
     thinking: false,
     keepModelLoaded: false,
     settingsProvider: preferences?.active_provider || "ollama",
@@ -386,7 +419,11 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     preferredProvider: preferences?.active_provider || "ollama",
     preferredDirectModelId: preferences?.direct_model_id || null,
     directContextProfile: preferences?.direct_context_profile || "auto",
+    directContextTokens: preferences?.direct_context_tokens || null,
     directKvCache: preferences?.direct_kv_cache || "auto",
+    directGenerationBudget: preferences?.direct_generation_budget || "auto",
+    directGenerationBudgetTokens: preferences?.direct_generation_budget_tokens || null,
+    directReasoningEffort: preferences?.direct_reasoning_effort || "auto",
     musicLyricsUseBrief: preferences?.music_lyrics_use_brief !== false,
     fullscreen: preferences?.fullscreen === true,
     settingsPromptProfile: "standard",

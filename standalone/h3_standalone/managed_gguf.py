@@ -32,12 +32,14 @@ class ManagedGGUFController:
         package_root: Path,
         initial_roots: tuple[Path, ...],
         metadata_reader: Callable[[Path], dict[str, Any]],
+        file_classifier: Callable[[dict[str, Any] | None, str], str] | None = None,
         policy_resolver: Callable[[str | None, str | None, dict[str, Any] | None], Any] | None = None,
         readiness_timeout: float = 300.0,
     ) -> None:
         self.package_root = package_root
         self.config_path = package_root / "data" / "managed_gguf.json"
         self.metadata_reader = metadata_reader
+        self.file_classifier = file_classifier
         self.policy_resolver = policy_resolver
         self._lock = threading.RLock()
         self._discovery_cache: dict[str, Any] | None = None
@@ -207,7 +209,7 @@ class ManagedGGUFController:
                 except (OSError, RuntimeError, ValueError):
                     continue
                 split_count, split_index = self._split_metadata(metadata)
-                if self._kind(metadata, split_count, split_index) != "projector":
+                if self._kind(metadata, candidate.name, split_count, split_index) != "projector":
                     continue
                 candidate_name = str(metadata.get("name") or "").strip().casefold()
                 if candidate_name == model_name:
@@ -271,10 +273,11 @@ class ManagedGGUFController:
             int(index) if isinstance(index, int) and index >= 0 else 0,
         )
 
-    @staticmethod
-    def _kind(metadata: dict[str, Any] | None, split_count: int, split_index: int) -> str:
+    def _kind(self, metadata: dict[str, Any] | None, filename: str, split_count: int, split_index: int) -> str:
         if split_count > 1 and split_index > 0:
             return "shard"
+        if self.file_classifier is not None:
+            return self.file_classifier(metadata, filename)
         if metadata is None:
             return "unknown"
         architecture = str(metadata.get("architecture") or "").lower()
@@ -332,7 +335,7 @@ class ManagedGGUFController:
                 seen.add(key)
                 metadata, metadata_error = self._read_cached_metadata(path)
                 split_count, split_index = self._split_metadata(metadata or {})
-                kind = self._kind(metadata, split_count, split_index)
+                kind = self._kind(metadata, path.name, split_count, split_index)
                 template_controls = (metadata or {}).get("template_controls", {})
                 policy = None
                 if metadata is not None and self.policy_resolver is not None:
@@ -356,7 +359,9 @@ class ManagedGGUFController:
                     "split_count": split_count,
                     "split_index": split_index,
                     "thinking": bool(template_controls.get("enable_thinking")),
+                    "template_reasoning_control": bool(template_controls.get("reasoning_effort")),
                     "reasoning_effort": self._reasoning_effort(metadata or {}, policy),
+                    "reasoning_effort_values": list((metadata or {}).get("reasoning_effort_values") or []),
                     "model_policy": policy.id if policy is not None else None,
                 })
                 root_info["files"] += 1
@@ -386,9 +391,10 @@ class ManagedGGUFController:
         profiles = ["low", "standard", "extended", "large", "maximum"]
         context_sizes = {"low": 8192, "standard": 16384, "extended": 24576, "large": 32768, "maximum": 49152}
         if isinstance(native_context, int) and native_context > 0:
-            profiles = [name for name in profiles if context_sizes[name] <= native_context] or ["low"]
+            profiles = [name for name in profiles if context_sizes[name] <= native_context]
         verified_model = item["kind"] == "model"
         reasoning_effort = item.get("reasoning_effort")
+        reasoning_effort_values = list(item.get("reasoning_effort_values") or [])
         return {
             "id": model_path,
             "name": Path(model_path).stem,
@@ -427,9 +433,10 @@ class ManagedGGUFController:
             "model_policy": item.get("model_policy"),
             "model_policy_supported": bool(item.get("model_policy")),
             "reasoning_effort": reasoning_effort,
+            "reasoning_effort_values": reasoning_effort_values,
             "template_controls": {
                 "enable_thinking": bool(item.get("thinking")),
-                "reasoning_effort": bool(reasoning_effort),
+                "reasoning_effort": bool(item.get("template_reasoning_control")),
             },
             "detected_capabilities": {"thinking": bool(item.get("thinking")), "vision_projector": bool(projector)},
             "verified_capabilities": {"text": False, "vision": False},
@@ -551,19 +558,71 @@ class ManagedGGUFBackend:
         context_profile: str | None,
         kv_cache: str | None,
         thinking: bool,
+        context_tokens: int | None = None,
+        generation_budget: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         binary, model_path, projector = self._configuration(model)
         requested_profile = str(context_profile or "auto").lower()
-        profile = model.get("recommended_context", "standard") if requested_profile == "auto" else requested_profile
-        if profile not in self.context_profiles:
+        if requested_profile == "custom":
+            if not isinstance(context_tokens, int) or isinstance(context_tokens, bool) or context_tokens < 1024:
+                raise self.model_error(
+                    "INVALID_CUSTOM_CONTEXT",
+                    "Custom Context must be an integer of at least 1,024 tokens.",
+                )
+            native_context = model.get("native_context_tokens")
+            if isinstance(native_context, int) and native_context > 0 and context_tokens > native_context:
+                raise self.model_error(
+                    "CONTEXT_EXCEEDS_NATIVE",
+                    "Custom Context cannot exceed the model's native context.",
+                    {"context_tokens": context_tokens, "native_context_tokens": native_context},
+                )
+            profile = "custom"
+            selected_context_tokens = context_tokens
+        else:
+            available_profiles = list(model.get("context_profiles") or [])
+            if not available_profiles:
+                raise self.model_error(
+                    "MODEL_NATIVE_CONTEXT_UNSUPPORTED",
+                    "The model's native context is smaller than the available Context presets. Select Custom Context.",
+                    {"native_context_tokens": model.get("native_context_tokens")},
+                )
+            recommended = model.get("recommended_context", "standard")
+            profile = (
+                recommended if recommended in available_profiles else available_profiles[0]
+            ) if requested_profile == "auto" else requested_profile
+            selected_context_tokens = int(self.context_profiles.get(profile, 0))
+        if profile != "custom" and (
+            profile not in self.context_profiles or profile not in model.get("context_profiles", [])
+        ):
             raise self.model_error("INVALID_CONTEXT_PROFILE", "Select a supported context profile.")
+        if generation_budget is not None and (
+            not isinstance(generation_budget, int)
+            or isinstance(generation_budget, bool)
+            or generation_budget <= 0
+        ):
+            raise self.model_error(
+                "INVALID_GENERATION_BUDGET",
+                "Generation budget must be a positive integer number of tokens.",
+            )
+        requested_effort = str(reasoning_effort or "auto").strip().lower()
+        supported_efforts = list(model.get("reasoning_effort_values") or [])
+        if thinking and requested_effort != "auto" and requested_effort not in supported_efforts:
+            raise self.model_error(
+                "DIRECT_REASONING_EFFORT_UNAVAILABLE",
+                "The selected reasoning effort is not supported by this model's chat template.",
+                {"reasoning_effort": requested_effort, "supported_reasoning_efforts": supported_efforts},
+            )
+        effective_effort = None if not thinking else (
+            model.get("reasoning_effort") if requested_effort == "auto" else requested_effort
+        )
         requested_kv = str(kv_cache or "auto").lower()
         try:
             runtime = self.controller.runtime.start(
                 binary=binary,
                 model=model_path,
                 projector=projector,
-                context_tokens=int(self.context_profiles[profile]),
+                context_tokens=selected_context_tokens,
                 kv_cache=requested_kv,
             )
             remote = self.external.probe_model({"url": runtime["endpoint"], "model": "h3-managed"})
@@ -591,11 +650,34 @@ class ManagedGGUFBackend:
         except Exception:
             self.unload()
             raise
+        if generation_budget is not None:
+            safety_tokens = int(plan["reserved_output_tokens"]) - int(plan["max_output_tokens"])
+            minimum_required = int(plan["estimated_input_tokens"]) + generation_budget + safety_tokens
+            if minimum_required > selected_context_tokens:
+                self.unload()
+                raise self.model_error(
+                    "CONTEXT_BUDGET_EXCEEDED",
+                    "This request and Generation budget do not fit the selected Context.",
+                    {
+                        "estimated_input_tokens": plan["estimated_input_tokens"],
+                        "generation_budget": generation_budget,
+                        "safety_tokens": safety_tokens,
+                        "context_tokens": selected_context_tokens,
+                        "suggestion": "Reduce Generation budget, remove references, or shorten the creative brief.",
+                    },
+                )
+            plan.update({
+                "max_output_tokens": generation_budget,
+                "reserved_output_tokens": generation_budget + safety_tokens,
+                "generation_budget_manual": True,
+            })
         plan.update({
             "requested_context_profile": requested_profile,
             "context_profile": profile,
             "requested_kv_cache": requested_kv,
             "kv_cache": requested_kv if requested_kv != "auto" else "server",
+            "requested_reasoning_effort": requested_effort,
+            "reasoning_effort": effective_effort,
         })
         return plan
 
@@ -609,7 +691,9 @@ class ManagedGGUFBackend:
         delegated.update({"unload_after": False, "context_profile": "auto", "kv_cache": "auto"})
         configure_model = getattr(self.external, "configure_managed_model", None)
         if callable(configure_model):
-            configure_model(model)
+            configured_model = copy.deepcopy(model)
+            configured_model["reasoning_effort"] = options.get("runtime_plan", {}).get("reasoning_effort")
+            configure_model(configured_model)
         remote.update({
             key: copy.deepcopy(model[key])
             for key in ("architecture_adapter", "model_policy", "reasoning_effort", "template_controls")

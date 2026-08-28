@@ -73,8 +73,8 @@ def _validated_generation_context(source: dict[str, Any]) -> tuple[float, str, s
     if aspect_ratio not in ASPECT_RATIOS:
         raise AssemblyError("INVALID_ASPECT_RATIO", "The selected aspect ratio is not supported.")
     brief = _required_text(source, "creative_brief", "Creative brief")
-    if len(brief) > 2000:
-        raise AssemblyError("BRIEF_TOO_LONG", "Creative brief cannot exceed 2,000 characters.")
+    if len(brief) > 8000:
+        raise AssemblyError("BRIEF_TOO_LONG", "Creative brief cannot exceed 8,000 characters.")
     return duration, aspect_ratio, brief
 
 
@@ -185,8 +185,8 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
         raise AssemblyError("INVALID_MODE", "The selected MiniMax mode is not supported.")
     system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
     brief = _required_text(body, "creative_brief", "Creative brief")
-    if len(brief) > 2000:
-        raise AssemblyError("BRIEF_TOO_LONG", "Creative brief cannot exceed 2,000 characters.")
+    if len(brief) > 8000:
+        raise AssemblyError("BRIEF_TOO_LONG", "Creative brief cannot exceed 8,000 characters.")
 
     aspect_ratio = _required_text(body, "aspect_ratio", "Aspect ratio")
     if aspect_ratio not in ASPECT_RATIOS:

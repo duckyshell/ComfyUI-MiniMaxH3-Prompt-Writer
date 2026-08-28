@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .context import CONTEXT_PROFILES
+
 
 def estimated_free_vram_mb(model_info: dict[str, Any], runtime_plan: dict[str, Any]) -> int | None:
     estimates = model_info.get("estimated_free_vram_mb")
@@ -9,6 +11,16 @@ def estimated_free_vram_mb(model_info: dict[str, Any], runtime_plan: dict[str, A
         return None
     profile = runtime_plan.get("context_profile")
     estimate = estimates.get(profile)
+    if profile == "custom" and not isinstance(estimate, (int, float)):
+        context_tokens = runtime_plan.get("context_tokens")
+        known = sorted(
+            (CONTEXT_PROFILES[name], value)
+            for name, value in estimates.items()
+            if name in CONTEXT_PROFILES and isinstance(value, (int, float))
+        )
+        if isinstance(context_tokens, int) and context_tokens > 0 and known:
+            ceiling = next((value for tokens, value in known if tokens >= context_tokens), None)
+            estimate = ceiling if ceiling is not None else known[-1][1] * context_tokens / known[-1][0]
     if not isinstance(estimate, (int, float)):
         return None
     required = float(estimate)

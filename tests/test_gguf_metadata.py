@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.gguf_metadata import GGUFMetadataError, read_gguf_metadata
+from backend.gguf_metadata import GGUFMetadataError, classify_gguf_file, read_gguf_metadata
 
 
 TYPE_UINT32 = 4
@@ -71,8 +71,26 @@ class GGUFMetadataTests(unittest.TestCase):
         self.assertEqual(metadata["vision_patch_size"], 16)
         self.assertEqual(metadata["vision_spatial_merge_size"], 2)
         self.assertEqual(metadata["template_controls"], {"enable_thinking": True, "reasoning_effort": True})
+        self.assertEqual(metadata["reasoning_effort_values"], [])
         self.assertTrue(metadata["mtp_detected"])
         self.assertNotIn("tokenizer.ggml.tokens", metadata["values"])
+
+    def test_extracts_explicit_reasoning_effort_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.gguf"
+            write_gguf(path, [
+                ("general.architecture", TYPE_STRING, "qwen35"),
+                ("tokenizer.chat_template", TYPE_STRING, "{% if reasoning_effort == 'high' %}{% endif %}{% if reasoning_effort not in ('xhigh', 'medium', 'low') %}bad{% endif %}"),
+            ])
+            metadata = read_gguf_metadata(path)
+
+        self.assertEqual(metadata["reasoning_effort_values"], ["low", "medium", "high", "xhigh"])
+
+    def test_classification_prefers_metadata_and_falls_back_for_unreadable_files(self):
+        self.assertEqual(classify_gguf_file({"architecture": "qwen35"}, "mmproj-renamed.gguf"), "model")
+        self.assertEqual(classify_gguf_file({"architecture": "clip"}, "vision-sidecar.gguf"), "projector")
+        self.assertEqual(classify_gguf_file(None, "mmproj-legacy.gguf"), "projector")
+        self.assertEqual(classify_gguf_file(None, "custom.gguf"), "model")
 
     def test_rejects_non_gguf_and_truncated_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

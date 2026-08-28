@@ -266,6 +266,16 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-runtime-menu { position: absolute; z-index: 8; right: 4px; bottom: calc(100% + 4px); display: flex; width: 90px; padding: 4px; flex-direction: column; border: 1px solid #414650; border-radius: 6px; background: #24272e; box-shadow: 0 9px 24px rgba(0,0,0,.45); }
 .h3ps-runtime-menu[hidden] { display: none; }
 .h3ps-runtime-menu button { padding: 5px 7px; border: 0; border-radius: 4px; background: transparent; color: #d4d7dc; text-align: left; font-size: 8.5px; cursor: pointer; }.h3ps-runtime-menu button:hover { background: #30343b; }.h3ps-runtime-menu button.is-selected { color: #ffc0b3; background: rgba(255,115,86,.09); }
+.h3ps-runtime-custom { margin-top: 7px; }
+.h3ps-runtime-custom[hidden], .h3ps-direct-advanced[hidden] { display: none; }
+.h3ps-runtime-custom input { width: 120px; padding: 5px 7px; border: 1px solid #3a3e46; border-radius: 5px; background: #17191e; color: #e0e2e6; font: inherit; }
+.h3ps-direct-advanced { margin-top: 8px; border-top: 1px solid var(--h3ps-border-soft); }
+.h3ps-direct-advanced > summary { display: flex; align-items: center; gap: 7px; padding: 9px 1px 5px; color: #cfd2d7; cursor: pointer; list-style: none; font-size: 9.5px; }
+.h3ps-direct-advanced > summary::-webkit-details-marker { display: none; }
+.h3ps-direct-advanced > summary small { margin-left: auto; color: var(--h3ps-muted); font-size: 8.5px; }
+.h3ps-direct-advanced > summary svg { color: var(--h3ps-muted); transition: transform 120ms ease; }
+.h3ps-direct-advanced[open] > summary svg { transform: rotate(90deg); }
+.h3ps-direct-advanced > .h3ps-runtime-settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding-top: 3px; }
 .h3ps-system-settings { margin-top: 7px; border: 1px solid var(--h3ps-border-soft); border-radius: 8px; background: #1a1d22; }
 .h3ps-system-settings summary { display: flex; align-items: center; min-height: 34px; padding: 0 10px; color: #cfd2d7; font-size: 9.5px; cursor: pointer; list-style: none; }
 .h3ps-system-settings summary::-webkit-details-marker { display: none; }

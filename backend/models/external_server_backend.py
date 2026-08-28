@@ -206,6 +206,7 @@ class ExternalServerBackend:
         with self._connection_lock:
             self._connection = connection
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         finish_reason = None
         usage: dict[str, Any] = {}
         try:
@@ -255,6 +256,9 @@ class ExternalServerBackend:
                 text = delta.get("content")
                 if isinstance(text, str):
                     content_parts.append(text)
+                reasoning = delta.get("reasoning_content")
+                if isinstance(reasoning, str):
+                    reasoning_parts.append(reasoning)
                 if choice.get("finish_reason") is not None:
                     finish_reason = choice["finish_reason"]
         except ModelError:
@@ -273,13 +277,17 @@ class ExternalServerBackend:
                     self._connection = None
             connection.close()
         content = "".join(content_parts)
+        reasoning = "".join(reasoning_parts)
         if not usage:
             usage = {
                 "prompt_tokens": 0,
-                "completion_tokens": estimate_text_tokens(content),
+                "completion_tokens": estimate_text_tokens(content + reasoning),
             }
+        message: dict[str, Any] = {"content": content}
+        if reasoning:
+            message["reasoning_content"] = reasoning
         return {
-            "choices": [{"message": {"content": content}, "finish_reason": finish_reason or "stop"}],
+            "choices": [{"message": message, "finish_reason": finish_reason or "stop"}],
             "usage": usage,
         }
 

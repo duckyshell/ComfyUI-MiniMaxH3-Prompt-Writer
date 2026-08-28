@@ -879,7 +879,8 @@ function updateBriefLayout() {
   const largeCanvas = window.innerWidth >= 3000 && window.innerHeight >= 1600;
   const minimumHeight = compactHeight ? 80 : largeCanvas ? 125 : 105;
   const maximumHeight = compactHeight ? 130 : largeCanvas ? 230 : 190;
-  brief.closest(".h3ps-brief").querySelector(".h3ps-char-count").textContent = `${brief.value.length.toLocaleString()} / 2,000`;
+  const briefLimit = studio.mode === "Music3" ? 2000 : 8000;
+  brief.closest(".h3ps-brief").querySelector(".h3ps-char-count").textContent = `${brief.value.length.toLocaleString()} / ${briefLimit.toLocaleString()}`;
   brief.style.height = "auto";
   brief.style.height = `${fullscreen ? Math.max(minimumHeight, brief.scrollHeight) : Math.min(maximumHeight, Math.max(minimumHeight, brief.scrollHeight))}px`;
   brief.style.overflowY = !fullscreen && brief.scrollHeight > maximumHeight ? "auto" : "hidden";
@@ -1905,7 +1906,7 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
   applyRuntimePreferences(studio.settingsProvider);
   if (model?.family === "gguf") {
     const availableContexts = model.context_profiles || ["low", "standard", "extended"];
-    if (studio.contextProfile !== "auto" && !availableContexts.includes(studio.contextProfile)) {
+    if (studio.contextProfile !== "auto" && studio.contextProfile !== "custom" && !availableContexts.includes(studio.contextProfile)) {
       studio.contextProfile = "auto";
       studio.directContextProfile = "auto";
     }
@@ -1949,17 +1950,29 @@ function rememberRuntimePreferences(provider = studio.settingsProvider) {
   if (studio.preferencesRestoring) return;
   if (provider === "direct") {
     studio.directContextProfile = studio.contextProfile;
+    studio.directContextTokens = studio.contextTokens;
     studio.directKvCache = studio.kvCache;
+    studio.directGenerationBudget = studio.generationBudget;
+    studio.directGenerationBudgetTokens = studio.generationBudgetTokens;
+    studio.directReasoningEffort = studio.reasoningEffort;
   }
 }
 
 function applyRuntimePreferences(provider) {
   if (provider === "direct") {
     studio.contextProfile = studio.directContextProfile;
+    studio.contextTokens = studio.directContextTokens;
     studio.kvCache = studio.directKvCache;
+    studio.generationBudget = studio.directGenerationBudget;
+    studio.generationBudgetTokens = studio.directGenerationBudgetTokens;
+    studio.reasoningEffort = studio.directReasoningEffort;
   } else {
     studio.contextProfile = "auto";
+    studio.contextTokens = null;
     studio.kvCache = "auto";
+    studio.generationBudget = "auto";
+    studio.generationBudgetTokens = null;
+    studio.reasoningEffort = "auto";
   }
 }
 
@@ -1973,7 +1986,8 @@ function syncThinkingAvailability() {
   const label = input.closest("label");
   const unsupported = ["ollama", "gguf"].includes(studio.selectedModel?.family)
     && studio.selectedModel.thinking !== true;
-  const disabled = apiManaged || unsupported || (!external && context !== "auto" && resolved === "low");
+  const customTooSmall = context === "custom" && Number(studio.contextTokens || 0) < 16384;
+  const disabled = apiManaged || unsupported || (!external && context !== "auto" && (resolved === "low" || customTooSmall));
   if (disabled) input.checked = false;
   if (disabled) studio.thinking = false;
   input.checked = studio.thinking;
@@ -1985,8 +1999,9 @@ function syncThinkingAvailability() {
     : disabled ? "Thinking needs 16K or larger Context." : "";
 }
 
-const CONTEXT_LABELS = { auto: "Auto", low: "8K", standard: "16K", extended: "24K", large: "32K", maximum: "48K" };
+const CONTEXT_LABELS = { auto: "Auto", low: "8K", standard: "16K", extended: "24K", large: "32K", maximum: "48K", custom: "Custom" };
 const KV_LABELS = { auto: "Auto", q8: "Q8", f16: "F16" };
+const BUDGET_LABELS = { auto: "Auto", 2048: "2,048", 4096: "4,096", 8192: "8,192", custom: "Custom" };
 
 function syncContextAvailability() {
   const profiles = studio.selectedModel?.family === "gguf"
@@ -1995,6 +2010,7 @@ function syncContextAvailability() {
   studio.root.querySelectorAll('[data-runtime-option="context"]').forEach((button) => {
     const unavailable = studio.selectedModel?.family === "gguf"
       && button.dataset.value !== "auto"
+      && button.dataset.value !== "custom"
       && !profiles.includes(button.dataset.value);
     button.disabled = unavailable;
     button.setAttribute("aria-disabled", String(unavailable));
@@ -2002,11 +2018,60 @@ function syncContextAvailability() {
   });
 }
 
+function syncAdvancedRuntimeControls() {
+  const direct = studio.selectedModel?.family === "gguf";
+  const advanced = studio.root.querySelector("[data-direct-runtime-advanced]");
+  advanced.hidden = !direct;
+  const customContext = studio.root.querySelector("[data-custom-context]");
+  customContext.hidden = !direct || studio.contextProfile !== "custom";
+  const contextInput = studio.root.querySelector("[data-custom-context-input]");
+  contextInput.value = studio.contextTokens || "";
+  const nativeContext = studio.selectedModel?.native_context_tokens;
+  if (Number.isInteger(nativeContext) && nativeContext > 0) contextInput.max = String(nativeContext);
+  else contextInput.removeAttribute("max");
+
+  const customBudget = studio.root.querySelector("[data-custom-generation-budget]");
+  customBudget.hidden = !direct || studio.generationBudget !== "custom";
+  studio.root.querySelector("[data-custom-generation-budget-input]").value = studio.generationBudgetTokens || "";
+
+  const values = direct ? (studio.selectedModel?.reasoning_effort_values || []) : [];
+  if (studio.reasoningEffort !== "auto" && !values.includes(studio.reasoningEffort)) {
+    studio.reasoningEffort = "auto";
+    studio.directReasoningEffort = "auto";
+  }
+  const reasoningControl = studio.root.querySelector("[data-reasoning-effort-control]");
+  reasoningControl.hidden = values.length === 0;
+  const menu = studio.root.querySelector('[data-runtime-menu="reasoning"]');
+  menu.innerHTML = ["auto", ...values].map((value) => `<button type="button" data-runtime-option="reasoning" data-value="${escapeHtml(value)}">${value === "auto" ? "Auto" : escapeHtml(value[0].toUpperCase() + value.slice(1))}</button>`).join("");
+  menu.querySelectorAll('[data-runtime-option="reasoning"]').forEach((button) => button.addEventListener("click", (event) => applyRuntimeOption(button, event)));
+}
+
+function applyRuntimeOption(button, event) {
+  event.preventDefault();
+  if (button.dataset.runtimeOption === "context") studio.contextProfile = button.dataset.value;
+  else if (button.dataset.runtimeOption === "kv") studio.kvCache = button.dataset.value;
+  else if (button.dataset.runtimeOption === "budget") studio.generationBudget = button.dataset.value;
+  else studio.reasoningEffort = button.dataset.value;
+  button.closest("[data-runtime-menu]").hidden = true;
+  syncRuntimeSummary();
+  syncThinkingAvailability();
+  rememberRuntimePreferences();
+  saveUserPreferences(localStorage, studio);
+}
+
 function syncRuntimeSummary(result = null) {
   if (!studio) return;
   syncContextAvailability();
-  studio.root.querySelector('[data-runtime-label="context"]').textContent = CONTEXT_LABELS[studio.contextProfile];
+  syncAdvancedRuntimeControls();
+  const customContextLabel = studio.contextTokens ? `${Number(studio.contextTokens).toLocaleString()}` : "Custom";
+  studio.root.querySelector('[data-runtime-label="context"]').textContent = studio.contextProfile === "custom" ? customContextLabel : CONTEXT_LABELS[studio.contextProfile];
   studio.root.querySelector('[data-runtime-label="kv"]').textContent = KV_LABELS[studio.kvCache];
+  studio.root.querySelector('[data-runtime-label="budget"]').textContent = studio.generationBudget === "custom" && studio.generationBudgetTokens
+    ? Number(studio.generationBudgetTokens).toLocaleString()
+    : BUDGET_LABELS[studio.generationBudget];
+  studio.root.querySelector('[data-runtime-label="reasoning"]').textContent = studio.reasoningEffort === "auto"
+    ? "Auto"
+    : studio.reasoningEffort[0].toUpperCase() + studio.reasoningEffort.slice(1);
   const summary = studio.root.querySelector("[data-runtime-summary]");
   let activeSummary;
   if (studio.selectedModel?.family === "external") {
@@ -2021,15 +2086,21 @@ function syncRuntimeSummary(result = null) {
   } else if (result && studio.contextProfile === "auto") {
     activeSummary = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
   } else {
-    activeSummary = studio.contextProfile === "auto" ? "Runtime · Auto" : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
+    activeSummary = studio.contextProfile === "auto" ? "Runtime · Auto" : `${studio.contextProfile === "custom" ? customContextLabel : CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
   }
   const settingsSummary = studio.contextProfile === "auto"
     ? "Auto"
-    : `${CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
+    : `${studio.contextProfile === "custom" ? customContextLabel : CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
   summary.textContent = settingsSummary;
   syncActiveModelSummary(activeSummary);
   studio.root.querySelectorAll("[data-runtime-option]").forEach((button) => {
-    const selected = button.dataset.runtimeOption === "context" ? studio.contextProfile : studio.kvCache;
+    const selected = button.dataset.runtimeOption === "context"
+      ? studio.contextProfile
+      : button.dataset.runtimeOption === "kv"
+        ? studio.kvCache
+        : button.dataset.runtimeOption === "budget"
+          ? studio.generationBudget
+          : studio.reasoningEffort;
     button.classList.toggle("is-selected", button.dataset.value === selected);
   });
 }
@@ -2630,15 +2701,15 @@ function createStudio() {
 
           <label class="h3ps-brief">
             <span><strong>Creative brief</strong><small>Describe what should happen in the video</small></span>
-            <textarea spellcheck="true" data-video-brief>Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
-            <small class="h3ps-char-count">0 / 2,000</small>
+            <textarea spellcheck="true" maxlength="8000" data-video-brief>Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
+            <small class="h3ps-char-count">0 / 8,000</small>
           </label>
           </div>
 
           <div class="h3ps-music-inputs" data-music-inputs hidden>
             <label class="h3ps-brief">
               <span><strong>Music brief</strong><small>Describe the sound, vocals, mood, arrangement or production</small></span>
-              <textarea spellcheck="true" data-music-brief>${MUSIC3_DEFAULT_DRAFT.brief}</textarea>
+              <textarea spellcheck="true" maxlength="2000" data-music-brief>${MUSIC3_DEFAULT_DRAFT.brief}</textarea>
               <small class="h3ps-char-count">0 / 2,000</small>
             </label>
             <label class="h3ps-brief h3ps-lyrics">
@@ -2875,16 +2946,22 @@ function createStudio() {
     root.querySelectorAll("[data-runtime-menu]").forEach((item) => { if (item !== menu) item.hidden = true; });
     menu.hidden = !menu.hidden;
   }));
-  root.querySelectorAll("[data-runtime-option]").forEach((button) => button.addEventListener("click", (event) => {
-    event.preventDefault();
-    if (button.dataset.runtimeOption === "context") studio.contextProfile = button.dataset.value;
-    else studio.kvCache = button.dataset.value;
-    button.closest("[data-runtime-menu]").hidden = true;
+  root.querySelectorAll("[data-runtime-option]").forEach((button) => button.addEventListener("click", (event) => applyRuntimeOption(button, event)));
+  root.querySelector("[data-custom-context-input]").addEventListener("input", (event) => {
+    const value = Number(event.target.value);
+    studio.contextTokens = Number.isInteger(value) && value > 0 ? value : null;
     syncRuntimeSummary();
     syncThinkingAvailability();
     rememberRuntimePreferences();
     saveUserPreferences(localStorage, studio);
-  }));
+  });
+  root.querySelector("[data-custom-generation-budget-input]").addEventListener("input", (event) => {
+    const value = Number(event.target.value);
+    studio.generationBudgetTokens = Number.isInteger(value) && value > 0 ? value : null;
+    syncRuntimeSummary();
+    rememberRuntimePreferences();
+    saveUserPreferences(localStorage, studio);
+  });
   syncRuntimeSummary();
   root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => button.addEventListener("click", () => {
     setSystemPromptProfile(button.dataset.systemPromptProfile);

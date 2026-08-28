@@ -265,12 +265,24 @@ def run_h3_pipeline(
         not text.strip() or primary_finish_reason == "length"
     )
     if thinking_fallback:
+        fallback_output_tokens = standard_output_tokens
+        if runtime_plan.get("generation_budget_manual"):
+            fallback_output_tokens = min(
+                fallback_output_tokens,
+                max(0, int(runtime_plan["max_output_tokens"]) - thinking_attempt_tokens),
+            )
+            if fallback_output_tokens <= 0:
+                raise ModelError(
+                    "GENERATION_TRUNCATED",
+                    "Thinking used the complete Generation budget before producing a final prompt. Increase the budget or turn Thinking off.",
+                    {"max_output_tokens": runtime_plan["max_output_tokens"]},
+                )
         response = complete(
             messages=messages,
             temperature=1.0,
             top_p=0.95,
             top_k=64,
-            max_tokens=standard_output_tokens,
+            max_tokens=fallback_output_tokens,
             seed=seed,
             thinking=False,
             purpose="generation",
@@ -288,7 +300,7 @@ def run_h3_pipeline(
         }
     final_finish_reason = response["choices"][0].get("finish_reason")
     if final_finish_reason == "length":
-        final_output_limit = standard_output_tokens if thinking_fallback else runtime_plan["max_output_tokens"]
+        final_output_limit = fallback_output_tokens if thinking_fallback else runtime_plan["max_output_tokens"]
         raise ModelError(
             "GENERATION_TRUNCATED",
             "The model reached the available output limit before completing the prompt. Try again, shorten the requested detail, or enable Thinking when available.",
@@ -313,7 +325,18 @@ def run_h3_pipeline(
     format_repair_reason = None
     format_repair_failure = None
     format_repair_method = None
-    if assembled["input"]["mode"] == "Reference" and initial_audit.get("repair_required") is True:
+    repair_needed = assembled["input"]["mode"] == "Reference" and initial_audit.get("repair_required") is True
+    repair_budget_remaining = None
+    if runtime_plan.get("generation_budget_manual"):
+        repair_budget_remaining = max(
+            0,
+            int(runtime_plan["max_output_tokens"]) - int(usage.get("completion_tokens", 0)),
+        )
+    if repair_needed and repair_budget_remaining == 0:
+        format_repair_attempted = True
+        format_repair_reason = ", ".join(audit_failures(initial_audit)) or "official format audit"
+        format_repair_failure = "Generation budget was exhausted before prompt correction"
+    elif repair_needed:
         format_repair_attempted = True
         failed_checks = audit_failures(initial_audit)
         format_repair_reason = ", ".join(failed_checks) or "official format audit"
@@ -343,12 +366,17 @@ def run_h3_pipeline(
             )
         if is_cancelled():
             raise ModelError("GENERATION_CANCELLED", "Generation was cancelled before prompt correction.")
+        repair_output_tokens = (
+            min(standard_output_tokens, repair_budget_remaining)
+            if repair_budget_remaining is not None
+            else standard_output_tokens
+        )
         repair_response = complete(
             messages=repair_messages,
             temperature=0.3,
             top_p=0.9,
             top_k=40,
-            max_tokens=standard_output_tokens,
+            max_tokens=repair_output_tokens,
             seed=seed,
             thinking=False,
             purpose="repair",

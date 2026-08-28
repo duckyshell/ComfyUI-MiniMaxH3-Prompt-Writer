@@ -32,7 +32,7 @@ def write_model(
 ) -> None:
     template = "{% if enable_thinking %}thinking{% endif %}" if thinking_control else "{{ messages }}"
     if reasoning_effort:
-        template += "{{ reasoning_effort }}"
+        template += "{{ reasoning_effort }}{% if reasoning_effort not in ('xhigh', 'medium', 'low') %}bad{% endif %}"
     write_gguf(path, [
         ("general.architecture", TYPE_STRING, architecture),
         ("general.name", TYPE_STRING, name),
@@ -117,6 +117,22 @@ class ModelDiscoveryTests(unittest.TestCase):
             self.assertEqual(models[0]["projector"], str(projector.resolve()))
             self.assertTrue(models[0]["runtime_ready"])
             self.assertIsNone(models[0]["setup_message"])
+
+    def test_renamed_projector_and_model_are_classified_from_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_path = root / "mmproj-is-only-a-model-name.gguf"
+            projector = root / "vision-sidecar.gguf"
+            write_model(model_path)
+            write_projector(projector)
+
+            models, diagnostics = self.discover_with_diagnostics([root])
+            found = self.find(root, model_path)
+
+        self.assertEqual([model["path"] for model in models], [str(model_path.resolve())])
+        self.assertEqual(models[0]["projector"], str(projector.resolve()))
+        self.assertEqual(found["id"], str(model_path.resolve()))
+        self.assertEqual(diagnostics["roots"][0]["projector_files"], [str(projector.resolve())])
 
     def test_multiple_flat_pairs_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -344,6 +360,7 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertTrue(model["configuration_verified"])
         self.assertEqual(model["verification_status"], "verified")
         self.assertTrue(model["template_controls"]["reasoning_effort"])
+        self.assertEqual(model["reasoning_effort_values"], ["low", "medium", "xhigh"])
 
     def test_qwen38_model_with_an_arbitrary_compatible_projector_is_not_verified(self):
         with tempfile.TemporaryDirectory() as directory:

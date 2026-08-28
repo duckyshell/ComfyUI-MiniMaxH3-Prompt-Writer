@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import struct
 from functools import lru_cache
 from pathlib import Path
@@ -31,6 +32,34 @@ _MAX_ARRAY_LENGTH = 100_000_000
 
 class GGUFMetadataError(ValueError):
     pass
+
+
+def reasoning_effort_values(chat_template: str | None) -> list[str]:
+    """Return values that the embedded template explicitly accepts."""
+    if not chat_template or "reasoning_effort" not in chat_template:
+        return []
+    values: set[str] = set()
+    for match in re.finditer(
+        r"reasoning_effort\s+not\s+in\s*\(([^)]*)\)",
+        chat_template,
+        flags=re.IGNORECASE,
+    ):
+        values.update(re.findall(r"['\"]([a-zA-Z][a-zA-Z0-9_-]*)['\"]", match.group(1)))
+    values.update(re.findall(
+        r"reasoning_effort\s*==\s*['\"]([a-zA-Z][a-zA-Z0-9_-]*)['\"]",
+        chat_template,
+        flags=re.IGNORECASE,
+    ))
+    preferred = ("low", "medium", "high", "xhigh")
+    return [*filter(values.__contains__, preferred), *sorted(values.difference(preferred))]
+
+
+def classify_gguf_file(metadata: dict[str, Any] | None, filename: str) -> str:
+    """Classify an installed GGUF, using its header before its filename."""
+    architecture = str((metadata or {}).get("architecture") or "").strip().lower()
+    if architecture:
+        return "projector" if architecture == "clip" else "model"
+    return "projector" if "mmproj" in filename.lower() else "model"
 
 
 def _read_exact(handle: BinaryIO, size: int) -> bytes:
@@ -124,6 +153,7 @@ def _read_metadata(path: Path) -> dict[str, Any]:
     chat_template = values.get("tokenizer.chat_template")
     if not isinstance(chat_template, str):
         chat_template = None
+    effort_values = reasoning_effort_values(chat_template)
     arch_prefix = f"{architecture}." if architecture else ""
     return {
         "version": version,
@@ -138,6 +168,7 @@ def _read_metadata(path: Path) -> dict[str, Any]:
             "enable_thinking": bool(chat_template and "enable_thinking" in chat_template),
             "reasoning_effort": bool(chat_template and "reasoning_effort" in chat_template),
         },
+        "reasoning_effort_values": effort_values,
         "projector_type": values.get("clip.projector_type") or values.get("clip.vision.projector_type"),
         "projector_projection_dim": values.get("clip.vision.projection_dim"),
         "vision_embedding_length": values.get("clip.vision.embedding_length"),

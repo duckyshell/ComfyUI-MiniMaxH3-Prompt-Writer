@@ -152,6 +152,17 @@ class AssemblyReferenceManifestTests(unittest.TestCase):
             assembled = assemble_request(self.body("Use Picture 1, video 2, second video, второе видео, <picture 2>, and < Video 3 > as ideas."))
         self.assertEqual(assembled["media_inputs"], [])
 
+    def test_video_creative_brief_accepts_8000_characters_without_truncation(self):
+        brief = "Ж" * 8000
+        with patch("backend.assembly.STORE.manifest", return_value=self.manifest()):
+            assembled = assemble_request(self.body(brief))
+        self.assertEqual(assembled["input"]["creative_brief"], brief)
+
+        with patch("backend.assembly.STORE.manifest", return_value=self.manifest()):
+            with self.assertRaises(AssemblyError) as raised:
+                assemble_request(self.body(brief + "x"))
+        self.assertEqual(raised.exception.code, "BRIEF_TOO_LONG")
+
     def test_all_manifest_assets_are_active_but_audio_bytes_are_not_attached(self):
         picture = {"id": "p", "type": "image", "filename": "p.png", "reference": "<Picture 1>", "content_url": "/p", "frames": [], "prepared_width": 1536, "prepared_height": 768}
         video = {"id": "v", "type": "video", "filename": "v.mp4", "reference": "<Video 1>", "content_url": "/v", "frames": [], "contact_sheet_width": 1152, "contact_sheet_height": 488}

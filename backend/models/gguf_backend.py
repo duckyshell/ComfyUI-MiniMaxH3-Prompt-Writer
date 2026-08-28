@@ -224,6 +224,9 @@ class GGUFBackend:
         context_profile: str | None,
         kv_cache: str | None,
         thinking: bool,
+        context_tokens: int | None = None,
+        generation_budget: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         if not model_info.get("runtime_ready", True):
             raise ModelError(
@@ -236,18 +239,38 @@ class GGUFBackend:
                 "DIRECT_THINKING_UNAVAILABLE",
                 "This Direct GGUF chat template does not expose Thinking controls.",
             )
+        requested_effort = str(reasoning_effort or "auto").strip().lower()
+        supported_efforts = list(model_info.get("reasoning_effort_values") or [])
+        if thinking and requested_effort != "auto" and requested_effort not in supported_efforts:
+            raise ModelError(
+                "DIRECT_REASONING_EFFORT_UNAVAILABLE",
+                "The selected reasoning effort is not supported by this model's chat template.",
+                {"reasoning_effort": requested_effort, "supported_reasoning_efforts": supported_efforts},
+            )
+        effective_effort = None
+        if thinking:
+            effective_effort = (
+                template_kwargs(model_info, thinking=True).get("reasoning_effort")
+                if requested_effort == "auto"
+                else requested_effort
+            )
         exact_counter = None
         if model_info.get("architecture_adapter") in QWEN_VISION_ADAPTER_IDS:
             exact_counter = lambda text: self._count_preflight_text_tokens(model_info, text)
         try:
-            return plan_context(
+            plan = plan_context(
                 assembled,
                 model_info,
                 requested_context=context_profile,
                 requested_kv_cache=kv_cache,
                 thinking=thinking,
+                requested_context_tokens=context_tokens,
+                requested_output_tokens=generation_budget,
                 count_text_tokens=exact_counter,
             )
+            plan["requested_reasoning_effort"] = requested_effort
+            plan["reasoning_effort"] = effective_effort
+            return plan
         except ContextPlanError as error:
             raise ModelError(error.code, error.message, error.details) from error
 
@@ -350,6 +373,9 @@ class GGUFBackend:
         context_profile: str | None = None,
         kv_cache: str | None = None,
         runtime_plan: dict[str, Any] | None = None,
+        context_tokens: int | None = None,
+        generation_budget: int | None = None,
+        reasoning_effort: str | None = None,
         on_phase: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         with self.lock:
@@ -366,6 +392,9 @@ class GGUFBackend:
                     context_profile=context_profile,
                     kv_cache=kv_cache,
                     thinking=thinking,
+                    context_tokens=context_tokens,
+                    generation_budget=generation_budget,
+                    reasoning_effort=reasoning_effort,
                 )
                 text_only = (
                     assembled.get("input", {}).get("mode") == "Music3"
@@ -443,7 +472,11 @@ class GGUFBackend:
                         "seed": seed,
                         "logits_processor": logits_processors,
                     }
-                    chat_template_options = template_kwargs(model_info, thinking=thinking)
+                    chat_template_options = template_kwargs(
+                        model_info,
+                        thinking=thinking,
+                        reasoning_effort=runtime_plan.get("reasoning_effort") if thinking else None,
+                    )
                     if text_only:
                         if chat_template_options:
                             base_chat_handler = (

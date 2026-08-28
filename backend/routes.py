@@ -340,13 +340,22 @@ async def _prepare_generation_runtime(
         backend.cancel()
         raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
 
+    runtime_options = {
+        "context_profile": body.get("context_profile", "auto"),
+        "kv_cache": body.get("kv_cache", "auto"),
+        "thinking": body.get("thinking", False),
+    }
+    if model["family"] == "gguf":
+        runtime_options.update({
+            "context_tokens": body.get("context_tokens"),
+            "generation_budget": body.get("generation_budget"),
+            "reasoning_effort": body.get("reasoning_effort", "auto"),
+        })
     runtime_plan, cancellation = await _run_thread_worker(
         backend.preflight,
         model,
         assembled,
-        context_profile=body.get("context_profile", "auto"),
-        kv_cache=body.get("kv_cache", "auto"),
-        thinking=body.get("thinking", False),
+        **runtime_options,
     )
     _propagate_worker_cancellation(cancellation)
     await _memory_preflight(backend, model, runtime_plan)

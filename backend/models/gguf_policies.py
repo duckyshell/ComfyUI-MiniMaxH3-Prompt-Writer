@@ -230,13 +230,20 @@ def sampling_options(
     }
 
 
-def template_kwargs(model_info: dict[str, Any], *, thinking: bool) -> dict[str, Any]:
+def template_kwargs(
+    model_info: dict[str, Any],
+    *,
+    thinking: bool,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
     controls = model_info.get("template_controls") or {}
     if controls.get("enable_thinking") is not True:
         return {}
     result: dict[str, Any] = {"enable_thinking": thinking}
     policy = next((item for item in _POLICIES if item.id == model_info.get("model_policy")), None)
-    if (
+    if thinking and reasoning_effort:
+        result["reasoning_effort"] = reasoning_effort
+    elif (
         thinking
         and policy is not None
         and policy.reasoning_effort

@@ -155,6 +155,28 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertEqual(scores.assignments[0], (slice(None), float("-inf")))
         self.assertEqual(scores.assignments[1], (7, 0.0))
 
+    def test_manual_generation_budget_is_shared_by_thinking_and_fallback(self):
+        backend = _CharacterizedBackend([
+            response("", prompt_tokens=10, completion_tokens=100, finish_reason="length"),
+            response("A complete compact prompt.", prompt_tokens=10, completion_tokens=20),
+        ])
+        plan = runtime_plan(thinking=True)
+        plan.update({"max_output_tokens": 120, "generation_budget_manual": True})
+        assembled = {
+            "messages": [{"role": "user", "content": "Create a compact shot."}],
+            "media_inputs": [],
+            "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "Create a compact shot."},
+        }
+
+        result = backend.generate(
+            model_info(), assembled, "manual-budget", thinking=True, seed=1,
+            unload_after=False, runtime_plan=plan,
+        )
+
+        self.assertEqual(result["prompt"], "A complete compact prompt.")
+        self.assertEqual([call["max_tokens"] for call in backend.chat_handler.calls], [120, 20])
+        self.assertEqual(result["output_tokens"], 120)
+
     def test_unmentioned_uploaded_audio_is_allowed_but_not_required_by_audit(self):
         assembled = {
             "input": {
@@ -645,6 +667,34 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertFalse(result["format_repair_attempted"])
         self.assertFalse(result["format_repair_multimodal"])
         self.assertEqual(len(backend.chat_handler.calls), 1)
+
+    def test_manual_generation_budget_also_caps_reference_repair(self):
+        initial = reference_prompt(340, include_soundscape=False)
+        repaired = reference_prompt(340)
+        backend = _CharacterizedBackend([
+            response(initial, prompt_tokens=20, completion_tokens=30),
+            response(repaired, prompt_tokens=21, completion_tokens=7),
+        ])
+        plan = runtime_plan()
+        plan.update({"max_output_tokens": 40, "generation_budget_manual": True})
+        assembled = {
+            "messages": [{"role": "user", "content": "Use Picture 1."}],
+            "media_inputs": [],
+            "input": {
+                "mode": "Reference",
+                "duration_seconds": 10,
+                "creative_brief": "Use Picture 1.",
+                "media_manifest": reference_manifest("<Picture 1>"),
+            },
+        }
+
+        result = backend.generate(
+            model_info(), assembled, "repair-budget", thinking=False, seed=7,
+            unload_after=False, runtime_plan=plan,
+        )
+
+        self.assertEqual(backend.chat_handler.calls[1]["max_tokens"], 10)
+        self.assertEqual(result["output_tokens"], 37)
 
     def test_missing_active_reference_uses_one_multimodal_continuation_repair(self):
         initial = reference_prompt(340)

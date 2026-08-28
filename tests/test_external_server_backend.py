@@ -81,6 +81,20 @@ class _FakeLlamaHandler(BaseHTTPRequestHandler):
             time.sleep(0.4)
             self.wfile.write(delayed_encoded)
             return
+        if payload.get("top_k") == 997:
+            reasoning_chunks = [
+                {"choices": [{"delta": {"reasoning_content": "PRIVATE_"}, "finish_reason": None}]},
+                {"choices": [{"delta": {"reasoning_content": "THOUGHT", "content": "PUBLIC"}, "finish_reason": "stop"}]},
+                {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 5}},
+            ]
+            body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in reasoning_chunks) + "data: [DONE]\n\n"
+            encoded = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            return
         chunks = [
             {"choices": [{"delta": {"content": "SERVER_"}, "finish_reason": None}]},
             {"choices": [{"delta": {"content": "OK"}, "finish_reason": "stop"}]},
@@ -139,6 +153,18 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertTrue(model["runtime_ready"])
         self.assertFalse(model["capabilities"]["images"])
         self.assertFalse(model["capabilities"]["video_frames"])
+
+    def test_stream_preserves_separate_reasoning_without_mixing_or_double_counting(self):
+        response = self.backend._request_chat_completion_stream(self.url, {
+            "model": "gemma-test.gguf",
+            "messages": [],
+            "top_k": 997,
+            "stream": True,
+        })
+
+        self.assertEqual(response["choices"][0]["message"]["content"], "PUBLIC")
+        self.assertEqual(response["choices"][0]["message"]["reasoning_content"], "PRIVATE_THOUGHT")
+        self.assertEqual(response["usage"]["completion_tokens"], 5)
 
     def test_text_only_external_model_generates_without_media(self):
         _FakeLlamaHandler.vision = False

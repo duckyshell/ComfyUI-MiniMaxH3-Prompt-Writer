@@ -157,13 +157,43 @@ def plan_context(
     requested_context: str | None,
     requested_kv_cache: str | None,
     thinking: bool,
+    requested_context_tokens: int | None = None,
+    requested_output_tokens: int | None = None,
     count_text_tokens: Callable[[str], int] | None = None,
 ) -> dict[str, Any]:
     requested_value = (requested_context or "auto").strip().lower()
     requested_value = CONTEXT_PROFILE_ALIASES.get(requested_value, requested_value)
     automatic = requested_value == "auto"
-    available_profiles = context_profiles_for(model_info)
-    profile = resolve_context_profile(requested_context, model_info)
+    if requested_value == "custom":
+        try:
+            available_profiles = context_profiles_for(model_info)
+        except ContextPlanError as error:
+            if error.code != "MODEL_NATIVE_CONTEXT_UNSUPPORTED":
+                raise
+            available_profiles = ()
+        if (
+            not isinstance(requested_context_tokens, int)
+            or isinstance(requested_context_tokens, bool)
+            or requested_context_tokens < 1024
+        ):
+            raise ContextPlanError(
+                "INVALID_CUSTOM_CONTEXT",
+                "Custom Context must be an integer of at least 1,024 tokens.",
+                {"context_tokens": requested_context_tokens},
+            )
+        native_context = model_info.get("native_context_tokens")
+        if isinstance(native_context, int) and native_context > 0 and requested_context_tokens > native_context:
+            raise ContextPlanError(
+                "CONTEXT_EXCEEDS_NATIVE",
+                "Custom Context cannot exceed the model's native context.",
+                {"context_tokens": requested_context_tokens, "native_context_tokens": native_context},
+            )
+        profile = "custom"
+        context_tokens = requested_context_tokens
+    else:
+        available_profiles = context_profiles_for(model_info)
+        profile = resolve_context_profile(requested_context, model_info)
+        context_tokens = CONTEXT_PROFILES[profile]
     kv_cache = resolve_kv_cache(requested_kv_cache)
     visual_input_count = sum(
         1 for item in assembled.get("media_inputs", [])
@@ -180,10 +210,18 @@ def plan_context(
         + estimated_visual_tokens
         + CHAT_TEMPLATE_OVERHEAD_TOKENS
     )
-    desired_output_tokens = (
-        LOCAL_THINKING_OUTPUT_TOKENS
-        if thinking
-        else non_thinking_output_tokens(assembled)
+    if requested_output_tokens is not None and (
+        not isinstance(requested_output_tokens, int)
+        or isinstance(requested_output_tokens, bool)
+        or requested_output_tokens <= 0
+    ):
+        raise ContextPlanError(
+            "INVALID_GENERATION_BUDGET",
+            "Generation budget must be a positive integer number of tokens.",
+            {"generation_budget": requested_output_tokens},
+        )
+    desired_output_tokens = requested_output_tokens or (
+        LOCAL_THINKING_OUTPUT_TOKENS if thinking else non_thinking_output_tokens(assembled)
     )
     minimum_required = estimated_input_tokens + desired_output_tokens + CONTEXT_SAFETY_TOKENS
     automatic_ladder = automatic and model_info.get("auto_context_ladder") is True
@@ -208,11 +246,12 @@ def plan_context(
         )
     elif automatic and profile == "low" and minimum_required > CONTEXT_PROFILES["low"]:
         profile = "standard" if "standard" in available_profiles else available_profiles[-1]
-    context_tokens = CONTEXT_PROFILES[profile]
-    if profile == "low" and thinking:
+    if profile != "custom":
+        context_tokens = CONTEXT_PROFILES[profile]
+    if context_tokens < CONTEXT_PROFILES["standard"] and thinking:
         raise ContextPlanError(
             "THINKING_DISABLED_LOW_CONTEXT",
-            "Thinking is unavailable in Low 8K context. Switch to Standard 16K or turn Thinking off.",
+            "Thinking needs at least 16K Context. Increase Context or turn Thinking off.",
             {"context_profile": profile, "context_tokens": context_tokens, "suggested_context_profile": "standard"},
         )
     if minimum_required > context_tokens:
@@ -224,17 +263,25 @@ def plan_context(
             None,
         )
         code = "THINKING_CONTEXT_INSUFFICIENT" if thinking else "CONTEXT_BUDGET_EXCEEDED"
-        message = (
-            "The selected Context cannot fit the complete Thinking request."
-            if thinking
-            else "This request does not leave enough context for a complete MiniMax prompt."
-        )
+        if requested_output_tokens is not None:
+            message = (
+                "The selected Context cannot fit the complete Thinking request and Generation budget."
+                if thinking
+                else "This request and Generation budget do not fit the selected Context."
+            )
+        else:
+            message = (
+                "The selected Context cannot fit the complete Thinking request."
+                if thinking
+                else "This request does not leave enough context for a complete MiniMax prompt."
+            )
         raise ContextPlanError(
             code,
             message,
             {
                 "estimated_input_tokens": estimated_input_tokens,
                 "minimum_output_tokens": desired_output_tokens,
+                "generation_budget": requested_output_tokens,
                 "safety_tokens": CONTEXT_SAFETY_TOKENS,
                 "context_profile": profile,
                 "context_tokens": context_tokens,
@@ -244,6 +291,10 @@ def plan_context(
                     if suggested and thinking
                     else f"Switch to {suggested.title()} context or remove references."
                     if suggested
+                    else "Reduce Generation budget, disable Thinking, remove references, use a smaller model, or shorten the creative brief."
+                    if requested_output_tokens is not None and thinking
+                    else "Reduce Generation budget, remove references, or shorten the creative brief."
+                    if requested_output_tokens is not None
                     else "Disable Thinking, remove references, use a smaller model, or shorten the creative brief."
                     if thinking
                     else "Remove references or shorten the creative brief."
@@ -266,6 +317,7 @@ def plan_context(
         "estimated_input_tokens": estimated_input_tokens,
         "visual_input_count": visual_input_count,
         "max_output_tokens": max_output_tokens,
+        "generation_budget_manual": requested_output_tokens is not None,
         "reserved_output_tokens": max_output_tokens + CONTEXT_SAFETY_TOKENS,
         "thinking_budget_reduced": False,
         "vision_budget_applied": vision_budget_applied,

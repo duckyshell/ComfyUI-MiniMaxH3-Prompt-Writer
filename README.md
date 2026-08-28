@@ -8,17 +8,18 @@ H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. St
 
 It is a ComfyUI UI extension, not a workflow node. It writes prompt text for your existing H3 workflow. It does not run MiniMax H3, change the graph, or queue a video.
 
-ComfyUI extension: **0.4.2** · [Download ZIP](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/v0.4.2/H3-Prompt-Writer-ComfyUI-v0.4.2.zip) · [Installation](docs/INSTALLATION.md)
+ComfyUI extension: **0.4.3** · [Download ZIP](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/v0.4.3/H3-Prompt-Writer-ComfyUI-v0.4.3.zip) · [Installation](docs/INSTALLATION.md)
 
-Standalone for Windows: **0.1.0** · [Download ZIP](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.0/H3-Prompt-Writer-Standalone-Windows-v0.1.0.zip) · [Setup guide](standalone/README.md)
+Standalone for Windows: **0.1.1** · [Download ZIP](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.1/H3-Prompt-Writer-Standalone-Windows-v0.1.1.zip) · [Setup guide](standalone/README.md)
 
-## What's new in v0.4.0
+## What's new in v0.4.3
 
-- Added Qwen 3.8 support for Direct GGUF, including vision references and optional Thinking.
-- Added support for compatible Qwen 3.8 fine-tunes and Qwen3-VL models.
-- Reference assets can now be replaced without changing their position in the list.
-- Improved automatic context selection for large prompts and prompts with many references.
-- Improved Direct GGUF stability, memory handling, and tokenizer reliability.
+- Standalone for Windows. Use H3 Prompt Writer without ComfyUI.
+- Qwen 3.8 and Qwen3-VL support.
+- Expanded Direct GGUF support and runtime controls.
+- Smarter model and vision-projector detection.
+- Improved Reference media workflow.
+- Better local inference reliability.
 
 ## What's new in v0.3
 
@@ -47,7 +48,7 @@ Writer sends your brief, selected mode, prepared references, and the official Mi
 - T2VA, I2VA, FL2VA, L2VA, and Reference modes.
 - Up to 9 images, 3 videos, and 3 audio references in Reference mode.
 - Clear `<Picture N>`, `<Video N>`, and `<Audio N>` labels for assigning identity, wardrobe, setting, motion, camera, sound, or other roles.
-- In-place Reference media replacement from the asset menu or by dropping one file directly on a card, without rebuilding the surrounding asset order.
+- In-place Reference media replacement from the card action or by dropping one file directly on a card, without rebuilding the surrounding asset order.
 - Ordered video contact sheets with visible frame-sampling controls, so you can inspect what the prompt model sees.
 - Official MiniMax base and Reference guides included for all five modes.
 - Editable prompts, **Refine**, **Copy prompt**, and a separate saved draft for every mode.

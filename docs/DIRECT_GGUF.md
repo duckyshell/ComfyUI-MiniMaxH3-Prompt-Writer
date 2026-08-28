@@ -30,15 +30,7 @@ Restart ComfyUI and open **H3 Prompt Writer > Settings > Direct GGUF**. Settings
 
 This preflight checks that `llama-cpp-python` is installed, its version is supported, and the Python module is available without importing the native runtime. Native compatibility and GPU execution are exercised only when a Direct model is actually loaded and used.
 
-The Direct runtime was validated on the official NVIDIA Windows Portable build used for local validation:
-
-- Python 3.13.14
-- PyTorch `2.13.0+cu130`
-- CUDA 13.0
-- `llama-cpp-python 0.3.34` for the existing Gemma configurations
-- `llama-cpp-python 0.3.35` for Qwen 3.8
-- `GGML_TYPE_F16` import and CUDA GPU offload
-- real multimodal generation and unload
+Gemma configurations remain compatible with `llama-cpp-python 0.3.34`. Qwen adapters require `0.3.35` or newer. The command above installs a compatible version for both.
 
 The prebuilt native wheel is not validated for every CPU, CUDA version, Python version, or ComfyUI distribution. Keep `--only-binary=:all:` in the command so an unavailable wheel fails instead of starting an unplanned local C++ build.
 
@@ -50,12 +42,13 @@ Open **Browse verified models** in Direct settings. Download the model file and,
 ComfyUI/models/LLM/
 ```
 
-Subfolders are supported. For multiple models, keep each model and its matching projector in its own folder:
+Subfolders are supported. Compatible quant files can share one projector in the same folder:
 
 ```text
 ComfyUI/models/LLM/
 ├── gemma-4-12b/
 │   ├── gemma-4-12b-it-Q4_K_S.gguf
+│   ├── gemma-4-12b-it-Q5_K_M.gguf
 │   └── mmproj-BF16.gguf
 ├── gemma-4-26b/
 │   ├── gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
@@ -68,7 +61,7 @@ ComfyUI/models/LLM/
     └── mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
 ```
 
-Do not share an `mmproj` across model classes because the filenames happen to match. Writer enables vision only when it can pair one model GGUF with one projector unambiguously. A missing or ambiguous projector does not hide the model; it leaves the model available in text-only T2VA mode and reports the pairing problem in Direct settings and Scan details.
+Do not share a projector across incompatible model classes because the filenames happen to match. Writer reads the GGUF metadata to distinguish models from projectors, so a projector does not need `mmproj` in its filename. The filename is only an Extension compatibility hint when metadata cannot be read. Writer enables vision only when it finds one metadata-compatible projector for a model. A missing or ambiguous projector does not hide the model; it leaves the model available in text-only T2VA mode and reports the pairing problem in Direct settings and Scan details.
 
 Select **Refresh** after adding files. Expand **Scan details** if the model does not appear.
 
@@ -84,7 +77,7 @@ Select **Refresh** after adding files. Expand **Scan details** if the model does
 
 These are measured starting tiers, not hard requirements or quality rankings. They are the currently published verified Gemma 4 pairs. Direct also recognizes compatible Qwen GGUF models from their metadata. A custom model and projector pair is labeled compatible/unverified until that exact combination has been tested. An unknown architecture remains visible in Scan details but is not loaded.
 
-The verified Qwen configuration is [Qwen 3.8 27B UD-Q4_K_XL](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_XL.gguf) with its matching [BF16 projector](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/mmproj-BF16.gguf). It is intentionally not assigned a Gemma-style GPU starting tier: it is a large model, and actual headroom depends strongly on the chosen 16K–48K context, KV format, display use, and other loaded GPU workloads. Measure it on the target machine.
+The verified Qwen configuration is [Qwen 3.8 27B UD-Q4_K_XL](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_XL.gguf) with its matching [BF16 projector](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/mmproj-BF16.gguf). It is not assigned a fixed GPU tier because memory use depends on Context, KV format, display use, and other GPU workloads.
 
 The official [Qwen3-VL 8B Instruct Q4_K_M](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/blob/f982a07559d4a2f6c8744d840bf6fccab30eea96/Qwen3VL-8B-Instruct-Q4_K_M.gguf) with its matching [Q8_0 projector](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/blob/f982a07559d4a2f6c8744d840bf6fccab30eea96/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf) is also verified for text, image, and repeated generation in one process. No universal GPU starting tier is assigned from that short smoke. `qwen3vlmoe` is recognized by the runtime and generic MTMD adapter but remains custom/unverified because no live model/projector pair was tested.
 
@@ -104,24 +97,23 @@ Qwen Thinking output is split from the final prompt whether the runtime returns 
 
 The validated Qwen adapter floor is `llama-cpp-python 0.3.35`; Gemma remains compatible with the existing 0.3.34 floor. If 0.3.34 is installed, Qwen is discoverable but not runtime-ready and Settings reports the required update before any weights are loaded.
 
-The verified Qwen 3.8 configuration completed T2VA, I2VA, FL2VA, L2VA, and Reference with Thinking both off and on. A 48K maximum-Reference run with nine images and three ordered video contact sheets completed without fallback or OOM, and unload/reload also completed. Peak observed GPU memory was 22,959 MiB on the validation machine; this is evidence for that machine and workload, not a universal VRAM tier.
+Direct sends videos as the ordered contact sheet shown in Writer. Native video input is not available through the current stable `llama-cpp-python` high-level path.
 
-A local `qwen35moe` Qwen 3.6 fine-tune also completed T2VA, one image, Reference, and a 24K Thinking run. That run used 4,400 reasoning tokens without truncation. Its metadata lineage is custom, so it correctly remains compatible/unverified and does not inherit the official Qwen 3.6 policy.
+## Runtime controls
 
-Direct continues to send videos as the ordered contact sheet shown in Writer. The current `llama-cpp-python` high-level MTMD handler has no stable public native-video input; an undocumented MP4 path was not reliable and is intentionally not used. A control smoke through official `llama-server b10603` and its documented `input_video` endpoint also stalled after media loading on the tested build, so native video remains deferred rather than introducing a second runtime path.
-
-## Context and KV cache
-
-Direct is the only provider with manual Context and KV controls in Writer.
+Direct exposes managed runtime controls in the ComfyUI extension. Open **Advanced** for KV cache, Generation budget, and reasoning effort.
 
 - **Context Auto** chooses the smallest tier that fits the assembled input, complete output budget, and a safety reserve. Gemma keeps its existing 8K/16K/24K choices; Qwen uses 16K/24K/32K/48K, capped by the GGUF's declared native context.
+- **Context Custom** accepts an exact token count. Writer does not snap it to a preset and rejects values above a known native context.
 - **KV cache Auto** uses the tested Q8 policy. F16 is available manually.
+- **Generation budget Auto** preserves the model and mode defaults. A preset or Custom value limits the complete generated response, including Thinking and the final prompt. Context preflight reserves that value before loading the model.
+- **Reasoning effort** appears only when the selected GGUF chat template declares accepted values. Auto keeps the model policy. A manual value is used only while Thinking is on.
 - A manual context is respected. Writer reports when the request needs a larger tier instead of silently changing it.
 - Thinking with Auto reserves the full reasoning and final-output budget before choosing context.
 - Qwen text is counted before full load by a cached `vocab_only` tokenizer subprocess. It sets `n_gpu_layers=0` and hides CUDA, so preflight does not allocate model weights or GPU state.
 - Qwen visual input is budgeted from the exact prepared image or contact-sheet dimensions and projector patch/grid metadata. Missing dimensions use a conservative fallback instead of silently assuming a small fixed image cost. Response `usage.prompt_tokens` is not used as the visual-token count because Qwen-VL M-RoPE prompt positions can be much smaller than the projector embedding grid.
 
-The 48K ceiling is deliberate for the current Prompt Writer workload, including the maximum Reference media set. Direct does not automatically request Qwen 3.6's advertised 128K context or its very large possible output budget. A local custom Qwen 3.6 Thinking smoke completed at 24K, but custom lineage is still not promoted to a verified official policy.
+The 48K automatic ceiling is intended for Prompt Writer workloads. Direct does not automatically request Qwen 3.6's advertised 128K context or its very large possible output budget.
 
 Increasing context or using F16 KV consumes more VRAM. If preflight reports insufficient free VRAM, use a smaller model or release other GPU models.
 

@@ -47,6 +47,8 @@ Music 3 keeps its own saved Music Brief, Lyrics, and edited caption. Open **Syst
 
 Write what should happen in ordinary language. You do not need to reproduce the official H3 prompt format. Writer builds that structure for you.
 
+Video Creative Briefs can contain up to 8,000 characters. Music Briefs keep their separate 2,000-character limit.
+
 A useful brief usually says:
 
 - what happens in the video;
@@ -138,7 +140,7 @@ Reference video and audio clips must be 2 to 15 seconds long. An audio-only Refe
 
 For Direct GGUF and compatible Ollama models, the **Thinking** switch asks the model to use a larger reasoning budget. Auto context plans for the assembled input, reasoning, and final answer rather than silently shrinking Thinking to save VRAM.
 
-Direct disables Thinking when a manually selected 8K context is too small. Gemma offers 8K, 16K, and 24K choices. Supported Qwen models offer 16K, 24K, 32K, and 48K choices. Writer counts Qwen input tokens before loading the full model. Ollama shows the switch only when the model reports Thinking support. API providers manage reasoning separately. Gemini exposes **Minimal**, **Low**, **Medium**, and **High** in API Settings.
+Direct disables Thinking when a manual context is smaller than 16K. Gemma offers 8K, 16K, and 24K presets. Supported Qwen models offer 16K, 24K, 32K, and 48K presets. Direct also accepts an exact Custom Context. Writer counts Qwen input tokens before loading the full model. In Direct Advanced settings, Generation budget can stay on Auto or use a preset or Custom token limit. Reasoning effort appears only when the selected GGUF template declares supported values. Ollama shows the switch only when the model reports Thinking support. API providers manage reasoning separately. Gemini exposes **Minimal**, **Low**, **Medium**, and **High** in API Settings.
 
 If a model still cannot complete Thinking, Writer reports the fallback. It does not present a standard-mode retry as though the full Thinking request succeeded.
 
@@ -148,7 +150,7 @@ Writer saves stable preferences in the browser used to open ComfyUI:
 
 - mode, duration, and aspect ratio;
 - selected provider and available model preference;
-- Direct Context and KV preference;
+- Direct Context, KV, Generation budget, and reasoning effort preferences;
 - Ollama host and the selected model tag for each host;
 - External URL and optional Model ID;
 - API preset, URL, model ID, Gemini Thinking level, and Custom capabilities;

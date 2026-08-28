@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.3 - 2026-08-29
+
+### Features
+
+- Added custom Context, Generation budget, and template-supported reasoning effort controls for Direct GGUF.
+- Increased the video Creative Brief limit from 2,000 to 8,000 characters.
+
+### Fixes
+
+- Classified installed GGUF models and projectors from metadata so renamed projector files remain discoverable.
+- Kept External llama.cpp reasoning settings under server control while separating returned reasoning from the final prompt.
+- Refined Reference media sizing and compact replace and remove controls.
+- Prevented media controls from staying visible after a cancelled file selection.
+
 ## 0.4.2 - 2026-08-28
 
 ### Packaging

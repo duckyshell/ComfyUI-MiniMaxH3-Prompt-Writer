@@ -2,9 +2,9 @@
 
 Use H3 Prompt Writer without ComfyUI.
 
-Current Standalone version: **0.1.0**
+Current Standalone version: **0.1.1**
 
-[Download H3 Prompt Writer Standalone v0.1.0](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.0/H3-Prompt-Writer-Standalone-Windows-v0.1.0.zip)
+[Download H3 Prompt Writer Standalone v0.1.1](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.1/H3-Prompt-Writer-Standalone-Windows-v0.1.1.zip)
 
 ## This is the Standalone version
 
@@ -89,6 +89,8 @@ not used for Local GGUF.
   `data/` folder.
 - Qwen3.8 receives `reasoning_effort=low` and a 24K automatic context only when its
   embedded chat template explicitly supports that control.
+- Local GGUF provides managed Context, KV cache, Generation budget, and supported
+  reasoning effort controls. External llama.cpp remains server-managed.
 
 ## Development
 
@@ -120,6 +122,6 @@ From the repository root, build the portable package with:
 powershell -ExecutionPolicy Bypass -File scripts\build_standalone.ps1
 ```
 
-The result is `dist\H3-Prompt-Writer-Standalone-Windows-v0.1.0.zip`. It records the
+The result is `dist\H3-Prompt-Writer-Standalone-Windows-v0.1.1.zip`. It records the
 repository commit in `upstream\UPSTREAM_SNAPSHOT.txt` and excludes local settings,
 logs, models, `llama-server`, CUDA libraries, and test artifacts.

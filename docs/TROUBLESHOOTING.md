@@ -2,7 +2,7 @@
 
 This page primarily covers the ComfyUI extension. Standalone users should start with the [Standalone setup guide](../standalone/README.md). The `llama-cpp-python` and ComfyUI VRAM instructions below do not apply to Standalone Local GGUF.
 
-Start by updating H3 Prompt Writer, restarting ComfyUI, and using `Ctrl+F5` if the browser still shows an older interface. The entries below describe problems that can still occur in v0.4.2.
+Start by updating H3 Prompt Writer, restarting ComfyUI, and using `Ctrl+F5` if the browser still shows an older interface. The entries below describe problems that can still occur in v0.4.3.
 
 ## I installed it but cannot find a node
 
@@ -133,7 +133,7 @@ A real Direct model load completes without terminating ComfyUI.
 
 **Symptom**
 
-Direct shows no models, or an installed model is marked text-only because its `mmproj` is missing or ambiguous.
+Direct shows no models, or an installed model is marked text-only because its projector is missing or ambiguous.
 
 **Cause**
 
@@ -141,9 +141,9 @@ Writer needs a model GGUF and the Direct runtime for text generation. Visual mod
 
 **Fix**
 
-Put the model under `ComfyUI/models/LLM`. To enable I2VA, FL2VA, L2VA, or Reference, put its verified projector beside it. Use a separate subfolder for each pair, then select **Refresh**. Open **Scan details** to see every searched path and file.
+Put the model under `ComfyUI/models/LLM`. To enable I2VA, FL2VA, L2VA, or Reference, put its verified projector beside it. Projector detection uses GGUF metadata, so renaming the file does not disable detection. Compatible quant files can share one projector in the same folder. Select **Refresh**, then open **Scan details** to see every searched path and file.
 
-Do not reuse a same-named `mmproj` from another model class.
+Do not reuse a projector from another model class just because its filename looks compatible.
 
 Without an unambiguous compatible projector, the model remains available for T2VA and Refine. Writer disables the visual modes and Music 3 instead of blocking all Direct work.
 
@@ -265,7 +265,7 @@ Context capacity and memory are different limits. A request can exceed the selec
 
 **Fix**
 
-For Direct Auto, let Writer select 8K, 16K, or 24K. If a manual context is too small, choose the suggested tier. Reduce active references or use a model with a larger context limit when the request still does not fit.
+For Direct Auto, let Writer select a supported preset. If a manual Context or Generation budget does not fit, increase Context or reduce the budget. Custom Context cannot exceed a native context reported by the GGUF. Reduce active references or use a model with a larger context limit when the request still does not fit.
 
 For actual memory failure, use **Free ComfyUI VRAM**, close other GPU-heavy applications, select a smaller model, or reduce context. Do not increase context as a generic response to an OOM.
 

@@ -27,7 +27,7 @@ The default Ollama host is on this computer. If you choose a remote host, it rec
 
 ## Direct GGUF
 
-Choose Direct when you want Prompt Writer to load a supported GGUF and optional matching projector directly inside ComfyUI. This path exposes Context and KV cache controls and lets Writer manage model loading and unload. Gemma 4 uses the established adapter; Qwen 3.8 and Qwen3-VL require `llama-cpp-python 0.3.35` or newer and use model-aware 16K–48K planning.
+Choose Direct when you want Prompt Writer to load a supported GGUF and optional matching projector directly inside ComfyUI. This path exposes managed runtime controls and lets Writer manage model loading and unload. Gemma 4 uses the established adapter. Qwen 3.8 and Qwen3-VL require `llama-cpp-python 0.3.35` or newer and use model-aware planning from 16K to 48K.
 
 Direct is optional. It depends on a native `llama-cpp-python` wheel, so compatibility is narrower than the other provider paths.
 

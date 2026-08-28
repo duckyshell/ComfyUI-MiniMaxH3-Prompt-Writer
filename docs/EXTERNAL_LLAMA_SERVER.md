@@ -38,8 +38,12 @@ The external server controls:
 - model and projector loading;
 - GPU placement and offload;
 - context size and KV cache;
+- generated-token limits;
+- chat-template reasoning behavior and reasoning output format;
 - build flags and runtime optimizations;
 - server startup, shutdown, sleep, and model unload.
+
+Writer does not send `enable_thinking` or other reasoning controls to External llama.cpp. If the server returns reasoning through `reasoning_content` or a leading `<think>` block, Writer keeps it out of the final H3 prompt.
 
 Changing provider, disconnecting, cancelling, or closing Writer does not stop `llama-server` or unload its model.
 

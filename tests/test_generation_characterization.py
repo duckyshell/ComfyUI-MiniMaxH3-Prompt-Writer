@@ -155,7 +155,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertEqual(scores.assignments[0], (slice(None), float("-inf")))
         self.assertEqual(scores.assignments[1], (7, 0.0))
 
-    def test_manual_generation_budget_is_shared_by_thinking_and_fallback(self):
+    def test_manual_generation_budget_caps_each_thinking_and_fallback_request(self):
         backend = _CharacterizedBackend([
             response("", prompt_tokens=10, completion_tokens=100, finish_reason="length"),
             response("A complete compact prompt.", prompt_tokens=10, completion_tokens=20),
@@ -174,7 +174,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
         )
 
         self.assertEqual(result["prompt"], "A complete compact prompt.")
-        self.assertEqual([call["max_tokens"] for call in backend.chat_handler.calls], [120, 20])
+        self.assertEqual([call["max_tokens"] for call in backend.chat_handler.calls], [120, 120])
         self.assertEqual(result["output_tokens"], 120)
 
     def test_unmentioned_uploaded_audio_is_allowed_but_not_required_by_audit(self):
@@ -693,7 +693,7 @@ class GenerationCharacterizationTests(unittest.TestCase):
             unload_after=False, runtime_plan=plan,
         )
 
-        self.assertEqual(backend.chat_handler.calls[1]["max_tokens"], 10)
+        self.assertEqual(backend.chat_handler.calls[1]["max_tokens"], 40)
         self.assertEqual(result["output_tokens"], 37)
 
     def test_missing_active_reference_uses_one_multimodal_continuation_repair(self):

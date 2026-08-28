@@ -257,25 +257,32 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-runtime-settings summary small { margin-left: auto; color: var(--h3ps-muted); font-size: 8.5px; }
 .h3ps-runtime-settings summary svg { margin-left: 6px; color: var(--h3ps-muted); transition: transform 120ms ease; }
 .h3ps-runtime-settings[open] summary svg { transform: rotate(90deg); }
-.h3ps-runtime-settings > div { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 0 8px 8px; }
-.h3ps-runtime-settings label { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 6px 7px; border: 1px solid #30343c; border-radius: 6px; background: #202329; }
-.h3ps-runtime-settings label { position: relative; }
-.h3ps-runtime-settings label > span:first-child { display: flex; flex: 1; min-width: 0; flex-direction: column; font-size: 9px; }
-.h3ps-runtime-settings [data-runtime-toggle] { display: flex; align-items: center; gap: 5px; min-width: 70px; justify-content: flex-end; border: 0; background: transparent; color: #d9dce1; cursor: pointer; }
+.h3ps-runtime-settings { --h3ps-runtime-field-width:132px; }
+.h3ps-runtime-settings > .h3ps-runtime-settings-grid { display:flex; align-items:flex-start; flex-wrap:wrap; gap:7px; padding:0 8px 8px; }
+.h3ps-runtime-control { position:relative; display:grid; grid-template-columns:var(--h3ps-runtime-field-width) auto; align-items:center; gap:5px 7px; width:max-content; min-width:0; padding:0; border:0; background:transparent; }
+.h3ps-runtime-control > span:first-child { display:flex; grid-column:1/-1; min-width:0; flex-direction:column; font-size:9px; }
+.h3ps-runtime-picker { position:relative; display:flex; width:var(--h3ps-runtime-field-width); min-width:0; }
+.h3ps-runtime-control > .h3ps-runtime-picker:last-child { grid-column:1; }
+.h3ps-runtime-settings [data-runtime-toggle] { display:flex; align-items:center; justify-content:space-between; gap:5px; width:100%; min-width:0; min-height:32px; padding:0 8px; border:1px solid #30343c; border-radius:6px; background:#202329; color:#d9dce1; cursor:pointer; }
 .h3ps-runtime-settings [data-runtime-toggle] b { font-size: 9px; font-weight: 560; }.h3ps-runtime-settings [data-runtime-toggle] svg { color: var(--h3ps-muted); transform: rotate(90deg); }
-.h3ps-runtime-menu { position: absolute; z-index: 8; right: 4px; bottom: calc(100% + 4px); display: flex; width: 90px; padding: 4px; flex-direction: column; border: 1px solid #414650; border-radius: 6px; background: #24272e; box-shadow: 0 9px 24px rgba(0,0,0,.45); }
+.h3ps-runtime-menu { position:absolute; z-index:8; top:calc(100% + 5px); right:0; display:flex; width:90px; padding:4px; flex-direction:column; border:1px solid #414650; border-radius:6px; background:#24272e; box-shadow:0 9px 24px rgba(0,0,0,.45); }
 .h3ps-runtime-menu[hidden] { display: none; }
 .h3ps-runtime-menu button { padding: 5px 7px; border: 0; border-radius: 4px; background: transparent; color: #d4d7dc; text-align: left; font-size: 8.5px; cursor: pointer; }.h3ps-runtime-menu button:hover { background: #30343b; }.h3ps-runtime-menu button.is-selected { color: #ffc0b3; background: rgba(255,115,86,.09); }
-.h3ps-runtime-custom { margin-top: 7px; }
-.h3ps-runtime-custom[hidden], .h3ps-direct-advanced[hidden] { display: none; }
-.h3ps-runtime-custom input { width: 120px; padding: 5px 7px; border: 1px solid #3a3e46; border-radius: 5px; background: #17191e; color: #e0e2e6; font: inherit; }
-.h3ps-direct-advanced { margin-top: 8px; border-top: 1px solid var(--h3ps-border-soft); }
-.h3ps-direct-advanced > summary { display: flex; align-items: center; gap: 7px; padding: 9px 1px 5px; color: #cfd2d7; cursor: pointer; list-style: none; font-size: 9.5px; }
+.h3ps-runtime-custom { display:flex; align-items:center; gap:7px; min-width:0; margin:0; padding:0; border:0; color:var(--h3ps-muted); font-size:8.5px; }
+.h3ps-runtime-custom[hidden], .h3ps-runtime-control[hidden], .h3ps-direct-advanced[hidden] { display:none; }
+.h3ps-runtime-custom input { min-width:0; width:12ch; padding:6px 7px; border:1px solid #3a3e46; border-radius:5px; background:#17191e; color:#e0e2e6; font:inherit; appearance:textfield; -moz-appearance:textfield; }
+.h3ps-runtime-custom input::-webkit-inner-spin-button, .h3ps-runtime-custom input::-webkit-outer-spin-button { margin:0; appearance:none; -webkit-appearance:none; }
+.h3ps-runtime-custom > span { flex:0 0 auto; }
+.h3ps-direct-advanced { margin-top:8px; border:0; border-top:1px solid #2d3138; border-bottom:1px solid #2d3138; border-radius:0; background:transparent; overflow:visible; }
+.h3ps-direct-advanced > summary { display:flex; align-items:center; gap:7px; min-height:38px; padding:0 2px; color:#d5d8dd; cursor:pointer; list-style:none; font-size:9.5px; transition:background 120ms ease,color 120ms ease; }
 .h3ps-direct-advanced > summary::-webkit-details-marker { display: none; }
-.h3ps-direct-advanced > summary small { margin-left: auto; color: var(--h3ps-muted); font-size: 8.5px; }
+.h3ps-direct-advanced > summary:hover { color:#fff; background:rgba(255,255,255,.025); }
+.h3ps-direct-advanced > summary strong { font-weight:600; }
+.h3ps-direct-advanced > summary em { margin-left:auto; color:var(--h3ps-muted); font-size:8.5px; font-style:normal; }
 .h3ps-direct-advanced > summary svg { color: var(--h3ps-muted); transition: transform 120ms ease; }
 .h3ps-direct-advanced[open] > summary svg { transform: rotate(90deg); }
-.h3ps-direct-advanced > .h3ps-runtime-settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding-top: 3px; }
+.h3ps-direct-advanced[open] > summary { border-bottom:1px solid #2d3138; }
+.h3ps-direct-advanced-body { display:flex; align-items:flex-start; flex-wrap:wrap; gap:9px; max-width:640px; padding:10px 0; }
 .h3ps-system-settings { margin-top: 7px; border: 1px solid var(--h3ps-border-soft); border-radius: 8px; background: #1a1d22; }
 .h3ps-system-settings summary { display: flex; align-items: center; min-height: 34px; padding: 0 10px; color: #cfd2d7; font-size: 9.5px; cursor: pointer; list-style: none; }
 .h3ps-system-settings summary::-webkit-details-marker { display: none; }
@@ -358,11 +365,10 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-external-connection form > small { align-self:center; color:#858c97; font-size:8px; line-height:1.35; }.h3ps-external-connection form > div { display:flex; align-items:center; gap:7px; }.h3ps-external-connection form > div span { flex:1; }
 .h3ps-external-connection form button { height:27px; padding:0 9px; border:1px solid #3b414b; border-radius:6px; background:#272b32; color:#d9dce1; font-size:8.5px; cursor:pointer; }.h3ps-external-connection form button[type="submit"] { border-color:#566474; background:#303a45; color:#dcecff; }.h3ps-external-connection form button:hover { border-color:#59616e; }.h3ps-external-connection form button:disabled { opacity:.6; cursor:wait; }
 .h3ps-settings-view .h3ps-runtime-settings { padding:13px; }
-.h3ps-settings-view .h3ps-runtime-settings > header { display:flex; align-items:center; justify-content:space-between; min-height:35px; margin-bottom:10px; }
+.h3ps-settings-view .h3ps-runtime-settings > header { display:flex; align-items:center; min-height:35px; margin-bottom:10px; }
 .h3ps-settings-view .h3ps-runtime-settings > header > span { display:flex; flex-direction:column; }
 .h3ps-settings-view .h3ps-runtime-settings > header small { color:var(--h3ps-muted); font-size:9px; font-weight:680; letter-spacing:.075em; text-transform:uppercase; }
 .h3ps-settings-view .h3ps-runtime-settings > header strong { font-size:12px; font-weight:640; }
-.h3ps-settings-view .h3ps-runtime-settings > header em { color:var(--h3ps-muted); font-size:9px; font-style:normal; }
 .h3ps-settings-view .h3ps-runtime-settings > div { padding:0; }
 .h3ps-settings-view .h3ps-runtime-settings > p { margin:9px 1px 0; color:var(--h3ps-dim); font-size:9px; line-height:1.4; }
 .h3ps-system-prompt-profiles { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:9px; }
@@ -627,7 +633,7 @@ body.h3ps-modal-open { overflow: hidden; }
   .h3ps-runtime-settings, .h3ps-system-settings { margin-top:9px; }
   .h3ps-runtime-settings summary, .h3ps-system-settings summary { min-height:40px; padding:0 12px; font-size:10.75px; }
   .h3ps-runtime-settings summary small, .h3ps-system-settings summary small { color:#9fa6b1; font-size:9.5px; }
-  .h3ps-runtime-settings label > span:first-child, .h3ps-runtime-settings [data-runtime-toggle] b { font-size:10px; }
+  .h3ps-runtime-control > span:first-child, .h3ps-runtime-settings [data-runtime-toggle] b { font-size:10px; }
   .h3ps-system-editor p { color:#9299a4; font-size:9.5px; }
   .h3ps-system-editor textarea { font-size:10px; }
 }

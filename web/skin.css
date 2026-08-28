@@ -938,17 +938,24 @@
 .h3ps-api-cancel-note { margin-top: 10px; color: #62626b; font-size: 9px; line-height: 1.45; }
 
 /* Runtime */
-.h3ps-settings-view .h3ps-runtime-settings > header em { color: var(--h3ps-muted); font-size: 10.5px; }
-.h3ps-settings-view .h3ps-runtime-settings > div { max-width: 520px; gap: 12px; }
-.h3ps-settings-view .h3ps-runtime-settings label {
-  min-height: 44px;
-  padding: 7px 10px;
-  border-color: #26262b;
-  border-radius: 9px;
-  background: var(--h3ps-surface-2);
+.h3ps-settings-view .h3ps-runtime-settings { --h3ps-runtime-field-width:154px; }
+.h3ps-settings-view .h3ps-runtime-settings > .h3ps-runtime-settings-grid { max-width:640px; gap:8px; }
+.h3ps-settings-view .h3ps-runtime-control {
+  min-height:0;
+  padding:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
 }
-.h3ps-settings-view .h3ps-runtime-settings label > span:first-child,
+.h3ps-settings-view .h3ps-runtime-control > span:first-child,
 .h3ps-settings-view .h3ps-runtime-settings [data-runtime-toggle] b { font-size: 10.5px; font-weight: 500; }
+.h3ps-settings-view .h3ps-runtime-settings [data-runtime-toggle] { min-height:36px; border-color:#2b2b31; border-radius:8px; background:var(--h3ps-surface-2); }
+.h3ps-settings-view .h3ps-runtime-custom { min-height:0; gap:6px; padding:0; border:0; border-radius:0; background:transparent; }
+.h3ps-settings-view .h3ps-runtime-custom input { width:12ch; height:36px; padding:0 8px; border-color:#2b2b31; border-radius:8px; background:var(--h3ps-surface-2); font-size:10.5px; }
+.h3ps-settings-view .h3ps-direct-advanced { max-width:640px; border-color:#25252a; background:transparent; }
+.h3ps-settings-view .h3ps-direct-advanced > summary { min-height:44px; padding:0 2px; }
+.h3ps-settings-view .h3ps-direct-advanced > summary:hover { background:#151518; }
+.h3ps-settings-view .h3ps-direct-advanced-body { max-width:640px; gap:10px; padding:12px 0; }
 .h3ps-settings-view .h3ps-runtime-settings > p { color: #4d4d55; font-size: 10.5px; }
 .h3ps-runtime-menu {
   border-color: #2e2e34;
@@ -1150,8 +1157,8 @@
   .h3ps-api-custom-options { grid-template-columns: 1fr; }
   .h3ps-api-preset-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .h3ps-provider-selector,
-  .h3ps-settings-view .h3ps-runtime-settings > div,
   .h3ps-external-connection form { grid-template-columns: 1fr; }
+  .h3ps-settings-view .h3ps-runtime-settings > .h3ps-runtime-settings-grid { flex-direction:column; }
   .h3ps-settings-heading em { display: none; }
   .h3ps-system-prompt-overview { max-width: none; }
 }

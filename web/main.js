@@ -1331,7 +1331,7 @@ function modelDiscoveryDetails() {
     lines.push(root.path);
     lines.push(`  Model GGUF: ${root.model_files.length}`);
     for (const path of root.model_files) lines.push(`    ${path}`);
-    lines.push(`  mmproj GGUF: ${root.projector_files.length}`);
+    lines.push(`  Vision projector GGUF: ${root.projector_files.length}`);
     for (const path of root.projector_files) lines.push(`    ${path}`);
     for (const issue of root.issues) lines.push(`  Issue: ${issue}`);
   }
@@ -1350,7 +1350,7 @@ function renderModelSetup() {
       <strong>No compatible local model found</strong>
       <p>Open the two verified Hugging Face pages, download both files, then place them in:</p>
       <button type="button" class="h3ps-model-path" data-copy-model-path><code>${escapeHtml(directory)}</code>${icon("copy", 13)}</button>
-      <p>Using multiple models? Keep each model and its matching vision projector together in a separate subfolder.</p>
+      <p>Keep compatible model GGUFs and their vision projector together. One projector can serve several quant files from the same model family.</p>
     </div>`;
 }
 
@@ -2001,7 +2001,7 @@ function syncThinkingAvailability() {
 
 const CONTEXT_LABELS = { auto: "Auto", low: "8K", standard: "16K", extended: "24K", large: "32K", maximum: "48K", custom: "Custom" };
 const KV_LABELS = { auto: "Auto", q8: "Q8", f16: "F16" };
-const BUDGET_LABELS = { auto: "Auto", 2048: "2,048", 4096: "4,096", 8192: "8,192", custom: "Custom" };
+const BUDGET_LABELS = { auto: "Auto", 2048: "2K", 4096: "4K", 8192: "8K", custom: "Custom" };
 
 function syncContextAvailability() {
   const profiles = studio.selectedModel?.family === "gguf"
@@ -2041,6 +2041,15 @@ function syncAdvancedRuntimeControls() {
   }
   const reasoningControl = studio.root.querySelector("[data-reasoning-effort-control]");
   reasoningControl.hidden = values.length === 0;
+  const generationBudgetOverride = studio.generationBudget !== "auto"
+    && (studio.generationBudget !== "custom"
+      || (Number.isInteger(studio.generationBudgetTokens) && studio.generationBudgetTokens > 0));
+  const overrideCount = Number(studio.kvCache !== "auto")
+    + Number(generationBudgetOverride)
+    + Number(studio.reasoningEffort !== "auto" && values.includes(studio.reasoningEffort));
+  studio.root.querySelector("[data-direct-advanced-summary]").textContent = overrideCount
+    ? `${overrideCount} override${overrideCount === 1 ? "" : "s"}`
+    : "Auto";
   const menu = studio.root.querySelector('[data-runtime-menu="reasoning"]');
   menu.innerHTML = ["auto", ...values].map((value) => `<button type="button" data-runtime-option="reasoning" data-value="${escapeHtml(value)}">${value === "auto" ? "Auto" : escapeHtml(value[0].toUpperCase() + value.slice(1))}</button>`).join("");
   menu.querySelectorAll('[data-runtime-option="reasoning"]').forEach((button) => button.addEventListener("click", (event) => applyRuntimeOption(button, event)));
@@ -2064,15 +2073,12 @@ function syncRuntimeSummary(result = null) {
   syncContextAvailability();
   syncAdvancedRuntimeControls();
   const customContextLabel = studio.contextTokens ? `${Number(studio.contextTokens).toLocaleString()}` : "Custom";
-  studio.root.querySelector('[data-runtime-label="context"]').textContent = studio.contextProfile === "custom" ? customContextLabel : CONTEXT_LABELS[studio.contextProfile];
+  studio.root.querySelector('[data-runtime-label="context"]').textContent = CONTEXT_LABELS[studio.contextProfile];
   studio.root.querySelector('[data-runtime-label="kv"]').textContent = KV_LABELS[studio.kvCache];
-  studio.root.querySelector('[data-runtime-label="budget"]').textContent = studio.generationBudget === "custom" && studio.generationBudgetTokens
-    ? Number(studio.generationBudgetTokens).toLocaleString()
-    : BUDGET_LABELS[studio.generationBudget];
+  studio.root.querySelector('[data-runtime-label="budget"]').textContent = BUDGET_LABELS[studio.generationBudget];
   studio.root.querySelector('[data-runtime-label="reasoning"]').textContent = studio.reasoningEffort === "auto"
     ? "Auto"
     : studio.reasoningEffort[0].toUpperCase() + studio.reasoningEffort.slice(1);
-  const summary = studio.root.querySelector("[data-runtime-summary]");
   let activeSummary;
   if (studio.selectedModel?.family === "external") {
     const tokens = result?.context_tokens || studio.selectedModel.server_context_tokens;
@@ -2088,10 +2094,6 @@ function syncRuntimeSummary(result = null) {
   } else {
     activeSummary = studio.contextProfile === "auto" ? "Runtime · Auto" : `${studio.contextProfile === "custom" ? customContextLabel : CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
   }
-  const settingsSummary = studio.contextProfile === "auto"
-    ? "Auto"
-    : `${studio.contextProfile === "custom" ? customContextLabel : CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
-  summary.textContent = settingsSummary;
   syncActiveModelSummary(activeSummary);
   studio.root.querySelectorAll("[data-runtime-option]").forEach((button) => {
     const selected = button.dataset.runtimeOption === "context"
@@ -3009,6 +3011,7 @@ function createStudio() {
   }));
   root.querySelector("[data-thinking]").addEventListener("change", (event) => {
     studio.thinking = event.target.checked;
+    syncRuntimeSummary();
   });
   root.querySelector("[data-keep-loaded]").addEventListener("change", (event) => {
     studio.keepModelLoaded = event.target.checked;

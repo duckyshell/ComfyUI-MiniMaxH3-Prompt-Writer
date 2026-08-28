@@ -8,6 +8,7 @@ from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
 
+from backend.gguf_metadata import classify_gguf_file
 from h3_standalone.app import create_app
 from h3_standalone.config import load_settings, validate_upstream
 from h3_standalone.external_backend import _ManagedChatHandler
@@ -125,6 +126,7 @@ class ManagedGGUFTest(unittest.TestCase):
                 package_root=root / "package",
                 initial_roots=(root,),
                 metadata_reader=reader,
+                file_classifier=classify_gguf_file,
             )
             kinds = {Path(item["path"]).name: item["kind"] for item in controller.discover()["files"]}
             self.assertEqual(kinds[model.name], "model")

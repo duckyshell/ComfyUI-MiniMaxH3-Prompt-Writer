@@ -240,6 +240,7 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertEqual(payload["messages"], messages)
         self.assertEqual(payload["seed"], 42)
         self.assertTrue(payload["chat_template_kwargs"]["enable_thinking"])
+        self.assertNotIn("max_tokens", payload)
 
     def test_external_preflight_uses_server_context_and_rejects_local_runtime_controls(self):
         model = self.backend.probe_model({"url": self.url})
@@ -256,7 +257,9 @@ class ExternalServerBackendTests(unittest.TestCase):
         )
         self.assertEqual(plan["context_tokens"], 16384)
         self.assertEqual(plan["kv_cache"], "server")
-        self.assertEqual(plan["max_output_tokens"], 2_048)
+        self.assertIsNone(plan["max_output_tokens"])
+        self.assertEqual(plan["reserved_output_tokens"], 512)
+        self.assertTrue(plan["output_tokens_managed_by_server"])
         music_plan = self.backend.preflight(
             model,
             {**assembled, "input": {"mode": "Music3"}},
@@ -264,7 +267,20 @@ class ExternalServerBackendTests(unittest.TestCase):
             kv_cache="auto",
             thinking=False,
         )
-        self.assertEqual(music_plan["max_output_tokens"], 1_536)
+        self.assertIsNone(music_plan["max_output_tokens"])
+        with self.assertRaises(ModelError) as overflow:
+            self.backend.preflight(
+                model,
+                {
+                    "messages": [{"role": "user", "content": "x" * 70_000}],
+                    "media_inputs": [],
+                    "input": {"mode": "T2VA"},
+                },
+                context_profile="auto",
+                kv_cache="auto",
+                thinking=False,
+            )
+        self.assertEqual(overflow.exception.code, "CONTEXT_BUDGET_EXCEEDED")
         with self.assertRaises(ModelError) as manual:
             self.backend.preflight(
                 model,

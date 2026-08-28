@@ -134,7 +134,7 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertEqual(found["id"], str(model_path.resolve()))
         self.assertEqual(diagnostics["roots"][0]["projector_files"], [str(projector.resolve())])
 
-    def test_multiple_flat_pairs_are_not_guessed(self):
+    def test_multiple_compatible_projectors_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_model(root / "gemma-4-a.gguf")
@@ -149,7 +149,21 @@ class ModelDiscoveryTests(unittest.TestCase):
             self.assertTrue(all(model["runtime_ready"] for model in models))
             self.assertTrue(all(model["vision_status"] == "ambiguous" for model in models))
             self.assertTrue(all(model["capabilities"]["images"] is False for model in models))
-            self.assertTrue(all("separate subfolder" in model["capability_message"] for model in models))
+            self.assertTrue(all("Multiple compatible" in model["capability_message"] for model in models))
+
+    def test_one_projector_can_serve_multiple_quants_in_the_same_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            projector = root / "vision-sidecar.gguf"
+            write_model(root / "gemma-4-q4.gguf")
+            write_model(root / "gemma-4-q6.gguf")
+            write_projector(projector)
+
+            models = self.discover(root)
+
+        self.assertEqual(len(models), 2)
+        self.assertTrue(all(model["projector"] == str(projector.resolve()) for model in models))
+        self.assertTrue(all(model["vision_status"] == "compatible" for model in models))
 
     def test_multiple_projectors_next_to_one_model_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -189,7 +203,7 @@ class ModelDiscoveryTests(unittest.TestCase):
 
             self.assertEqual(models, [])
             self.assertEqual([root["path"] for root in diagnostics["roots"]], [str(existing), str(missing)])
-            self.assertEqual(diagnostics["roots"][0]["issues"], ["No GGUF model or mmproj files were found."])
+            self.assertEqual(diagnostics["roots"][0]["issues"], ["No GGUF model or vision projector files were found."])
             self.assertEqual(diagnostics["roots"][1]["issues"], ["Directory does not exist."])
 
     def test_discovery_reports_files_and_missing_projector_reason(self):
@@ -203,7 +217,7 @@ class ModelDiscoveryTests(unittest.TestCase):
             self.assertEqual(len(models), 1)
             self.assertEqual(diagnostics["roots"][0]["model_files"], [str(model_path.resolve())])
             self.assertEqual(diagnostics["roots"][0]["projector_files"], [])
-            self.assertIn("No mmproj GGUF", diagnostics["roots"][0]["issues"][0])
+            self.assertIn("No vision projector GGUF", diagnostics["roots"][0]["issues"][0])
             self.assertTrue(models[0]["runtime_ready"])
             self.assertEqual(models[0]["vision_status"], "missing")
             self.assertEqual(models[0]["capabilities"], {"images": False, "video_frames": False, "audio": False})
@@ -515,6 +529,14 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertEqual(model["metadata_status"], "invalid")
         self.assertFalse(model["runtime_ready"])
         self.assertIn("readable GGUF metadata", model["missing_dependencies"])
+
+    def test_unreadable_filename_fallback_is_extension_only(self):
+        self.assertEqual(catalog._extension_file_kind(None, "mmproj-legacy.gguf"), "projector")
+        self.assertEqual(catalog._extension_file_kind(None, "legacy-model.gguf"), "model")
+        self.assertEqual(
+            catalog._extension_file_kind({"architecture": "clip"}, "mmproj-but-unmarked.gguf"),
+            "unknown",
+        )
 
     def test_invalid_header_cannot_inherit_a_verified_filename_configuration(self):
         with tempfile.TemporaryDirectory() as directory:

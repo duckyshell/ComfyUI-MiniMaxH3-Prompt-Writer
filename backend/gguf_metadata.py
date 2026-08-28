@@ -55,11 +55,26 @@ def reasoning_effort_values(chat_template: str | None) -> list[str]:
 
 
 def classify_gguf_file(metadata: dict[str, Any] | None, filename: str) -> str:
-    """Classify an installed GGUF, using its header before its filename."""
+    """Classify an installed GGUF from metadata only."""
+    del filename
+    if metadata is None:
+        return "unknown"
     architecture = str((metadata or {}).get("architecture") or "").strip().lower()
+    if architecture == "clip":
+        projector_markers = (
+            metadata.get("projector_type"),
+            metadata.get("projector_projection_dim"),
+            metadata.get("has_vision_encoder"),
+            metadata.get("has_audio_encoder"),
+        )
+        return (
+            "projector"
+            if any(value not in {None, False, ""} for value in projector_markers)
+            else "unknown"
+        )
     if architecture:
-        return "projector" if architecture == "clip" else "model"
-    return "projector" if "mmproj" in filename.lower() else "model"
+        return "model"
+    return "unknown"
 
 
 def _read_exact(handle: BinaryIO, size: int) -> bytes:

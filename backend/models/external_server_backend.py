@@ -10,10 +10,7 @@ from ..context import (
     CHAT_TEMPLATE_OVERHEAD_TOKENS,
     CONTEXT_SAFETY_TOKENS,
     ESTIMATED_VISUAL_TOKENS,
-    MINIMUM_OUTPUT_TOKENS,
-    THINKING_OUTPUT_TOKENS,
     estimate_text_tokens,
-    non_thinking_output_tokens,
 )
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from .contract import ModelError
@@ -73,18 +70,18 @@ class _RemoteChatHandler:
         temperature: float,
         top_p: float,
         top_k: int,
-        max_tokens: int,
+        max_tokens: int | None,
         seed: int | None,
         enable_thinking: bool,
         **_unused: Any,
     ) -> dict[str, Any]:
+        del max_tokens
         payload: dict[str, Any] = {
             "model": self.remote_model,
             "messages": messages,
             "temperature": temperature,
             "top_p": top_p,
             "top_k": top_k,
-            "max_tokens": max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
             "chat_template_kwargs": {"enable_thinking": enable_thinking},
@@ -386,26 +383,18 @@ class ExternalServerBackend:
             + visual_input_count * ESTIMATED_VISUAL_TOKENS
             + CHAT_TEMPLATE_OVERHEAD_TOKENS
         )
-        standard_output_tokens = non_thinking_output_tokens(assembled)
-        minimum_output_tokens = MINIMUM_OUTPUT_TOKENS if thinking else standard_output_tokens
-        minimum_required = estimated_input_tokens + minimum_output_tokens + CONTEXT_SAFETY_TOKENS
+        minimum_required = estimated_input_tokens + CONTEXT_SAFETY_TOKENS
         if minimum_required > context_tokens:
             raise ModelError(
                 "CONTEXT_BUDGET_EXCEEDED",
                 "This request does not fit the context configured on the external llama.cpp server.",
                 {
                     "estimated_input_tokens": estimated_input_tokens,
-                    "minimum_output_tokens": minimum_output_tokens,
                     "safety_tokens": CONTEXT_SAFETY_TOKENS,
                     "context_tokens": context_tokens,
                     "suggestion": "Restart llama-server with a larger context or remove references.",
                 },
             )
-        available_output_tokens = context_tokens - estimated_input_tokens - CONTEXT_SAFETY_TOKENS
-        max_output_tokens = min(
-            THINKING_OUTPUT_TOKENS if thinking else standard_output_tokens,
-            available_output_tokens,
-        )
         return {
             "requested_context_profile": "auto",
             "context_profile": "external",
@@ -416,9 +405,10 @@ class ExternalServerBackend:
             "estimated_text_tokens": estimated_text_tokens,
             "estimated_input_tokens": estimated_input_tokens,
             "visual_input_count": visual_input_count,
-            "max_output_tokens": max_output_tokens,
-            "reserved_output_tokens": max_output_tokens + CONTEXT_SAFETY_TOKENS,
-            "thinking_budget_reduced": thinking and max_output_tokens < THINKING_OUTPUT_TOKENS,
+            "max_output_tokens": None,
+            "reserved_output_tokens": CONTEXT_SAFETY_TOKENS,
+            "thinking_budget_reduced": False,
+            "output_tokens_managed_by_server": True,
         }
 
     def _connect(self, model_info: dict[str, Any]) -> None:
@@ -466,7 +456,7 @@ class ExternalServerBackend:
                     temperature: float,
                     top_p: float,
                     top_k: int,
-                    max_tokens: int,
+                    max_tokens: int | None,
                     seed: int | None,
                     thinking: bool,
                     purpose: str,

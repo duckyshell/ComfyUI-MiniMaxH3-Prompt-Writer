@@ -86,11 +86,15 @@ class GGUFMetadataTests(unittest.TestCase):
 
         self.assertEqual(metadata["reasoning_effort_values"], ["low", "medium", "high", "xhigh"])
 
-    def test_classification_prefers_metadata_and_falls_back_for_unreadable_files(self):
+    def test_classification_uses_metadata_without_filename_fallback(self):
         self.assertEqual(classify_gguf_file({"architecture": "qwen35"}, "mmproj-renamed.gguf"), "model")
-        self.assertEqual(classify_gguf_file({"architecture": "clip"}, "vision-sidecar.gguf"), "projector")
-        self.assertEqual(classify_gguf_file(None, "mmproj-legacy.gguf"), "projector")
-        self.assertEqual(classify_gguf_file(None, "custom.gguf"), "model")
+        self.assertEqual(classify_gguf_file({
+            "architecture": "clip",
+            "has_vision_encoder": True,
+        }, "vision-sidecar.gguf"), "projector")
+        self.assertEqual(classify_gguf_file({"architecture": "clip"}, "mmproj-legacy.gguf"), "unknown")
+        self.assertEqual(classify_gguf_file(None, "mmproj-legacy.gguf"), "unknown")
+        self.assertEqual(classify_gguf_file(None, "custom.gguf"), "unknown")
 
     def test_rejects_non_gguf_and_truncated_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

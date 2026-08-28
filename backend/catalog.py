@@ -102,25 +102,34 @@ def _metadata_result(path: Path) -> tuple[dict[str, Any] | None, str | None]:
         return None, str(error)
 
 
+def _extension_file_kind(metadata: dict[str, Any] | None, filename: str) -> str:
+    kind = classify_gguf_file(metadata, filename)
+    if kind == "unknown" and metadata is None:
+        return "projector" if "mmproj" in filename.lower() else "model"
+    return kind
+
+
 def _classify_files(paths: list[Path]) -> tuple[list[Path], list[Path]]:
     models: list[Path] = []
     projectors: list[Path] = []
     for path in paths:
         metadata, _error = _metadata_result(path)
-        target = projectors if classify_gguf_file(metadata, path.name) == "projector" else models
-        target.append(path)
+        # Filename hints remain an Extension-only compatibility fallback for
+        # unreadable legacy installs. Standalone keeps these files unverified.
+        kind = _extension_file_kind(metadata, path.name)
+        if kind == "projector":
+            projectors.append(path)
+        elif kind == "model":
+            models.append(path)
     return models, projectors
 
 
 def _pair_projector(
     model_metadata: dict[str, Any],
-    sibling_models: list[Path],
     sibling_projectors: list[Path],
 ) -> tuple[Path | None, str, str | None]:
     if not sibling_projectors:
-        return None, "missing", "No mmproj GGUF was found in the same folder."
-    if len(sibling_models) > 1:
-        return None, "ambiguous", "Multiple model GGUF files share this folder. Keep each model and its matching projector in a separate subfolder."
+        return None, "missing", "No vision projector GGUF was found in the same folder."
 
     adapter = architecture_adapter(model_metadata.get("architecture"))
     compatible: list[Path] = []
@@ -132,12 +141,11 @@ def _pair_projector(
         return compatible[0], "compatible", None
     if len(compatible) > 1:
         return None, "ambiguous", "Multiple compatible vision projectors share this folder. Keep only the intended projector beside the model."
-    return None, "incompatible", "The mmproj files in this folder are not metadata-compatible with this model."
+    return None, "incompatible", "The vision projector files in this folder are not metadata-compatible with this model."
 
 
 def _model_candidate(
     model_path: Path,
-    sibling_models: list[Path],
     sibling_projectors: list[Path],
     *,
     runtime_available: bool,
@@ -177,7 +185,7 @@ def _model_candidate(
         setup_message = f"The installed llama-cpp-python {runtime_version or 'version'} does not support the {adapter.id} Direct adapter."
 
     if metadata:
-        projector, vision_status, pairing_message = _pair_projector(metadata, sibling_models, sibling_projectors)
+        projector, vision_status, pairing_message = _pair_projector(metadata, sibling_projectors)
     else:
         projector, vision_status, pairing_message = None, "incompatible", "Vision is disabled because the model metadata could not be read."
     pairing_issue = f"{model_path}: {pairing_message}" if pairing_message else None
@@ -311,7 +319,7 @@ def discover_models_with_diagnostics() -> tuple[list[dict[str, Any]], dict[str, 
         root_diagnostics["model_files"] = [str(path.resolve()) for path in sorted(gguf_files)]
         root_diagnostics["projector_files"] = [str(path.resolve()) for path in sorted(projectors)]
         if not gguf_files and not projectors:
-            root_diagnostics["issues"].append("No GGUF model or mmproj files were found.")
+            root_diagnostics["issues"].append("No GGUF model or vision projector files were found.")
         elif not gguf_files:
             root_diagnostics["issues"].append("Vision projector files were found, but no model GGUF was found.")
         runtime_available = importlib.util.find_spec("llama_cpp") is not None
@@ -321,11 +329,9 @@ def discover_models_with_diagnostics() -> tuple[list[dict[str, Any]], dict[str, 
             if model_id in seen:
                 continue
             seen.add(model_id)
-            sibling_models = [p for p in gguf_files if p.parent == model_path.parent]
             sibling_projectors = [p for p in projectors if p.parent == model_path.parent]
             candidate, pairing_issue = _model_candidate(
                 model_path,
-                sibling_models,
                 sibling_projectors,
                 runtime_available=runtime_available,
                 runtime_version=runtime_version,
@@ -378,7 +384,6 @@ def _find_model_in_directory(
         return None
     candidate, _pairing_issue = _model_candidate(
         model_path,
-        sibling_models,
         sibling_projectors,
         runtime_available=runtime_available,
         runtime_version=runtime_version,
@@ -403,7 +408,7 @@ def find_model(model_id: str) -> dict[str, Any] | None:
     if not any(model_path.is_relative_to(root) for root in roots):
         return None
     metadata, _metadata_error = _metadata_result(model_path)
-    if classify_gguf_file(metadata, model_path.name) != "model":
+    if _extension_file_kind(metadata, model_path.name) != "model":
         return None
 
     runtime_available = importlib.util.find_spec("llama_cpp") is not None

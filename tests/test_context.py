@@ -184,6 +184,24 @@ class ContextPlanTests(unittest.TestCase):
                 self.assertEqual(result["estimated_text_tokens"], exact_tokens)
                 self.assertEqual(result["text_token_source"], "vocab_only")
 
+    def test_8000_character_brief_is_not_truncated_and_auto_can_raise_context(self):
+        brief = "界" * 8_000
+        assembled = request(brief)
+        assembled["input"]["creative_brief"] = brief
+
+        result = plan_context(
+            assembled,
+            self.qwen_model(),
+            requested_context="auto",
+            requested_kv_cache="auto",
+            thinking=True,
+            count_text_tokens=lambda text: 15_000 if brief in text else len(text),
+        )
+
+        self.assertEqual(len(assembled["input"]["creative_brief"]), 8_000)
+        self.assertEqual(result["context_profile"], "extended")
+        self.assertEqual(result["context_tokens"], 24_576)
+
     def test_qwen_visual_tokens_use_prepared_dimensions_and_projector_patch_policy(self):
         assembled = request()
         assembled["media_inputs"] = [

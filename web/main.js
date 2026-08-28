@@ -355,7 +355,6 @@ function icon(name, size = 16) {
     chevron: '<path d="m9 18 6-6-6-6"/>',
     copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
     play: '<path d="m9 7 8 5-8 5V7Z" fill="currentColor" stroke="none"/>',
-    dots: '<circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/>',
     refresh: '<path d="M20 11a8 8 0 1 0-2.35 5.65L20 14"/><path d="M20 7v4h-4"/>',
@@ -384,12 +383,8 @@ function renderAsset(asset, index) {
         <small>${escapeHtml(asset.filename)}</small>
       </span>
       ${duration ? `<span class="h3ps-duration">${duration}</span>` : ""}
-      <button class="h3ps-more" type="button" data-asset-menu-toggle="${asset.id}" title="Asset actions">${icon("dots", 16)}</button>
-      <div class="h3ps-asset-menu" data-asset-menu="${asset.id}" hidden>
-        <button type="button" data-preview-asset="${asset.id}">Preview</button>
-        <button type="button" data-replace-asset="${asset.id}" ${destructiveDisabled}>Replace ${escapeHtml(asset.type)}</button>
-        <button type="button" data-remove-asset="${asset.id}" ${destructiveDisabled}>Remove</button>
-      </div>
+      <button class="h3ps-replace-asset" type="button" data-replace-asset="${asset.id}" title="Replace ${escapeHtml(asset.reference)}" aria-label="Replace ${escapeHtml(asset.reference)}" ${destructiveDisabled}>${icon("refresh", 12)}</button>
+      <button class="h3ps-remove-asset" type="button" data-remove-asset="${asset.id}" title="Remove ${escapeHtml(asset.reference)}" aria-label="Remove ${escapeHtml(asset.reference)}" ${destructiveDisabled}>${icon("close", 12)}</button>
     </div>`;
 }
 
@@ -545,29 +540,15 @@ function bindMediaActions(mode) {
   });
   studio.root.querySelectorAll("[data-asset-index]").forEach((button) => {
     button.addEventListener("click", (event) => {
-      if (event.target.closest("button, .h3ps-asset-menu")) return;
+      if (event.target.closest("button")) return;
       const asset = studio.assets.find((item) => item.id === button.dataset.assetId);
       previewAsset(asset);
-    });
-  });
-  studio.root.querySelectorAll("[data-asset-menu-toggle]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const menu = studio.root.querySelector(`[data-asset-menu="${button.dataset.assetMenuToggle}"]`);
-      const open = menu.hidden;
-      studio.root.querySelectorAll("[data-asset-menu]").forEach((item) => { item.hidden = true; });
-      menu.hidden = !open;
-    });
-  });
-  studio.root.querySelectorAll("[data-preview-asset]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      previewAsset(studio.assets.find((item) => item.id === button.dataset.previewAsset));
     });
   });
   studio.root.querySelectorAll("[data-replace-asset]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
+      button.blur();
       chooseMedia(mode, button.dataset.replaceAsset);
     });
   });
@@ -2851,9 +2832,6 @@ function createStudio() {
   root.addEventListener("click", (event) => {
     if (studio.draftDefaultsArmed && !event.target.closest("[data-restore-default-drafts]")) disarmDraftDefaults();
     if (studio.toastDismissOnWorkspaceClick && !event.target.closest("[data-h3ps-toast]")) hideToast();
-    if (!event.target.closest("[data-asset-menu], [data-asset-menu-toggle]")) {
-      root.querySelectorAll("[data-asset-menu]").forEach((menu) => { menu.hidden = true; });
-    }
     if (!event.target.closest("[data-other-models-toggle], [data-other-models-popover]")) setOtherModelsPopover(false);
     if (!isRuntimeMenuInteraction(event.target)) {
       root.querySelectorAll("[data-runtime-menu]").forEach((menu) => { menu.hidden = true; });

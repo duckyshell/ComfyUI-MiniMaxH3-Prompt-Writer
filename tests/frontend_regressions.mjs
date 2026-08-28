@@ -567,9 +567,12 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
 });
 
 test("Reference assets replace one dropped file and append multiple dropped files", () => {
-  assert.match(mainSource, /data-replace-asset="\$\{asset\.id\}"[^>]*>Replace \$\{escapeHtml\(asset\.type\)\}/);
+  assert.match(mainSource, /class="h3ps-replace-asset"[^>]*data-replace-asset="\$\{asset\.id\}"[^>]*aria-label="Replace[^>]*>\$\{icon\("refresh", 12\)\}<\/button>/);
+  assert.match(mainSource, /class="h3ps-remove-asset"[^>]*data-remove-asset="\$\{asset\.id\}"/);
+  assert.doesNotMatch(mainSource, /data-asset-menu|data-asset-menu-toggle|data-preview-asset|icon\("dots"/);
   assert.doesNotMatch(mainSource, /asset\.mode !== "Reference"[^\n]+data-replace-asset/);
   assert.match(mainSource, /input\.multiple = !replaceAssetId/);
+  assert.match(mainSource, /button\.blur\(\);\s*chooseMedia\(mode, button\.dataset\.replaceAsset\)/);
   assert.match(mainSource, /is-file-replace-target/);
   assert.doesNotMatch(mainSource, /Choose one replacement/);
   assert.match(mainSource, /uploadFiles\(mode, files, replacementTargetForFileDrop\(targetId, files\.length\)\)/);
@@ -581,8 +584,15 @@ test("Reference assets replace one dropped file and append multiple dropped file
   assert.equal(replacementTargetForFileDrop("asset-2", 2), null);
 });
 
-test("media duration remains above landscape thumbnails", () => {
-  assert.match(stylesSource, /\.h3ps-duration\s*\{[^}]*position:\s*absolute;[^}]*z-index:\s*3;/);
+test("media card overlays stay inside the thumbnail and below previews", () => {
+  assert.match(stylesSource, /\.h3ps-duration\s*\{[^}]*position:\s*absolute;[^}]*right:\s*7px;[^}]*bottom:\s*49px;/);
+  assert.match(stylesSource, /\.h3ps-replace-asset, \.h3ps-remove-asset \{[^}]*width:\s*22px;[^}]*height:\s*22px;/);
+  assert.match(stylesSource, /\.h3ps-replace-asset \{[^}]*top:\s*32px;[^}]*right:\s*6px;/);
+  assert.match(stylesSource, /\.h3ps-asset:hover \.h3ps-replace-asset[^}]*opacity:\s*1;/);
+  assert.match(stylesSource, /\.h3ps-asset:hover \.h3ps-remove-asset[^}]*opacity:\s*1;/);
+  assert.doesNotMatch(stylesSource, /\.h3ps-asset:focus-within \.h3ps-(?:replace|remove)-asset/);
+  assert.doesNotMatch(stylesSource, /\.h3ps-more|\.h3ps-asset-menu/);
+  assert.match(stylesSource, /\.h3ps-video-preview, \.h3ps-image-preview \{[^}]*z-index:\s*20;/);
 });
 
 test("VRAM retry waits for the required free-memory target", () => {
@@ -840,6 +850,7 @@ test("Settings separates providers, installed models, diagnostics, and verified 
 test("Reference defaults use plain Picture 1 and Video 1 text while canonical tags remain user-authored", () => {
   assert.match(mainSource, /const REFERENCE_DEFAULT_BRIEF = ["`][^"`]*Picture 1[^"`]*Video 1[^"`]*["`]/s);
   assert.doesNotMatch(mainSource.match(/const REFERENCE_DEFAULT_BRIEF = ["`][^"`]*["`]/s)?.[0] || "", /<Picture 1>|<Video 1>/);
+  assert.match(skinSource, /\.h3ps-root\.is-fullscreen \.h3ps-assets:has\(> \.h3ps-empty-drop:only-child\) \{ grid-template-columns: minmax\(0, 1fr\); \}/);
 });
 
 test("Settings shows compact global System Prompt summaries and an on-demand editor", () => {

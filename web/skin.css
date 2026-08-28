@@ -61,15 +61,13 @@
   color: var(--h3ps-text);
 }
 .h3ps-guide-menu,
-.h3ps-choice-menu,
-.h3ps-asset-menu {
+.h3ps-choice-menu {
   border-color: #2e2e34;
   background: #151518;
   box-shadow: 0 16px 48px rgba(0, 0, 0, .6);
 }
 .h3ps-guide-menu a:hover,
-.h3ps-choice-menu button:hover,
-.h3ps-asset-menu button:hover { background: rgba(255, 255, 255, .04); }
+.h3ps-choice-menu button:hover { background: rgba(255, 255, 255, .04); }
 .h3ps-icon-button:hover { border-color: #2d2d32; background: #17171b; }
 
 /* Generate navigation and workspace */
@@ -149,15 +147,14 @@
 .h3ps-asset-copy { left: 9px; right: 23px; bottom: 7px; }
 .h3ps-asset-copy strong { font-size: 10.5px; }
 .h3ps-asset-copy small { font-size: 9px; }
-.h3ps-more { bottom: 8px; }
 .h3ps-asset-copy strong { font-weight: 560; }
-.h3ps-more:hover { background: #202024; }
 .h3ps-empty-drop {
   border-color: #2a2a30;
   border-radius: 9px;
   background: #101012;
 }
 .h3ps-empty-drop:hover { border-color: rgba(232, 97, 60, .42); }
+.h3ps-root.is-fullscreen .h3ps-assets:has(> .h3ps-empty-drop:only-child) { grid-template-columns: minmax(0, 1fr); }
 .h3ps-empty-icon { background: rgba(232, 97, 60, .1); color: var(--h3ps-accent); }
 .h3ps-audio { background: linear-gradient(145deg, #18181c, #0e0e10); }
 .h3ps-wave i { background: #72727b; }
@@ -1196,6 +1193,9 @@
   .h3ps-root.is-fullscreen .h3ps-installed-model-control { min-height: 61px; padding: 9px 11px; }
   .h3ps-root.is-fullscreen .h3ps-installed-model-control select { font-size: 11px; }
 }
+
+.h3ps-root.is-fullscreen .h3ps-assets,
+.h3ps-root.is-fullscreen .h3ps-assets.is-reference { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 
 /* Music 3 workspace */
 .h3ps-workspaces {

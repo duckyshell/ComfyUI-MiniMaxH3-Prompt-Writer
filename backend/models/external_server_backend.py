@@ -21,6 +21,20 @@ CONNECT_TIMEOUT_SECONDS = 3
 REQUEST_TIMEOUT_SECONDS = 900
 
 
+def _split_embedded_reasoning(content: str) -> tuple[str, str | None]:
+    stripped = content.lstrip()
+    if not stripped.startswith("<think>"):
+        return content, None
+    closing_tag = "</think>"
+    if closing_tag not in stripped:
+        raise ModelError(
+            "THINKING_TRUNCATED",
+            "The external llama.cpp server returned reasoning without a final prompt.",
+        )
+    reasoning, final = stripped[len("<think>"):].split(closing_tag, 1)
+    return final.lstrip(), reasoning.strip()
+
+
 def normalize_server_url(value: str | None) -> str:
     raw = (value or DEFAULT_SERVER_URL).strip()
     parsed = urlsplit(raw)
@@ -72,7 +86,6 @@ class _RemoteChatHandler:
         top_k: int,
         max_tokens: int | None,
         seed: int | None,
-        enable_thinking: bool,
         **_unused: Any,
     ) -> dict[str, Any]:
         del max_tokens
@@ -84,7 +97,6 @@ class _RemoteChatHandler:
             "top_k": top_k,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "chat_template_kwargs": {"enable_thinking": enable_thinking},
         }
         if seed is not None:
             payload["seed"] = seed
@@ -275,6 +287,9 @@ class ExternalServerBackend:
             connection.close()
         content = "".join(content_parts)
         reasoning = "".join(reasoning_parts)
+        if not reasoning:
+            content, embedded_reasoning = _split_embedded_reasoning(content)
+            reasoning = embedded_reasoning or ""
         if not usage:
             usage = {
                 "prompt_tokens": 0,
@@ -346,6 +361,7 @@ class ExternalServerBackend:
             "missing_dependencies": [],
             "capabilities": {"images": has_multimodal, "video_frames": has_multimodal, "audio": False},
             "thinking": True,
+            "thinking_managed_by_server": True,
             "recommended_context": "external",
             "endpoint": endpoint,
             "remote_model": remote_model,
@@ -363,6 +379,7 @@ class ExternalServerBackend:
         kv_cache: str | None,
         thinking: bool,
     ) -> dict[str, Any]:
+        del thinking
         if (context_profile or "auto").lower() != "auto" or (kv_cache or "auto").lower() != "auto":
             raise ModelError(
                 "EXTERNAL_RUNTIME_MANAGED",
@@ -401,7 +418,7 @@ class ExternalServerBackend:
             "context_tokens": context_tokens,
             "requested_kv_cache": "auto",
             "kv_cache": "server",
-            "thinking": thinking,
+            "thinking": False,
             "estimated_text_tokens": estimated_text_tokens,
             "estimated_input_tokens": estimated_input_tokens,
             "visual_input_count": visual_input_count,
@@ -433,7 +450,7 @@ class ExternalServerBackend:
         runtime_plan: dict[str, Any] | None = None,
         on_phase: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
-        del unload_after
+        del unload_after, thinking
         with self.lock:
             validate_media_capabilities(model_info, assembled)
             try:
@@ -461,7 +478,7 @@ class ExternalServerBackend:
                     thinking: bool,
                     purpose: str,
                 ) -> dict[str, Any]:
-                    del purpose
+                    del purpose, thinking
                     if self.chat_handler is None:
                         raise ModelError(
                             "EXTERNAL_SERVER_UNAVAILABLE",
@@ -474,7 +491,6 @@ class ExternalServerBackend:
                         top_k=top_k,
                         max_tokens=max_tokens,
                         seed=seed,
-                        enable_thinking=thinking,
                     )
 
                 result = run_h3_pipeline(
@@ -485,7 +501,7 @@ class ExternalServerBackend:
                     complete=complete,
                     count_text_tokens=lambda text: estimate_text_tokens(text) + 1,
                     is_cancelled=self.cancel_event.is_set,
-                    thinking=thinking,
+                    thinking=False,
                     seed=seed,
                     on_phase=on_phase,
                 )

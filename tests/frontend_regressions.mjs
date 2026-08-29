@@ -615,6 +615,12 @@ test("Direct Thinking is disabled when the GGUF template has no detected control
   assert.match(mainSource, /studio\.selectedModel\.thinking !== true/);
 });
 
+test("External llama.cpp keeps reasoning under server control", () => {
+  assert.match(mainSource, /externalManaged = studio\.selectedModel\?\.family === "external"/);
+  assert.match(mainSource, /Thinking is managed by the external llama\.cpp server\./);
+  assert.match(stateSource, /state\.selectedModel\?\.family === "external" \? false : state\.thinking/);
+});
+
 test("text-only Direct models expose only T2VA", () => {
   const textOnly = {
     id: "direct-text-only",
@@ -663,7 +669,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     ollama_model: null,
     ollama_host: null,
     api_provider: null,
-    thinking: true,
+    thinking: false,
     context_profile: "auto",
     kv_cache: "auto",
     system_prompt_override: "Custom reference",
@@ -683,7 +689,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
     ollama_model: null,
     ollama_host: null,
     api_provider: null,
-    thinking: true,
+    thinking: false,
     context_profile: "auto",
     kv_cache: "auto",
     system_prompt_override: "Custom reference",

@@ -306,6 +306,7 @@ export function restoredModelAfterDiscovery(state) {
 
 function sharedInferencePayload(state) {
   const directRuntime = state.selectedModel?.family === "gguf";
+  const thinking = state.selectedModel?.family === "external" ? false : state.thinking;
   const generationBudgetMode = state.generationBudget || "auto";
   const generationBudget = generationBudgetMode === "custom"
     ? (state.generationBudgetTokens ?? 0)
@@ -318,14 +319,14 @@ function sharedInferencePayload(state) {
     ollama_model: selectedOllamaModel(state),
     ollama_host: selectedOllamaHost(state),
     api_provider: selectedApiProvider(state),
-    thinking: state.thinking,
+    thinking,
     context_profile: directRuntime ? state.contextProfile : "auto",
     kv_cache: directRuntime ? state.kvCache : "auto",
     ...(directRuntime ? {
       context_tokens: state.contextProfile === "custom" ? state.contextTokens : null,
       generation_budget: generationBudget,
     } : {}),
-    ...(directRuntime && state.thinking ? { reasoning_effort: state.reasoningEffort || "auto" } : {}),
+    ...(directRuntime && thinking ? { reasoning_effort: state.reasoningEffort || "auto" } : {}),
     system_prompt_override: currentSystemPromptOverride(state),
     unload_after: !state.keepModelLoaded,
   };
@@ -333,6 +334,7 @@ function sharedInferencePayload(state) {
 
 export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }) {
   const directRuntime = state.selectedModel?.family === "gguf";
+  const thinking = state.selectedModel?.family === "external" ? false : state.thinking;
   const generationBudgetMode = state.generationBudget || "auto";
   const generationBudget = generationBudgetMode === "custom"
     ? (state.generationBudgetTokens ?? 0)
@@ -348,14 +350,14 @@ export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }
     ollama_model: selectedOllamaModel(state),
     ollama_host: selectedOllamaHost(state),
     api_provider: selectedApiProvider(state),
-    thinking: state.thinking,
+    thinking,
     context_profile: directRuntime ? state.contextProfile : "auto",
     kv_cache: directRuntime ? state.kvCache : "auto",
     ...(directRuntime ? {
       context_tokens: state.contextProfile === "custom" ? state.contextTokens : null,
       generation_budget: generationBudget,
     } : {}),
-    ...(directRuntime && state.thinking ? { reasoning_effort: state.reasoningEffort || "auto" } : {}),
+    ...(directRuntime && thinking ? { reasoning_effort: state.reasoningEffort || "auto" } : {}),
     system_prompt_override: currentSystemPromptOverride(state),
     seed,
     unload_after: !state.keepModelLoaded,

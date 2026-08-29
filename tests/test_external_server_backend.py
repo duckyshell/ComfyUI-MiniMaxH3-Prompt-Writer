@@ -19,6 +19,8 @@ class _FakeLlamaHandler(BaseHTTPRequestHandler):
     last_completion = None
     slow_started = threading.Event()
     vision = True
+    reasoning_mode = "off"
+    completion_count = 0
 
     def log_message(self, *_args):
         return
@@ -49,6 +51,35 @@ class _FakeLlamaHandler(BaseHTTPRequestHandler):
             self._json({"error": {"message": "not found"}}, 404)
             return
         type(self).last_completion = payload
+        type(self).completion_count += 1
+        if type(self).reasoning_mode == "separate":
+            reasoning_chunks = [
+                {"choices": [{"delta": {"reasoning_content": "PRIVATE_"}, "finish_reason": None}]},
+                {"choices": [{"delta": {"reasoning_content": "THOUGHT", "content": "PUBLIC"}, "finish_reason": "stop"}]},
+                {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 5}},
+            ]
+            body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in reasoning_chunks) + "data: [DONE]\n\n"
+            encoded = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            return
+        if type(self).reasoning_mode == "embedded":
+            reasoning_chunks = [
+                {"choices": [{"delta": {"content": "<think>PRIVATE_"}, "finish_reason": None}]},
+                {"choices": [{"delta": {"content": "THOUGHT</think>PUBLIC"}, "finish_reason": "stop"}]},
+                {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 5}},
+            ]
+            body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in reasoning_chunks) + "data: [DONE]\n\n"
+            encoded = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            return
         if payload.get("top_k") == 999:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -127,6 +158,8 @@ class ExternalServerBackendTests(unittest.TestCase):
         _FakeLlamaHandler.last_completion = None
         _FakeLlamaHandler.slow_started.clear()
         _FakeLlamaHandler.vision = True
+        _FakeLlamaHandler.reasoning_mode = "off"
+        _FakeLlamaHandler.completion_count = 0
         self.backend = ExternalServerBackend()
 
     def test_only_loopback_root_urls_are_accepted(self):
@@ -144,6 +177,7 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertEqual(model["server_context_tokens"], 16384)
         self.assertTrue(model["capabilities"]["images"])
         self.assertTrue(model["externally_managed"])
+        self.assertTrue(model["thinking_managed_by_server"])
 
     def test_probe_accepts_external_text_only_model(self):
         _FakeLlamaHandler.vision = False
@@ -217,7 +251,7 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertIn("text-only mode", raised.exception.message)
         self.assertIn("matching mmproj", raised.exception.details["suggestion"])
 
-    def test_remote_handler_uses_openai_multimodal_messages_and_thinking_flag(self):
+    def test_remote_handler_uses_openai_multimodal_messages_without_reasoning_override(self):
         handler = _RemoteChatHandler(self.backend, self.url, "gemma-test.gguf")
         messages = [{
             "role": "user",
@@ -233,14 +267,79 @@ class ExternalServerBackendTests(unittest.TestCase):
             top_k=64,
             max_tokens=1536,
             seed=42,
-            enable_thinking=True,
         )
         self.assertEqual(response["choices"][0]["message"]["content"], "SERVER_OK")
         payload = _FakeLlamaHandler.last_completion
         self.assertEqual(payload["messages"], messages)
         self.assertEqual(payload["seed"], 42)
-        self.assertTrue(payload["chat_template_kwargs"]["enable_thinking"])
+        self.assertNotIn("chat_template_kwargs", payload)
         self.assertNotIn("max_tokens", payload)
+
+    def test_writer_thinking_request_does_not_override_server_reasoning_off(self):
+        model = self.backend.probe_model({"url": self.url})
+        assembled = {
+            "messages": [{"role": "user", "content": "brief"}],
+            "media_inputs": [],
+            "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "brief"},
+        }
+        plan = self.backend.preflight(
+            model,
+            assembled,
+            context_profile="auto",
+            kv_cache="auto",
+            thinking=True,
+        )
+
+        result = self.backend.generate(
+            model,
+            assembled,
+            "external-reasoning-off",
+            thinking=True,
+            seed=42,
+            unload_after=True,
+            runtime_plan=plan,
+        )
+
+        self.assertFalse(plan["thinking"])
+        self.assertEqual(result["prompt"], "SERVER_OK")
+        self.assertEqual(result["reasoning_tokens"], 0)
+        self.assertEqual(_FakeLlamaHandler.completion_count, 1)
+        self.assertNotIn("chat_template_kwargs", _FakeLlamaHandler.last_completion)
+
+    def test_server_reasoning_on_is_separated_without_writer_control(self):
+        model = self.backend.probe_model({"url": self.url})
+        assembled = {
+            "messages": [{"role": "user", "content": "brief"}],
+            "media_inputs": [],
+            "input": {"mode": "T2VA", "duration_seconds": 5, "creative_brief": "brief"},
+        }
+
+        for mode in ("separate", "embedded"):
+            with self.subTest(mode=mode):
+                _FakeLlamaHandler.reasoning_mode = mode
+                _FakeLlamaHandler.completion_count = 0
+                self.backend.prepare_request()
+                plan = self.backend.preflight(
+                    model,
+                    assembled,
+                    context_profile="auto",
+                    kv_cache="auto",
+                    thinking=False,
+                )
+                result = self.backend.generate(
+                    model,
+                    assembled,
+                    f"external-reasoning-{mode}",
+                    thinking=False,
+                    seed=42,
+                    unload_after=True,
+                    runtime_plan=plan,
+                )
+
+                self.assertEqual(result["prompt"], "PUBLIC")
+                self.assertGreater(result["reasoning_tokens"], 0)
+                self.assertEqual(_FakeLlamaHandler.completion_count, 1)
+                self.assertNotIn("chat_template_kwargs", _FakeLlamaHandler.last_completion)
 
     def test_external_preflight_uses_server_context_and_rejects_local_runtime_controls(self):
         model = self.backend.probe_model({"url": self.url})
@@ -312,7 +411,6 @@ class ExternalServerBackendTests(unittest.TestCase):
                     top_k=999,
                     max_tokens=1536,
                     seed=42,
-                    enable_thinking=False,
                 )
             except Exception as error:  # Captured for assertion in the test thread.
                 result["error"] = error
@@ -339,7 +437,6 @@ class ExternalServerBackendTests(unittest.TestCase):
             top_k=998,
             max_tokens=1536,
             seed=42,
-            enable_thinking=False,
         )
 
         self.assertEqual(response["choices"][0]["message"]["content"], "SERVER_OK")

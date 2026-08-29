@@ -1960,7 +1960,7 @@ function applyRuntimePreferences(provider) {
 function syncThinkingAvailability() {
   if (!studio) return;
   const apiManaged = studio.selectedModel?.family === "api";
-  const external = studio.selectedModel?.family === "external";
+  const externalManaged = studio.selectedModel?.family === "external";
   const context = studio.contextProfile;
   const resolved = context === "auto" ? (studio.selectedModel?.recommended_context || "standard") : context;
   const input = studio.root.querySelector("[data-thinking]");
@@ -1968,14 +1968,16 @@ function syncThinkingAvailability() {
   const unsupported = ["ollama", "gguf"].includes(studio.selectedModel?.family)
     && studio.selectedModel.thinking !== true;
   const customTooSmall = context === "custom" && Number(studio.contextTokens || 0) < 16384;
-  const disabled = apiManaged || unsupported || (!external && context !== "auto" && (resolved === "low" || customTooSmall));
+  const disabled = apiManaged || externalManaged || unsupported || (context !== "auto" && (resolved === "low" || customTooSmall));
   if (disabled) input.checked = false;
   if (disabled) studio.thinking = false;
   input.checked = studio.thinking;
   input.disabled = disabled;
   label.hidden = apiManaged;
   label.classList.toggle("is-disabled", disabled);
-  label.title = unsupported
+  label.title = externalManaged
+    ? "Thinking is managed by the external llama.cpp server."
+    : unsupported
     ? "This provider model does not report thinking controls."
     : disabled ? "Thinking needs 16K or larger Context." : "";
 }

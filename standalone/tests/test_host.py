@@ -35,8 +35,8 @@ class StandaloneHostTest(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/healthz")
         payload = await response.json()
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["version"], "0.1.1")
-        self.assertEqual(payload["standalone_version"], "0.1.1")
+        self.assertEqual(payload["version"], "0.1.2")
+        self.assertEqual(payload["standalone_version"], "0.1.2")
         self.assertRegex(payload["core_version"], r"^\d+\.\d+\.\d+$")
 
         response = await self.client.get("/standalone/gguf/state")

@@ -1,5 +1,10 @@
 # Standalone changelog
 
+## 0.1.2 - 2026-08-30
+
+- Fixed Local GGUF generation failing before the model could respond.
+- Restored Thinking controls for Local GGUF models whose templates support them.
+
 ## 0.1.1 - 2026-08-29
 
 - Updated the shared Writer interface and core to H3 Prompt Writer extension `0.4.3`.

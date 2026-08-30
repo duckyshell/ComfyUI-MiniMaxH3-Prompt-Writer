@@ -21,7 +21,7 @@ class VersionContractTest(unittest.TestCase):
         self.assertEqual(match.group(1), extension_version)
 
         standalone_version = (STANDALONE_ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        self.assertEqual(standalone_version, "0.1.1")
+        self.assertEqual(standalone_version, "0.1.2")
         self.assertNotEqual(standalone_version, extension_version)
         self.assertNotIn("standalone", project["project"]["name"].lower())
 

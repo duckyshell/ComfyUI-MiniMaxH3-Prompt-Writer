@@ -1,13 +1,18 @@
-# H3 Prompt Writer Standalone v0.1.1
+# H3 Prompt Writer Standalone v0.1.2
 
 Standalone Windows version. ComfyUI is not required.
 
 ## Download
 
-[Download H3-Prompt-Writer-Standalone-Windows-v0.1.1.zip](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.1/H3-Prompt-Writer-Standalone-Windows-v0.1.1.zip)
+[Download H3-Prompt-Writer-Standalone-Windows-v0.1.2.zip](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.2/H3-Prompt-Writer-Standalone-Windows-v0.1.2.zip)
 
 Do not download **Source code (zip)** or **Source code (tar.gz)** for normal use.
 Do not install this package into ComfyUI `custom_nodes`.
+
+## Fixed
+
+- Fixed Local GGUF generation failing before the model could respond.
+- Restored Thinking controls for Local GGUF models whose templates support them.
 
 ## Features
 

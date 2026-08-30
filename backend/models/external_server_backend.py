@@ -109,6 +109,7 @@ class _RemoteChatHandler:
 class ExternalServerBackend:
     manages_gpu_memory = False
     externally_managed = True
+    reasoning_managed_by_server = True
 
     def __init__(self) -> None:
         self.model_id: str | None = None
@@ -379,7 +380,7 @@ class ExternalServerBackend:
         kv_cache: str | None,
         thinking: bool,
     ) -> dict[str, Any]:
-        del thinking
+        effective_thinking = False if self.reasoning_managed_by_server else thinking
         if (context_profile or "auto").lower() != "auto" or (kv_cache or "auto").lower() != "auto":
             raise ModelError(
                 "EXTERNAL_RUNTIME_MANAGED",
@@ -418,7 +419,7 @@ class ExternalServerBackend:
             "context_tokens": context_tokens,
             "requested_kv_cache": "auto",
             "kv_cache": "server",
-            "thinking": False,
+            "thinking": effective_thinking,
             "estimated_text_tokens": estimated_text_tokens,
             "estimated_input_tokens": estimated_input_tokens,
             "visual_input_count": visual_input_count,
@@ -450,7 +451,8 @@ class ExternalServerBackend:
         runtime_plan: dict[str, Any] | None = None,
         on_phase: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
-        del unload_after, thinking
+        del unload_after
+        effective_thinking = False if self.reasoning_managed_by_server else thinking
         with self.lock:
             validate_media_capabilities(model_info, assembled)
             try:
@@ -478,7 +480,7 @@ class ExternalServerBackend:
                     thinking: bool,
                     purpose: str,
                 ) -> dict[str, Any]:
-                    del purpose, thinking
+                    del purpose
                     if self.chat_handler is None:
                         raise ModelError(
                             "EXTERNAL_SERVER_UNAVAILABLE",
@@ -491,6 +493,7 @@ class ExternalServerBackend:
                         top_k=top_k,
                         max_tokens=max_tokens,
                         seed=seed,
+                        enable_thinking=thinking,
                     )
 
                 result = run_h3_pipeline(
@@ -501,7 +504,7 @@ class ExternalServerBackend:
                     complete=complete,
                     count_text_tokens=lambda text: estimate_text_tokens(text) + 1,
                     is_cancelled=self.cancel_event.is_set,
-                    thinking=False,
+                    thinking=effective_thinking,
                     seed=seed,
                     on_phase=on_phase,
                 )

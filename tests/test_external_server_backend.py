@@ -306,6 +306,65 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertEqual(_FakeLlamaHandler.completion_count, 1)
         self.assertNotIn("chat_template_kwargs", _FakeLlamaHandler.last_completion)
 
+    def test_managed_adapter_can_retain_request_reasoning(self):
+        payloads = []
+
+        class Handler:
+            def __call__(
+                self, *, messages, temperature, top_p, top_k, max_tokens,
+                seed, enable_thinking,
+            ):
+                payloads.append({"enable_thinking": enable_thinking})
+                return {
+                    "choices": [{"message": {"content": "PROMPT"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+
+        class ManagedBackend(ExternalServerBackend):
+            reasoning_managed_by_server = False
+
+            def _connect(self, model_info):
+                self.chat_handler = Handler()
+                self.model_id = model_info["id"]
+
+        backend = ManagedBackend()
+        model = {
+            "id": "managed",
+            "endpoint": "http://127.0.0.1:1",
+            "remote_model": "managed",
+            "capabilities": {"images": False, "video_frames": False, "audio": False},
+        }
+        runtime_plan = {
+            "context_profile": "standard",
+            "context_tokens": 16_384,
+            "kv_cache": "server",
+            "max_output_tokens": 2_048,
+            "thinking_budget_reduced": False,
+        }
+
+        def pipeline(_model, _assembled, _session, _plan, *, complete, thinking, **_options):
+            response = complete(
+                messages=[], temperature=1.0, top_p=.95, top_k=64,
+                max_tokens=2_048, seed=None, thinking=thinking, purpose="generation",
+            )
+            return {"prompt": response["choices"][0]["message"]["content"]}
+
+        for thinking in (False, True):
+            with self.subTest(thinking=thinking):
+                payloads.clear()
+                with patch("backend.models.external_server_backend.run_h3_pipeline", side_effect=pipeline):
+                    result = backend.generate(
+                        model,
+                        {"messages": [], "media_inputs": []},
+                        "managed-local",
+                        thinking=thinking,
+                        seed=None,
+                        unload_after=False,
+                        runtime_plan=runtime_plan,
+                    )
+                self.assertEqual(result["prompt"], "PROMPT")
+                self.assertEqual(payloads, [{"enable_thinking": thinking}])
+
     def test_server_reasoning_on_is_separated_without_writer_control(self):
         model = self.backend.probe_model({"url": self.url})
         assembled = {

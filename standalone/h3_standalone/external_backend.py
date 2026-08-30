@@ -193,6 +193,8 @@ def standalone_external_backend_class(
     """Build a narrow subclass without importing the upstream before host setup."""
 
     class StandaloneExternalServerBackend(upstream_class):
+        reasoning_managed_by_server = False
+
         def __init__(self) -> None:
             super().__init__()
             self._managed_model_info: dict[str, Any] = {}

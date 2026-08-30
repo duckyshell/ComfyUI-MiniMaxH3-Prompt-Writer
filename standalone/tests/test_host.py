@@ -12,7 +12,7 @@ from backend.gguf_metadata import classify_gguf_file
 from backend.models.contract import ModelError
 from h3_standalone.app import create_app
 from h3_standalone.config import load_settings, validate_upstream
-from h3_standalone.external_backend import _ManagedChatHandler
+from h3_standalone.external_backend import _ManagedChatHandler, standalone_external_backend_class
 from h3_standalone.managed_gguf import ManagedGGUFBackend, ManagedGGUFController, managed_runtime_diagnostics
 from h3_standalone.managed_runtime import ManagedLlamaServer
 
@@ -267,6 +267,20 @@ class ManagedGGUFTest(unittest.TestCase):
             {"enable_thinking": True, "reasoning_effort": "low"},
         )
         self.assertEqual(transport.payload["reasoning_format"], "deepseek-legacy")
+
+    def test_standalone_managed_adapter_owns_reasoning_controls(self) -> None:
+        class Upstream:
+            reasoning_managed_by_server = True
+
+        backend_class = standalone_external_backend_class(
+            Upstream,
+            lambda _model, *, thinking, fallback: fallback,
+            lambda _model, *, thinking: {"enable_thinking": thinking},
+            ModelError,
+            lambda text: len(text),
+        )
+
+        self.assertFalse(backend_class.reasoning_managed_by_server)
 
     def test_managed_local_server_restores_its_own_generation_budget(self) -> None:
         class Runtime:

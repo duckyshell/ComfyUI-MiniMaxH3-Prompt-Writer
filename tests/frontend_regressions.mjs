@@ -751,6 +751,13 @@ test("Ollama remote host controls stay collapsed and disclosure state survives r
   assert.match(skinSource, /\.h3ps-ollama-host-settings/);
 });
 
+test("automatic Ollama refresh renders preserve the unsaved host field value", () => {
+  assert.match(mainSource, /const ollamaHostDraft = studio\.root\.querySelector\('\[data-ollama-host-form\] input\[name="host"\]'\)\?\.value/);
+  assert.match(mainSource, /renderOllamaProviderControl\(ollamaHostDraft\)/);
+  assert.match(mainSource, /ollamaHostControlMarkup\(hostValue = studio\.ollamaHost\)/);
+  assert.match(mainSource, /value="\$\{escapeHtml\(hostValue\)\}"/);
+});
+
 test("background model discovery does not override an open Settings provider tab", () => {
   const state = createStudioState({ sessionId: "settings-race", storage: memoryStorage() });
   state.settingsProvider = "api";

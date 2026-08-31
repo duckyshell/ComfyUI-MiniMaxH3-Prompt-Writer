@@ -1,4 +1,5 @@
 import json
+import socket
 import threading
 import time
 import unittest
@@ -203,9 +204,49 @@ class OllamaBackendTests(unittest.TestCase):
                 self.assertEqual(normalize_ollama_url(value), value)
         self.assertEqual(normalize_ollama_url("https://ollama.example"), "https://ollama.example:443")
 
+    @patch("backend.models.ollama_backend.socket.getaddrinfo")
+    def test_ollama_host_allows_http_hostname_resolving_only_to_private_addresses(self, getaddrinfo):
+        getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("172.18.0.2", 11434)),
+        ]
+
+        self.assertEqual(normalize_ollama_url("http://ollama:11434"), "http://ollama:11434")
+        getaddrinfo.assert_called_once_with("ollama", 11434, type=socket.SOCK_STREAM)
+
+    @patch("backend.models.ollama_backend.socket.getaddrinfo")
+    def test_ollama_host_rejects_http_hostname_with_public_or_mixed_resolution(self, getaddrinfo):
+        for addresses in (("93.184.216.34",), ("172.18.0.2", "93.184.216.34")):
+            getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, 11434))
+                for address in addresses
+            ]
+            with self.subTest(addresses=addresses), self.assertRaises(ModelError) as raised:
+                normalize_ollama_url("http://ollama:11434")
+            self.assertEqual(raised.exception.code, "OLLAMA_URL_INSECURE")
+
+    @patch("backend.models.ollama_backend.http.client.HTTPConnection")
+    @patch("backend.models.ollama_backend.socket.getaddrinfo")
+    def test_http_hostname_connection_pins_the_validated_address(self, getaddrinfo, http_connection):
+        private_result = [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("172.18.0.2", 11434)),
+        ]
+        public_result = [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 11434)),
+        ]
+        getaddrinfo.side_effect = [private_result, public_result]
+        response = http_connection.return_value.getresponse.return_value
+        response.status = 200
+        response.read.return_value = b"{}"
+
+        self.backend._request_json("GET", "/api/version", endpoint="http://ollama:11434")
+
+        getaddrinfo.assert_called_once_with("ollama", 11434, type=socket.SOCK_STREAM)
+        http_connection.assert_called_once_with("172.18.0.2", 11434, timeout=3)
+        request_headers = http_connection.return_value.request.call_args.kwargs["headers"]
+        self.assertEqual(request_headers["Host"], "ollama:11434")
+
     def test_ollama_host_rejects_public_http(self):
         for value in (
-            "http://example.com:11434",
             "http://8.8.8.8:11434",
             "http://172.32.0.1:11434",
             "http://192.0.2.1:11434",

@@ -1510,12 +1510,12 @@ function ollamaModelForSettings() {
   return models.find((model) => model.remote_model === studio.ollamaModelName) || models[0] || null;
 }
 
-function ollamaHostControlMarkup() {
+function ollamaHostControlMarkup(hostValue = studio.ollamaHost) {
   const custom = studio.ollamaHost !== DEFAULT_OLLAMA_HOST;
   return `<details class="h3ps-ollama-host-settings" data-ollama-host-settings ${studio.ollamaHostSettingsOpen ? "open" : ""}>
     <summary>${custom ? `Remote host · ${escapeHtml(studio.ollamaHost)}` : "Use Ollama on another computer"}</summary>
     <form data-ollama-host-form>
-      <label><span>Host URL</span><input name="host" type="url" value="${escapeHtml(studio.ollamaHost)}" placeholder="${DEFAULT_OLLAMA_HOST}" required></label>
+      <label><span>Host URL</span><input name="host" type="url" value="${escapeHtml(hostValue)}" placeholder="${DEFAULT_OLLAMA_HOST}" required></label>
       <button type="submit">Apply</button>
     </form>
     <small>Keep the default URL for Ollama on this computer. Remote hosts must allow connections from this machine.</small>
@@ -1551,9 +1551,9 @@ function renderOllamaModelTiers(status) {
   }).join("")}</div>`;
 }
 
-function renderOllamaProviderControl() {
+function renderOllamaProviderControl(hostValue) {
   const status = studio.ollamaStatus;
-  const hostControl = ollamaHostControlMarkup();
+  const hostControl = ollamaHostControlMarkup(hostValue);
   const remoteHost = studio.ollamaHost !== DEFAULT_OLLAMA_HOST;
   const serviceLabel = remoteHost ? "Remote service" : "Local service";
   if (!status) {
@@ -1758,6 +1758,7 @@ function renderDirectModelRuntimeUpdate(model) {
 }
 
 function renderInferenceSettings() {
+  const ollamaHostDraft = studio.root.querySelector('[data-ollama-host-form] input[name="host"]')?.value;
   const models = localModels();
   const directModel = directModelForSettings();
   const select = studio.root.querySelector("[data-installed-model]");
@@ -1794,7 +1795,7 @@ function renderInferenceSettings() {
   studio.root.querySelector("[data-model-scan-slot]").innerHTML = renderModelScanDetails();
   studio.root.querySelector("[data-verified-models-slot]").innerHTML = studio.modelSetup.length ? renderOtherModelsTrigger() : "";
   studio.root.querySelector("[data-external-provider-control]").innerHTML = renderExternalServerControl();
-  studio.root.querySelector("[data-ollama-provider-control]").innerHTML = renderOllamaProviderControl();
+  studio.root.querySelector("[data-ollama-provider-control]").innerHTML = renderOllamaProviderControl(ollamaHostDraft);
   studio.root.querySelector("[data-api-provider-control]").innerHTML = renderApiProviderControl();
   const catalog = studio.root.querySelector("[data-other-models-catalog]");
   catalog.innerHTML = `<div class="h3ps-model-setup-list">${renderModelSetupRows()}</div>`;
@@ -2343,6 +2344,7 @@ async function configureOllamaHost(form) {
     studio.ollamaHostSettingsOpen = false;
     studio.ollamaStorageHelpOpen = false;
     saveOllamaHost(localStorage, endpoint);
+    form.elements.host.value = endpoint;
     studio.models = [...studio.models.filter((model) => model.family !== "ollama"), ...(status.compatible_models || [])];
     studio.promptResidency.ollama = [];
     const model = ollamaModelForSettings();

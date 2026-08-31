@@ -4,6 +4,7 @@ import http.client
 import ipaddress
 import json
 import shutil
+import socket
 import sys
 import threading
 from typing import Any, Callable
@@ -59,7 +60,23 @@ def _is_private_lan(hostname: str) -> bool:
     return any(address.version == network.version and address in network for network in PRIVATE_LAN_NETWORKS)
 
 
-def normalize_ollama_url(value: str | None) -> str:
+def _resolved_addresses(hostname: str, port: int) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    try:
+        records = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except OSError as error:
+        raise ModelError("OLLAMA_URL_INSECURE", "The Ollama HTTP hostname could not be resolved safely.") from error
+    addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+    for record in records:
+        address = ipaddress.ip_address(record[4][0])
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+            address = address.ipv4_mapped
+        addresses.add(address)
+    if not addresses:
+        raise ModelError("OLLAMA_URL_INSECURE", "The Ollama HTTP hostname could not be resolved safely.")
+    return addresses
+
+
+def _normalize_ollama_target(value: str | None) -> tuple[str, str | None]:
     raw = (value or DEFAULT_OLLAMA_URL).strip()
     parsed = urlsplit(raw)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -72,11 +89,10 @@ def normalize_ollama_url(value: str | None) -> str:
             "INVALID_OLLAMA_URL",
             "Use the Ollama host root URL without credentials, an API path, a query, or a fragment.",
         )
-    if parsed.scheme == "http" and not (_is_loopback(parsed.hostname) or _is_private_lan(parsed.hostname)):
-        raise ModelError(
-            "OLLAMA_URL_INSECURE",
-            "Ollama HTTP hosts must use loopback or a private LAN address. Use HTTPS for public remote hosts.",
-        )
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 11434)
+    except ValueError as error:
+        raise ModelError("INVALID_OLLAMA_URL", "The Ollama host URL has an invalid port.") from error
     lowered_host = parsed.hostname.lower()
     if lowered_host in {"metadata.google.internal", "instance-data", "instance-data.ec2.internal"}:
         raise ModelError("OLLAMA_URL_BLOCKED", "Cloud metadata endpoints cannot be used as Ollama hosts.")
@@ -84,15 +100,28 @@ def normalize_ollama_url(value: str | None) -> str:
         address = ipaddress.ip_address(parsed.hostname)
     except ValueError:
         address = None
-    if address is not None and (address.is_link_local or address.is_multicast or address.is_unspecified):
+    addresses = {address} if address is not None else set()
+    connect_host = None
+    if parsed.scheme == "http" and address is None and lowered_host != "localhost":
+        addresses = _resolved_addresses(parsed.hostname, port)
+        connect_host = str(min(addresses, key=lambda item: (item.version, int(item))))
+    if any(item.is_link_local or item.is_multicast or item.is_unspecified for item in addresses):
         raise ModelError("OLLAMA_URL_BLOCKED", "This network address cannot be used as an Ollama host.")
-    try:
-        port = parsed.port or (443 if parsed.scheme == "https" else 11434)
-    except ValueError as error:
-        raise ModelError("INVALID_OLLAMA_URL", "The Ollama host URL has an invalid port.") from error
+    if parsed.scheme == "http" and not (
+        lowered_host == "localhost"
+        or addresses and all(_is_loopback(str(item)) or _is_private_lan(str(item)) for item in addresses)
+    ):
+        raise ModelError(
+            "OLLAMA_URL_INSECURE",
+            "Ollama HTTP hosts must resolve only to loopback or private LAN addresses. Use HTTPS for public remote hosts.",
+        )
     hostname = "127.0.0.1" if parsed.hostname.lower() in {"localhost", "::1"} else parsed.hostname
     host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
-    return f"{parsed.scheme}://{host}:{port}"
+    return f"{parsed.scheme}://{host}:{port}", connect_host
+
+
+def normalize_ollama_url(value: str | None) -> str:
+    return _normalize_ollama_target(value)[0]
 
 
 def _ollama_model_id(endpoint: str, model_name: str) -> str:
@@ -198,10 +227,16 @@ class OllamaBackend:
         self.force_unload_event.set()
         return self.cancel()
 
-    def _connection_for(self, timeout: int, endpoint: str | None = None) -> http.client.HTTPConnection:
+    def _connection_for(
+        self,
+        timeout: int,
+        endpoint: str | None = None,
+        *,
+        connect_host: str | None = None,
+    ) -> http.client.HTTPConnection:
         parsed = urlsplit(endpoint or self.endpoint)
         connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        return connection_type(parsed.hostname, parsed.port, timeout=timeout)
+        return connection_type(connect_host or parsed.hostname, parsed.port, timeout=timeout)
 
     def _request_json(
         self,
@@ -213,10 +248,12 @@ class OllamaBackend:
         timeout: int = CONNECT_TIMEOUT_SECONDS,
         track: bool = False,
     ) -> dict[str, Any]:
-        resolved_endpoint = normalize_ollama_url(endpoint or self.endpoint)
-        connection = self._connection_for(timeout, resolved_endpoint)
+        resolved_endpoint, connect_host = _normalize_ollama_target(endpoint or self.endpoint)
+        connection = self._connection_for(timeout, resolved_endpoint, connect_host=connect_host)
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers = {"Accept": "application/json"}
+        if connect_host is not None:
+            headers["Host"] = urlsplit(resolved_endpoint).netloc
         if body is not None:
             headers["Content-Type"] = "application/json"
         if track:
@@ -469,9 +506,12 @@ class OllamaBackend:
         }
         if seed is not None:
             payload["options"]["seed"] = seed
-        endpoint = normalize_ollama_url(endpoint or self.endpoint)
-        connection = self._connection_for(REQUEST_TIMEOUT_SECONDS, endpoint)
+        endpoint, connect_host = _normalize_ollama_target(endpoint or self.endpoint)
+        connection = self._connection_for(REQUEST_TIMEOUT_SECONDS, endpoint, connect_host=connect_host)
         body = json.dumps(payload).encode("utf-8")
+        headers = {"Accept": "application/x-ndjson", "Content-Type": "application/json"}
+        if connect_host is not None:
+            headers["Host"] = urlsplit(endpoint).netloc
         with self._connection_lock:
             self._connection = connection
         content_parts: list[str] = []
@@ -481,7 +521,7 @@ class OllamaBackend:
         try:
             connection.request(
                 "POST", "/api/chat", body=body,
-                headers={"Accept": "application/x-ndjson", "Content-Type": "application/json"},
+                headers=headers,
             )
             response = connection.getresponse()
             if not 200 <= response.status < 300:

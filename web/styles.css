@@ -78,6 +78,22 @@ body.h3ps-modal-open { overflow: hidden; }
 .h3ps-section-heading strong, .h3ps-sample-heading strong { font-size: 15px; font-weight: 640; letter-spacing: -.1px; }
 .h3ps-quiet-button { padding: 3px 0; border: 0; background: transparent; color: var(--h3ps-muted); font-size: 11px; cursor: pointer; }
 .h3ps-quiet-button:hover { color: var(--h3ps-text); }
+.h3ps-clear-control { position: relative; display: inline-flex; align-items: stretch; min-height: 28px; border: 1px solid var(--h3ps-border); border-radius: 7px; background: var(--h3ps-surface-2); color: var(--h3ps-muted); }
+.h3ps-clear-control:hover { border-color: var(--h3ps-muted); color: var(--h3ps-text); }
+.h3ps-clear-primary, .h3ps-clear-toggle { display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: inherit; font-size: .85em; font-weight: 600; cursor: pointer; }
+.h3ps-clear-primary { padding: 0 9px; border-radius: 6px 0 0 6px; }
+.h3ps-clear-toggle { width: 26px; padding: 0; border-left: 1px solid var(--h3ps-border); border-radius: 0 6px 6px 0; }
+.h3ps-clear-primary:hover, .h3ps-clear-toggle:hover, .h3ps-clear-toggle[aria-expanded="true"] { background: var(--h3ps-surface-3); color: var(--h3ps-text); }
+.h3ps-clear-toggle svg { transform: rotate(90deg); transition: transform 120ms ease; }
+.h3ps-clear-toggle[aria-expanded="true"] svg { transform: rotate(-90deg); }
+.h3ps-clear-primary:disabled, .h3ps-clear-toggle:disabled, .h3ps-clear-menu button:disabled { opacity: .45; cursor: default; }
+.h3ps-clear-menu { position: absolute; z-index: 18; top: calc(100% + 6px); right: -20px; width: max-content; max-width: calc(100vw - 24px); padding: 4px; border: 1px solid var(--h3ps-border); border-radius: 8px; background: var(--h3ps-surface); box-shadow: 0 12px 30px rgba(0,0,0,.28); }
+.h3ps-clear-menu[hidden] { display: none; }
+.h3ps-clear-menu button { display: grid; gap: 2px; width: 100%; min-height: 42px; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--h3ps-text); font-size: .82em; line-height: 1.2; text-align: left; cursor: pointer; }
+.h3ps-clear-menu button:hover { background: var(--h3ps-surface-3); }
+.h3ps-clear-menu button strong { font-size: 1em; font-weight: 620; letter-spacing: normal; white-space: nowrap; }
+.h3ps-clear-menu button small { color: var(--h3ps-muted); font-size: .78em; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.h3ps-clear-menu button.is-destructive strong { color: var(--h3ps-accent-strong); }
 .h3ps-section-hint { min-height: 17px; margin: 4px 0 10px; color: var(--h3ps-muted); font-size: 11.5px; }
 
 .h3ps-media { min-height: 150px; }

@@ -48,6 +48,10 @@ export function resetModeDraft(drafts, mode) {
   return next;
 }
 
+export function clearPromptDraft(draft = {}) {
+  return { ...draft, brief: "", prompt: "" };
+}
+
 export function loadModeDrafts(storage = globalThis.localStorage) {
   try {
     const value = JSON.parse(storage?.getItem(MODE_DRAFTS_STORAGE_KEY) || "null");

@@ -36,6 +36,7 @@ const {
   buildLyricsRefinePayload,
   buildRefinePayload,
   audioWasAdded,
+  clearPromptDraft,
   createStudioState,
   currentSystemPromptOverride,
   isGenerationModeAvailable,
@@ -624,6 +625,28 @@ test("all mode drafts persist independently across reloads", () => {
   });
   assert.match(storage.entries()[MODE_DRAFTS_STORAGE_KEY], /Reference brief|Reference prompt/);
   assert.deepEqual(createStudioState({ sessionId: "drafts", storage }).modeDrafts.T2VA, { brief: "Text brief", prompt: "Text prompt" });
+});
+
+test("clear prompts removes brief and generated output while preserving lyrics and extra draft state", () => {
+  assert.deepEqual(clearPromptDraft({
+    brief: "Keep the camera static.",
+    prompt: "Generated prompt",
+    lyrics: "[Verse]\nKeep these lyrics",
+    marker: "preserved",
+  }), {
+    brief: "",
+    prompt: "",
+    lyrics: "[Verse]\nKeep these lyrics",
+    marker: "preserved",
+  });
+  assert.match(mainSource, /data-clear-media>Clear<\/button>/);
+  assert.match(mainSource, /data-clear-prompts><strong>Clear prompts<\/strong><small>Keep media<\/small>/);
+  assert.match(mainSource, /data-clear-all><strong>Clear all<\/strong><small>Media and prompts<\/small>/);
+  assert.match(mainSource, /if \(!await clearCurrentMedia\(\{ notify: false \}\)\) return;/);
+  assert.match(stylesSource, /\.h3ps-clear-control \{[^}]*display: inline-flex;[^}]*border-radius: 7px;/);
+  assert.match(stylesSource, /\.h3ps-clear-menu \{[^}]*right: -20px;[^}]*width: max-content;[^}]*max-width: calc\(100vw - 24px\);/);
+  assert.match(stylesSource, /\.h3ps-clear-menu button \{[^}]*display: grid;[^}]*min-height: 42px;/);
+  assert.match(stylesSource, /\.h3ps-clear-menu button strong \{[^}]*font-size: 1em;[^}]*letter-spacing: normal;/);
 });
 
 test("video drafts preserve the 8000 character brief while Music keeps 2000", () => {

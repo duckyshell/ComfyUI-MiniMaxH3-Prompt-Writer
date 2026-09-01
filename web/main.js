@@ -7,6 +7,7 @@ import {
   buildLyricsRefinePayload,
   buildRefinePayload,
   audioWasAdded,
+  clearPromptDraft,
   createStudioState,
   isGenerationModeAvailable,
   isPersistedDraftMode,
@@ -846,6 +847,67 @@ function currentBriefTextarea() {
   return studio.root.querySelector(studio.mode === "Music3" ? "[data-music-brief]" : "[data-video-brief]");
 }
 
+function setClearMenuOpen(open) {
+  if (!studio) return;
+  const menu = studio.root.querySelector("[data-clear-menu]");
+  const toggle = studio.root.querySelector("[data-clear-menu-toggle]");
+  if (!menu || !toggle) return;
+  menu.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+}
+
+function clearCurrentPrompts({ notify = true } = {}) {
+  if (!studio || studio.requestBusy) return false;
+  const draft = clearPromptDraft(currentDraftFields());
+  const output = studio.root.querySelector("[data-output]");
+  currentBriefTextarea().value = draft.brief;
+  output.value = draft.prompt;
+  studio.lastModelPrompt = null;
+  studio.lastModelMeta = null;
+  studio.refineRestore = null;
+  studio.root.querySelector("[data-refine-restore]").hidden = true;
+  toggleRefine(false);
+  closeReferenceInsert();
+  studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = promptLengthMeta(output.value);
+  updateBriefLayout();
+  renderPromptHighlights();
+  syncModifiedState();
+  syncReferenceInsertControl();
+  saveCurrentModeDraft();
+  if (notify) {
+    const detail = studio.mode === "Music3"
+      ? "The Music Brief and generated caption were cleared. Lyrics and media were kept."
+      : "The Creative Brief and generated prompt were cleared. Media was kept.";
+    showToast("Prompts cleared", detail);
+  }
+  return true;
+}
+
+async function clearCurrentMedia({ notify = true } = {}) {
+  if (!studio || studio.requestBusy) return false;
+  try {
+    const result = await clearMedia(studio.sessionId, studio.mode);
+    studio.assets = result.assets;
+    closeVideoPreview();
+    closeImagePreview();
+    renderMedia(studio.mode);
+    if (notify) showToast("Media cleared", "The temporary session files were removed.");
+    return true;
+  } catch (error) {
+    showToast(error.code || "Clear failed", error.message, error.details);
+    return false;
+  }
+}
+
+async function clearEverything() {
+  if (!await clearCurrentMedia({ notify: false })) return;
+  clearCurrentPrompts({ notify: false });
+  const detail = studio.mode === "Music3"
+    ? "Media, Music Brief and generated caption were removed. Lyrics were kept."
+    : "Media, Creative Brief and generated prompt were removed.";
+  showToast("Everything cleared", detail);
+}
+
 function saveCurrentModeDraft() {
   if (!studio || !isPersistedDraftMode(studio.mode)) return;
   studio.modeDrafts[studio.mode] = currentDraftFields();
@@ -1015,8 +1077,9 @@ function setGenerationState(state, label, detail) {
   const statusDetail = studio.root.querySelector("[data-status-detail]");
   const busy = state === "busy";
   studio.requestBusy = busy;
-  studio.root.querySelector("[data-clear-media]").disabled = busy;
   syncModeAvailability();
+  studio.root.querySelectorAll("[data-clear-media], [data-clear-menu-toggle], [data-clear-action]").forEach((control) => { control.disabled = busy; });
+  if (busy) setClearMenuOpen(false);
   studio.root.querySelector("[data-lyrics-refine-toggle]").disabled = busy;
   const comfyMemory = studio.root.querySelector("[data-comfy-memory-action]");
   comfyMemory.disabled = busy;
@@ -2786,7 +2849,14 @@ function createStudio() {
           <div data-video-inputs>
           <div class="h3ps-section-heading">
             <span><small>Media</small><strong data-h3ps-mode-title></strong></span>
-            <button class="h3ps-quiet-button" type="button" data-clear-media>Clear</button>
+            <div class="h3ps-clear-control" data-clear-control>
+              <button class="h3ps-clear-primary" type="button" data-clear-media>Clear</button>
+              <button class="h3ps-clear-toggle" type="button" aria-label="More clear options" aria-haspopup="menu" aria-expanded="false" data-clear-menu-toggle>${icon("chevron", 12)}</button>
+              <div class="h3ps-clear-menu" role="menu" data-clear-menu hidden>
+                <button type="button" role="menuitem" data-clear-action data-clear-prompts><strong>Clear prompts</strong><small>Keep media</small></button>
+                <button class="is-destructive" type="button" role="menuitem" data-clear-action data-clear-all><strong>Clear all</strong><small>Media and prompts</small></button>
+              </div>
+            </div>
           </div>
           <p class="h3ps-section-hint" data-h3ps-mode-hint></p>
           <div class="h3ps-media" data-h3ps-media></div>
@@ -2961,6 +3031,7 @@ function createStudio() {
       root.querySelectorAll("[data-model-files-menu]").forEach((menu) => { menu.hidden = true; });
     }
     if (!event.target.closest("[data-reference-insert]")) closeReferenceInsert();
+    if (!event.target.closest("[data-clear-control]")) setClearMenuOpen(false);
   });
   root.querySelectorAll("[data-close-preview]").forEach((el) => el.addEventListener("click", closeVideoPreview));
   root.querySelectorAll("[data-close-image-preview]").forEach((el) => el.addEventListener("click", closeImagePreview));
@@ -2992,16 +3063,21 @@ function createStudio() {
   root.querySelector("[data-open-settings-header]").addEventListener("click", () => setSettingsOpen(true));
   root.querySelector("[data-open-settings]").addEventListener("click", () => setSettingsOpen(true));
   root.querySelector("[data-close-settings]").addEventListener("click", () => setSettingsOpen(false));
-  root.querySelector("[data-clear-media]").addEventListener("click", async () => {
-    try {
-      const result = await clearMedia(studio.sessionId, studio.mode);
-      studio.assets = result.assets;
-      closeVideoPreview();
-      renderMedia(studio.mode);
-      showToast("Media cleared", "The temporary session files were removed.");
-    } catch (error) {
-      showToast(error.code || "Clear failed", error.message, error.details);
-    }
+  root.querySelector("[data-clear-media]").addEventListener("click", () => {
+    setClearMenuOpen(false);
+    clearCurrentMedia();
+  });
+  root.querySelector("[data-clear-menu-toggle]").addEventListener("click", () => {
+    const menu = root.querySelector("[data-clear-menu]");
+    setClearMenuOpen(menu.hidden);
+  });
+  root.querySelector("[data-clear-prompts]").addEventListener("click", () => {
+    setClearMenuOpen(false);
+    clearCurrentPrompts();
+  });
+  root.querySelector("[data-clear-all]").addEventListener("click", () => {
+    setClearMenuOpen(false);
+    clearEverything();
   });
   root.querySelector("[data-generate]").addEventListener("click", startGenerationPreview);
   root.querySelector("[data-restore-default-drafts]").addEventListener("click", restoreDefaultDrafts);
@@ -3499,6 +3575,10 @@ document.addEventListener("keydown", (event) => {
   if (!studio?.root.classList.contains("is-open")) return;
   if (event.key === "Escape") {
     event.preventDefault();
+    if (!studio.root.querySelector("[data-clear-menu]").hidden) {
+      setClearMenuOpen(false);
+      return;
+    }
     if (studio.fullscreen) setFullscreen(false);
     else if (!studio.root.querySelector("[data-other-models-popover]").hidden) setOtherModelsPopover(false);
     else if (studio.root.querySelector("[data-h3ps-image-preview]").classList.contains("is-open")) closeImagePreview();

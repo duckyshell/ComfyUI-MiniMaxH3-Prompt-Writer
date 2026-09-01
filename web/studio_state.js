@@ -52,6 +52,11 @@ export function clearPromptDraft(draft = {}) {
   return { ...draft, brief: "", prompt: "" };
 }
 
+export function normalizeCustomFrameCount(value) {
+  const count = Number(value);
+  return Number.isInteger(count) && count >= 2 && count <= 16 ? String(count) : null;
+}
+
 export function loadModeDrafts(storage = globalThis.localStorage) {
   try {
     const value = JSON.parse(storage?.getItem(MODE_DRAFTS_STORAGE_KEY) || "null");

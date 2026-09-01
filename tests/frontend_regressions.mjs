@@ -48,6 +48,7 @@ const {
   loadOllamaModel,
   loadModeDrafts,
   loadUserPreferences,
+  normalizeCustomFrameCount,
   saveCustomSystemPrompts,
   saveApiProviderConfig,
   saveExternalServerConfig,
@@ -647,6 +648,17 @@ test("clear prompts removes brief and generated output while preserving lyrics a
   assert.match(stylesSource, /\.h3ps-clear-menu \{[^}]*right: -20px;[^}]*width: max-content;[^}]*max-width: calc\(100vw - 24px\);/);
   assert.match(stylesSource, /\.h3ps-clear-menu button \{[^}]*display: grid;[^}]*min-height: 42px;/);
   assert.match(stylesSource, /\.h3ps-clear-menu button strong \{[^}]*font-size: 1em;[^}]*letter-spacing: normal;/);
+});
+
+test("custom contact sheet counts accept only whole values from 2 through 16", () => {
+  assert.equal(normalizeCustomFrameCount("2"), "2");
+  assert.equal(normalizeCustomFrameCount(16), "16");
+  for (const value of [1, 17, 2.5, "2.5", "custom", ""]) {
+    assert.equal(normalizeCustomFrameCount(value), null);
+  }
+  assert.match(mainSource, /data-frame-custom-toggle>Custom<\/button><input[^>]+min="2" max="16"[^>]+data-frame-custom-count hidden/);
+  assert.match(mainSource, /resampleCurrentVideo\(\{ frame_count: selected \}\)/);
+  assert.match(stylesSource, /\.h3ps-frame-custom-count \{[^}]*width:42px;[^}]*text-align:center;/);
 });
 
 test("video drafts preserve the 8000 character brief while Music keeps 2000", () => {

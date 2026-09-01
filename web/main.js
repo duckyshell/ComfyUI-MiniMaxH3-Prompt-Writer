@@ -16,6 +16,7 @@ import {
   loadOllamaModel,
   loadOllamaHost,
   loadUserPreferences,
+  normalizeCustomFrameCount,
   normalizeOllamaHost,
   saveApiProviderConfig,
   saveCustomSystemPrompts,
@@ -39,6 +40,7 @@ const ASPECT_RATIOS = [
   ["1:1", "Square"], ["2:3", "Portrait"], ["3:2", "Landscape"], ["3:4", "Portrait"],
   ["4:3", "Landscape"], ["9:16", "Vertical"], ["16:9", "Widescreen"], ["21:9", "Ultrawide"],
 ];
+const FRAME_COUNT_PRESETS = new Set(["auto", "4", "6", "8"]);
 const MODES = {
   T2VA: {
     title: "Text to video",
@@ -695,6 +697,20 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
   }
 }
 
+function syncFrameCountControls(preview, value, { forceCustom = false } = {}) {
+  const requested = String(value || "auto");
+  const customCount = normalizeCustomFrameCount(requested);
+  const selected = FRAME_COUNT_PRESETS.has(requested) ? requested : (customCount || "auto");
+  const customSelected = forceCustom || !FRAME_COUNT_PRESETS.has(selected);
+  preview.querySelectorAll("[data-frame-count]").forEach((button) => {
+    button.classList.toggle("is-active", !forceCustom && button.dataset.frameCount === selected);
+  });
+  preview.querySelector("[data-frame-custom-toggle]").classList.toggle("is-active", customSelected);
+  const input = preview.querySelector("[data-frame-custom-count]");
+  input.hidden = !customSelected;
+  if (customSelected) input.value = selected;
+}
+
 function openVideoPreview(asset) {
   const preview = studio.root.querySelector("[data-h3ps-preview]");
   studio.previewAssetId = asset.id;
@@ -702,9 +718,7 @@ function openVideoPreview(asset) {
   const video = preview.querySelector("[data-preview-video]");
   video.src = asset.content_url;
   preview.querySelector("[data-preview-sheet]").src = asset.contact_sheet_url || "";
-  preview.querySelectorAll("[data-frame-count]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.frameCount === (asset.frame_count_mode || "auto"));
-  });
+  syncFrameCountControls(preview, asset.frame_count_mode || "auto");
   preview.querySelector("[data-include-endpoints]").checked = asset.include_endpoints !== false;
   preview.querySelector("[data-preview-sampling]").textContent = `One sheet · ${asset.frames.length} frames · read left to right`;
   preview.classList.add("is-open");
@@ -756,7 +770,7 @@ function closeImagePreview() {
 function setSheetUpdating(updating) {
   const preview = studio.root.querySelector("[data-h3ps-preview]");
   preview.classList.toggle("is-updating", updating);
-  preview.querySelectorAll("[data-frame-count], [data-include-endpoints], [data-resample]").forEach((control) => {
+  preview.querySelectorAll("[data-frame-count], [data-frame-custom-toggle], [data-frame-custom-count], [data-include-endpoints], [data-resample]").forEach((control) => {
     control.disabled = updating || studio.requestBusy;
   });
 }
@@ -765,11 +779,17 @@ async function resampleCurrentVideo(options = null) {
   const asset = studio.assets.find((item) => item.id === studio.previewAssetId);
   if (!asset) return;
   const preview = studio.root.querySelector("[data-h3ps-preview]");
-  const selectedCount = options?.frame_count || preview.querySelector("[data-frame-count].is-active")?.dataset.frameCount || asset.frame_count_mode || "auto";
+  const customInput = preview.querySelector("[data-frame-custom-count]");
+  const customSelected = preview.querySelector("[data-frame-custom-toggle]").classList.contains("is-active");
+  const customCount = customSelected ? normalizeCustomFrameCount(customInput.value) : null;
+  if (!options?.frame_count && customSelected && !customCount) {
+    customInput.setCustomValidity("Enter a whole number from 2 to 16.");
+    customInput.reportValidity();
+    return;
+  }
+  const selectedCount = options?.frame_count || customCount || preview.querySelector("[data-frame-count].is-active")?.dataset.frameCount || asset.frame_count_mode || "auto";
   const includeEndpoints = options?.include_endpoints ?? preview.querySelector("[data-include-endpoints]").checked;
-  preview.querySelectorAll("[data-frame-count]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.frameCount === selectedCount);
-  });
+  syncFrameCountControls(preview, selectedCount);
   setSheetUpdating(true);
   try {
     const result = await resampleMedia(studio.sessionId, asset.id, {
@@ -2985,7 +3005,7 @@ function createStudio() {
       <div class="h3ps-preview-dialog">
         <header><span><small>Video reference</small><strong data-preview-name>camera_motion.mp4</strong></span><button class="h3ps-icon-button" type="button" data-close-preview>${icon("close", 18)}</button></header>
         <div class="h3ps-video-stage"><video controls preload="metadata" data-preview-video></video></div>
-        <div class="h3ps-sample-heading"><span><small>What the model sees</small><strong>Contact sheet</strong></span><div class="h3ps-sample-controls"><div class="h3ps-frame-count"><span>Frames</span><button type="button" data-frame-count="auto">Auto</button><button type="button" data-frame-count="4">4</button><button type="button" data-frame-count="6">6</button><button type="button" data-frame-count="8">8</button></div><label class="h3ps-endpoints"><input type="checkbox" data-include-endpoints checked>First & last</label><button type="button" data-resample>${icon("refresh", 14)} Resample</button></div></div>
+        <div class="h3ps-sample-heading"><span><small>What the model sees</small><strong>Contact sheet</strong></span><div class="h3ps-sample-controls"><div class="h3ps-frame-count"><span>Frames</span><button type="button" data-frame-count="auto">Auto</button><button type="button" data-frame-count="4">4</button><button type="button" data-frame-count="6">6</button><button type="button" data-frame-count="8">8</button><button type="button" data-frame-custom-toggle>Custom</button><input class="h3ps-frame-custom-count" type="number" min="2" max="16" step="1" inputmode="numeric" aria-label="Custom frame count" data-frame-custom-count hidden></div><label class="h3ps-endpoints"><input type="checkbox" data-include-endpoints checked>First & last</label><button type="button" data-resample>${icon("refresh", 14)} Resample</button></div></div>
         <div class="h3ps-contact-sheet"><img data-preview-sheet alt="Contact sheet sent to the local model"><span class="h3ps-sheet-updating"><i class="h3ps-spinner"></i>Updating…</span></div>
         <footer><span>${icon("check", 13)} Use for local analysis</span><small data-preview-sampling></small></footer>
       </div>
@@ -3449,6 +3469,35 @@ function createStudio() {
     if (!asset || button.dataset.frameCount === (asset.frame_count_mode || "auto")) return;
     resampleCurrentVideo({ frame_count: button.dataset.frameCount });
   }));
+  root.querySelector("[data-frame-custom-toggle]").addEventListener("click", () => {
+    const preview = root.querySelector("[data-h3ps-preview]");
+    const asset = studio.assets.find((item) => item.id === studio.previewAssetId);
+    if (!asset) return;
+    const input = preview.querySelector("[data-frame-custom-count]");
+    const current = normalizeCustomFrameCount(asset.frame_count_mode);
+    const fallback = normalizeCustomFrameCount(asset.frame_count || asset.frames?.length) || "6";
+    syncFrameCountControls(preview, current || fallback, { forceCustom: true });
+    input.focus();
+    input.select();
+  });
+  const customFrameCount = root.querySelector("[data-frame-custom-count]");
+  customFrameCount.addEventListener("input", () => customFrameCount.setCustomValidity(""));
+  customFrameCount.addEventListener("change", () => {
+    const selected = normalizeCustomFrameCount(customFrameCount.value);
+    if (!selected) {
+      customFrameCount.setCustomValidity("Enter a whole number from 2 to 16.");
+      customFrameCount.reportValidity();
+      return;
+    }
+    customFrameCount.setCustomValidity("");
+    const asset = studio.assets.find((item) => item.id === studio.previewAssetId);
+    if (!asset) return;
+    if (selected === String(asset.frame_count_mode || "auto")) {
+      syncFrameCountControls(root.querySelector("[data-h3ps-preview]"), selected);
+      return;
+    }
+    resampleCurrentVideo({ frame_count: selected });
+  });
   root.querySelector("[data-include-endpoints]").addEventListener("change", (event) => {
     resampleCurrentVideo({ include_endpoints: event.target.checked });
   });

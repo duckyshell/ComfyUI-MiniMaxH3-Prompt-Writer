@@ -20,6 +20,8 @@ AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".opus"}
 MAX_FILE_BYTES = 1024 * 1024 * 1024
 REFERENCE_LIMITS = {"image": 9, "video": 3, "audio": 3, "total": 12}
 REFERENCE_DURATION_TOLERANCE_SECONDS = 15.1
+CONTACT_SHEET_INDEX_BASE_SIZE = 18
+CONTACT_SHEET_INDEX_SCALE = 1.75
 MODE_LIMITS = {
     "T2VA": {},
     "I2VA": {"image": 1},
@@ -347,9 +349,8 @@ class MediaStore:
         asset = self._get_asset(session_id, asset_id)
         if asset["type"] != "video":
             raise MediaError("UNSUPPORTED_MEDIA", "Only video assets can be resampled.")
-        selected_count = frame_count_mode or asset.get("frame_count_mode", "auto")
-        if selected_count not in {"auto", "4", "6", "8"}:
-            raise MediaError("INVALID_SAMPLE_COUNT", "Frame count must be Auto, 4, 6, or 8.")
+        requested_count = asset.get("frame_count_mode", "auto") if frame_count_mode is None else frame_count_mode
+        selected_count = _normalize_frame_count_mode(requested_count)
         selected_endpoints = asset.get("include_endpoints", True) if include_endpoints is None else include_endpoints
         if not isinstance(selected_endpoints, bool):
             raise MediaError("INVALID_SAMPLE_ENDPOINTS", "Include first & last frame must be true or false.")
@@ -500,8 +501,25 @@ def _av_metadata(source: Path) -> dict[str, Any]:
         }
 
 
+def _normalize_frame_count_mode(value: Any) -> str:
+    if value == "auto":
+        return "auto"
+    if isinstance(value, bool):
+        raise MediaError("INVALID_SAMPLE_COUNT", "Frame count must be Auto or a whole number from 2 to 16.")
+    if isinstance(value, int):
+        count = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        count = int(value.strip())
+    else:
+        raise MediaError("INVALID_SAMPLE_COUNT", "Frame count must be Auto or a whole number from 2 to 16.")
+    if count < 2 or count > 16:
+        raise MediaError("INVALID_SAMPLE_COUNT", "Frame count must be Auto or a whole number from 2 to 16.")
+    return str(count)
+
+
 def _selected_frame_count(frame_count_mode: str) -> int:
-    return 6 if frame_count_mode == "auto" else int(frame_count_mode)
+    normalized = _normalize_frame_count_mode(frame_count_mode)
+    return 6 if normalized == "auto" else int(normalized)
 
 
 def process_video(
@@ -512,6 +530,7 @@ def process_video(
     include_endpoints: bool = True,
     sample_index: int = 0,
 ) -> dict[str, Any]:
+    frame_count_mode = _normalize_frame_count_mode(frame_count_mode)
     metadata = _av_metadata(source)
     duration = metadata["duration"]
     if not duration or duration <= 0:
@@ -583,11 +602,11 @@ def _build_contact_sheet(frames: list[dict[str, Any]], target: Path) -> tuple[in
     with Image.open(frames[0]["path"]) as first:
         source_width, source_height = first.size
     cell_height = max(216, min(512, round(cell_width * source_height / max(source_width, 1))))
-    gutter_height = 28
+    gutter_height = 40
     cell_total_height = cell_height + gutter_height
     sheet = Image.new("RGB", (columns * cell_width, rows * cell_total_height), "#101216")
     draw = ImageDraw.Draw(sheet)
-    index_font = ImageFont.load_default(size=18)
+    index_font = ImageFont.load_default(size=CONTACT_SHEET_INDEX_BASE_SIZE * CONTACT_SHEET_INDEX_SCALE)
     for index, frame in enumerate(frames):
         with Image.open(frame["path"]) as opened:
             image = ImageOps.exif_transpose(opened).convert("RGB")

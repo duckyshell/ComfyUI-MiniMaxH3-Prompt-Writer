@@ -20,14 +20,23 @@ class MediaResampleTests(unittest.TestCase):
 
     def test_auto_video_sampling_uses_six_frames(self):
         self.assertEqual(media._selected_frame_count("auto"), 6)
+        self.assertEqual(media._selected_frame_count("2"), 2)
         self.assertEqual(media._selected_frame_count("4"), 4)
         self.assertEqual(media._selected_frame_count("6"), 6)
         self.assertEqual(media._selected_frame_count("8"), 8)
+        self.assertEqual(media._selected_frame_count("16"), 16)
+
+    def test_custom_frame_count_rejects_values_outside_two_through_sixteen(self):
+        for value in (1, "1", 17, "17", 2.5, "2.5", True, "custom"):
+            with self.subTest(value=value), self.assertRaises(media.MediaError) as raised:
+                media._normalize_frame_count_mode(value)
+            self.assertEqual(raised.exception.code, "INVALID_SAMPLE_COUNT")
 
     def test_contact_sheet_columns_make_complete_two_row_grids(self):
         self.assertEqual(media._contact_sheet_columns(4), 2)
         self.assertEqual(media._contact_sheet_columns(6), 3)
         self.assertEqual(media._contact_sheet_columns(8), 4)
+        self.assertEqual(media._contact_sheet_columns(16), 4)
 
     def test_contact_sheet_reports_the_exact_prepared_dimensions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -38,9 +47,11 @@ class MediaResampleTests(unittest.TestCase):
                 media.Image.new("RGB", (768, 432), "white").save(path)
                 frames.append({"timestamp": float(index), "path": str(path)})
 
-            dimensions = media._build_contact_sheet(frames, root / "sheet.jpg")
+            with patch.object(media.ImageFont, "load_default", wraps=media.ImageFont.load_default) as load_font:
+                dimensions = media._build_contact_sheet(frames, root / "sheet.jpg")
 
-        self.assertEqual(dimensions, (1152, 488))
+        self.assertEqual(dimensions, (1152, 512))
+        load_font.assert_called_once_with(size=31.5)
 
     def test_four_frame_resample_changes_all_derived_media_urls(self):
         with tempfile.TemporaryDirectory() as directory:

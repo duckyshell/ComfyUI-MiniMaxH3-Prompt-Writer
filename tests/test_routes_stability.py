@@ -137,6 +137,27 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "model_id": "ollama::test-model",
         }
 
+    async def test_status_exposes_read_only_comfy_state_and_all_ollama_residency_targets(self):
+        direct = {"loaded": False, "loaded_model_id": None}
+        ollama = {"ollama_running": False, "writer_retained_models": []}
+        targets = [{"endpoint": "http://127.0.0.1:11434", "model_id": "gemma4:test"}]
+        with (
+            patch.object(routes.GGUF_BACKEND, "status", return_value=direct),
+            patch.object(routes.OLLAMA_BACKEND, "retained_status", return_value=ollama),
+            patch.object(routes.OLLAMA_BACKEND, "retained_targets", return_value=targets),
+            patch.object(routes, "gpu_memory_snapshot", return_value={"free_mb": 12000}),
+        ):
+            response = await routes.get_status(_Request())
+
+        payload = self.payload(response)
+        self.assertEqual(payload["comfyui"], {
+            "available": False,
+            "queue_running": None,
+            "queue_pending": None,
+            "loaded_models": None,
+        })
+        self.assertEqual(payload["prompt_residency"]["ollama"]["targets"], targets)
+
     async def test_ollama_resolution_passes_the_selected_host_to_detection_and_inference(self):
         host = "http://192.168.1.20:11434"
         model = {

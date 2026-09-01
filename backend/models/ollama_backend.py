@@ -626,6 +626,14 @@ class OllamaBackend:
             return {"ollama_running": False, "ollama_endpoint": endpoint, "writer_retained_models": []}
         return self.status(endpoint)
 
+    def retained_targets(self) -> list[dict[str, str]]:
+        with self._retained_lock:
+            return [
+                {"endpoint": endpoint, "model_id": model_id}
+                for endpoint, models in self._retained_models.items()
+                for model_id in sorted(models)
+            ]
+
     def unload(self, model_name: str | None = None, endpoint: str | None = None) -> None:
         endpoint = normalize_ollama_url(endpoint or self.model_endpoint or self.endpoint)
         model_name = model_name or (self.model_name if self.model_endpoint == endpoint else None)

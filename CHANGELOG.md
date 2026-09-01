@@ -8,6 +8,7 @@ This experimental branch adds a light theme and a larger text option. The change
 
 - Added independent light-theme and larger-text controls with saved preferences.
 - Added matching display support for the Standalone Direct llama.cpp interface.
+- Added optional **Auto VRAM** coordination between ComfyUI workflows and Writer-managed Direct GGUF or local Ollama models.
 
 ### Improved
 

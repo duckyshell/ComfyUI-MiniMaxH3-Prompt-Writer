@@ -13,6 +13,7 @@ from server import PromptServer
 
 from .assembly import AssemblyError, assemble_lyrics_request, assemble_refinement, assemble_request
 from .catalog import discover_models_with_diagnostics, find_model, model_setup_catalog
+from .comfy_state import comfyui_runtime_snapshot
 from .devlog import DEVELOPER_MODE, LOG_PATH, PeakVRAMMonitor, gpu_memory_snapshot, write_event
 from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
 from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, parse_session_id
@@ -448,6 +449,7 @@ async def get_status(request: web.Request) -> web.Response:
         asyncio.to_thread(GGUF_BACKEND.status),
         asyncio.to_thread(ollama_status_call, ollama_host),
     )
+    comfyui_status = comfyui_runtime_snapshot(getattr(PromptServer.instance, "prompt_queue", None))
     if family == "gguf" or family is None:
         backend_status = direct_status
     elif family == "ollama":
@@ -463,6 +465,7 @@ async def get_status(request: web.Request) -> web.Response:
         "version": VERSION,
         "developer_log_path": str(LOG_PATH) if DEVELOPER_MODE else None,
         "gpu_memory": gpu_memory_snapshot(),
+        "comfyui": comfyui_status,
         "prompt_residency": {
             "direct": {
                 "loaded": bool(direct_status.get("loaded")),
@@ -470,6 +473,7 @@ async def get_status(request: web.Request) -> web.Response:
             },
             "ollama": {
                 "models": ollama_status.get("writer_retained_models", []),
+                "targets": OLLAMA_BACKEND.retained_targets(),
                 "running": bool(ollama_status.get("ollama_running")),
             },
         },

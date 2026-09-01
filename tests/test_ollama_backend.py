@@ -482,6 +482,19 @@ class OllamaBackendTests(unittest.TestCase):
         self.assertEqual(status["writer_retained_models"], [])
         self.assertEqual(_FakeOllamaHandler.requests, [])
 
+    def test_retained_targets_include_each_endpoint_without_contacting_ollama(self):
+        remote = "http://192.168.0.30:11434"
+        self.backend.retained_models.add("gemma4:local")
+        with self.backend._retained_lock:
+            self.backend._retained_for(remote).add("gemma4:remote")
+        _FakeOllamaHandler.requests = []
+
+        self.assertEqual(self.backend.retained_targets(), [
+            {"endpoint": self.url, "model_id": "gemma4:local"},
+            {"endpoint": remote, "model_id": "gemma4:remote"},
+        ])
+        self.assertEqual(_FakeOllamaHandler.requests, [])
+
     def test_stop_and_unload_overrides_keep_loaded(self):
         model = self._model()
         plan = self.backend.preflight(model, self._assembled(), context_profile="auto", kv_cache="auto", thinking=False)

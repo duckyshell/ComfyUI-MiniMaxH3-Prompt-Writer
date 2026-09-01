@@ -13,6 +13,8 @@ import {
   isTextOnlyDirectModel,
   DEFAULT_OLLAMA_HOST,
   loadOllamaModel,
+  loadOllamaHost,
+  loadUserPreferences,
   normalizeOllamaHost,
   saveApiProviderConfig,
   saveCustomSystemPrompts,
@@ -24,8 +26,11 @@ import {
   restoredModelAfterDiscovery,
   selectModelState,
 } from "./studio_state.js";
+import { autoVramControlMarkup, createVramHandoffCoordinator, installVramHandoff, isLocalOllamaHost, releaseComfyVramWhenIdle, unloadWriterModels } from "./vram_handoff.js";
 
 const EXTENSION_NAME = "minimax.h3.prompt.studio";
+const VRAM_HANDOFF_SUPPORTED = typeof app?.queuePrompt === "function";
+const vramHandoffCoordinator = createVramHandoffCoordinator();
 const INSTALLATION_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/blob/main/docs/INSTALLATION.md";
 const TROUBLESHOOTING_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/blob/main/docs/TROUBLESHOOTING.md";
 const MUSIC3_GUIDE_URL = "https://github.com/MiniMax-AI/MiniMax-Music3/tree/main/skills/music-caption-rewriter";
@@ -1050,6 +1055,107 @@ function updatePromptResidency(status) {
   };
 }
 
+function selectedModelSupportsVramHandoff() {
+  const model = studio?.selectedModel;
+  return model?.family === "gguf" || (model?.family === "ollama" && isLocalOllamaHost(studio.ollamaHost));
+}
+
+function vramHandoffIsEnabled() {
+  if (!VRAM_HANDOFF_SUPPORTED) return false;
+  if (studio) return studio.vramHandoff;
+  const preferences = loadUserPreferences(localStorage);
+  return preferences?.vram_handoff === true;
+}
+
+function vramHandoffOllamaHost() {
+  return studio?.ollamaHost || loadOllamaHost(localStorage);
+}
+
+function writerAutoVramApplies() {
+  return vramHandoffIsEnabled() && selectedModelSupportsVramHandoff();
+}
+
+function writerAttemptIsCurrent(token) {
+  return token == null || vramHandoffCoordinator.isWriterAttemptCurrent(token);
+}
+
+async function prepareWriterVram(token) {
+  if (token == null) return true;
+  studio.vramHandoffInFlight = true;
+  setGenerationState("busy", "Freeing VRAM", "Preparing ComfyUI memory for the prompt model");
+  try {
+    await releaseComfyVramWhenIdle({
+      getStatus,
+      freeComfyVram,
+      ollamaHost: studio.ollamaHost,
+      isCurrent: () => writerAttemptIsCurrent(token),
+      onStatus: (status) => {
+        studio.gpuMemory = status.gpu_memory || studio.gpuMemory;
+        updatePromptResidency(status);
+      },
+    });
+    return writerAttemptIsCurrent(token);
+  } catch (error) {
+    if (error.code !== "WRITER_PREPARATION_CANCELLED") {
+      showToast("Auto VRAM could not prepare memory", error.message, error.details);
+    }
+    setGenerationState("idle", "", "");
+    return false;
+  } finally {
+    studio.vramHandoffInFlight = false;
+  }
+}
+
+async function prepareWriterRequest() {
+  const token = writerAutoVramApplies() ? vramHandoffCoordinator.beginWriterAttempt() : null;
+  if (!await inspectDirectRuntime() || !writerAttemptIsCurrent(token)) return false;
+  if (!await prepareWriterVram(token)) return false;
+  if (writerAttemptIsCurrent(token)) return true;
+  setGenerationState("idle", "", "");
+  return false;
+}
+
+function markActiveWriterRequest() {
+  studio.activeRequestFamily = studio.selectedModel.family;
+  studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
+  studio.activeRequestOllamaHost = studio.selectedModel.family === "ollama" ? studio.ollamaHost : null;
+}
+
+function clearActiveWriterRequest() {
+  studio.activeRequestFamily = null;
+  studio.activeRequestModelId = null;
+  studio.activeRequestOllamaHost = null;
+}
+
+async function unloadWriterModelsBeforeQueue() {
+  const ollamaHost = vramHandoffOllamaHost();
+  const activeRequest = vramHandoffCoordinator.activeWriterRequest();
+  const activeFamily = studio?.activeRequestFamily;
+  const activeLocal = activeFamily === "gguf"
+    || (activeFamily === "ollama" && isLocalOllamaHost(studio?.activeRequestOllamaHost || ollamaHost));
+  if (activeRequest && activeLocal) {
+    const result = await unloadModel({
+      family: activeFamily,
+      model_id: studio.activeRequestModelId,
+      ollama_host: activeFamily === "ollama" ? (studio.activeRequestOllamaHost || ollamaHost) : null,
+    });
+    if (result?.unload_requested === false) throw new Error("Prompt Writer could not stop and unload its local model.");
+    try { await activeRequest; } catch {}
+  }
+  await unloadWriterModels({
+    getStatus,
+    unloadModel,
+    ollamaHost,
+    onStatus: (status) => { if (studio) updatePromptResidency(status); },
+  });
+  if (studio) syncLifecycleActions();
+}
+
+function showVramHandoffQueueError(error) {
+  openStudio();
+  showToast("Auto VRAM stopped Queue", error.message || "Prompt Writer could not release its local model. The workflow was not queued.", error.details);
+}
+
 function lifecycleTargets() {
   const targets = [];
   if (studio.promptResidency.direct) targets.push({ family: "gguf", modelId: studio.promptResidency.direct.modelId });
@@ -1138,12 +1244,10 @@ function showVramRetry(error, retry) {
   const message = Number.isFinite(freeGb) && Number.isFinite(requiredGb)
     ? `${freeGb.toFixed(1)} GB is free; this runtime needs about ${requiredGb.toFixed(1)} GB.`
     : error.message;
-  showToast(
-    "Not enough free VRAM",
-    message,
-    null,
-    { label: "Free ComfyUI VRAM & retry", onClick: () => releaseComfyVram({ retry, requiredFreeMb: error.details?.required_free_mb }) },
-  );
+  const action = writerAutoVramApplies()
+    ? null
+    : { label: "Free ComfyUI VRAM & retry", onClick: () => releaseComfyVram({ retry, requiredFreeMb: error.details?.required_free_mb }) };
+  showToast("Not enough free VRAM", message, null, action);
 }
 
 async function runLifecycleAction(event) {
@@ -1171,6 +1275,7 @@ async function runLifecycleAction(event) {
 }
 
 async function startGenerationPreview() {
+  if (studio.vramHandoffInFlight) return;
   if (studio.requestBusy) {
     setGenerationState("busy", "Cancelling", "Stopping after the current token");
     await cancel();
@@ -1185,13 +1290,12 @@ async function startGenerationPreview() {
     return;
   }
   if (!generationModeIsAvailable()) return;
-  if (!await inspectDirectRuntime()) return;
+  if (!await prepareWriterRequest()) return;
   const modelName = studio.selectedModel.name.split("/").pop();
   const external = studio.selectedModel.family === "external";
   const apiProvider = studio.selectedModel.family === "api";
   const remote = external || apiProvider;
-  studio.activeRequestFamily = studio.selectedModel.family;
-  studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
+  markActiveWriterRequest();
   const generationDetail = external ? `${modelName} · the server may load its model if idle` : apiProvider ? `${modelName} · ${studio.selectedModel.api_preset}` : modelName;
   setGenerationState("busy", remote ? "Contacting provider" : "Loading model", generationDetail);
   studio.statusTimer = setInterval(async () => {
@@ -1202,11 +1306,11 @@ async function startGenerationPreview() {
     } catch {}
   }, 650);
   try {
-    const result = await generate(buildGeneratePayload(studio, {
+    const result = await vramHandoffCoordinator.trackWriterRequest(generate(buildGeneratePayload(studio, {
       creativeBrief: currentBriefTextarea().value,
       lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
       seed: newGenerationSeed(),
-    }));
+    })));
     const output = studio.root.querySelector("[data-output]");
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
@@ -1263,8 +1367,7 @@ async function startGenerationPreview() {
       const status = await getStatus(studio.ollamaHost);
       updatePromptResidency(status);
     } catch {}
-    studio.activeRequestFamily = null;
-    studio.activeRequestModelId = null;
+    clearActiveWriterRequest();
     setGenerationState("idle", "", "");
   }
 }
@@ -1914,8 +2017,14 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
   }
   const keepLoaded = studio.root.querySelector("[data-keep-loaded]");
   const keepLoadedControl = studio.root.querySelector("[data-keep-loaded-control]");
+  const vramHandoff = studio.root.querySelector("[data-vram-handoff]");
+  const vramHandoffControl = studio.root.querySelector("[data-vram-handoff-control]");
   keepLoadedControl.hidden = remote;
   keepLoaded.checked = studio.keepModelLoaded;
+  if (vramHandoffControl && vramHandoff) {
+    vramHandoffControl.hidden = !selectedModelSupportsVramHandoff();
+    vramHandoff.checked = studio.vramHandoff;
+  }
   renderInferenceSettings();
   renderMedia(studio.mode);
   setOtherModelsPopover(false);
@@ -2474,22 +2583,21 @@ async function submitLyricsRefinement() {
     return;
   }
   if (!generationModeIsAvailable()) return;
-  if (!await inspectDirectRuntime()) return;
+  if (!await prepareWriterRequest()) return;
 
-  studio.activeRequestFamily = studio.selectedModel.family;
-  studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
+  markActiveWriterRequest();
   studio.lyricsRequestBusy = true;
   submit.disabled = true;
   submit.innerHTML = `<span class="h3ps-spinner"></span>${currentLyrics.trim() ? "Refining…" : "Creating…"}`;
   setGenerationState("busy", currentLyrics.trim() ? "Refining lyrics" : "Creating lyrics", studio.selectedModel.name.split("/").pop());
   try {
-    const result = await refine(buildLyricsRefinePayload(studio, {
+    const result = await vramHandoffCoordinator.trackWriterRequest(refine(buildLyricsRefinePayload(studio, {
       currentLyrics,
       instruction,
       useMusicBrief,
       creativeBrief: musicBrief,
       seed: newGenerationSeed(),
-    }));
+    })));
     studio.lyricsRestore = { lyrics: currentLyrics };
     lyrics.value = result.prompt;
     const restore = panel.querySelector("[data-lyrics-refine-restore]");
@@ -2513,8 +2621,7 @@ async function submitLyricsRefinement() {
       const status = await getStatus(studio.ollamaHost);
       updatePromptResidency(status);
     } catch {}
-    studio.activeRequestFamily = null;
-    studio.activeRequestModelId = null;
+    clearActiveWriterRequest();
     setGenerationState("idle", "", "");
   }
 }
@@ -2524,7 +2631,7 @@ async function submitRefinement() {
   const submit = panel.querySelector("[data-refine-submit]");
   const instruction = panel.querySelector("textarea").value.trim();
   const output = studio.root.querySelector("[data-output]");
-  if (submit.disabled) return;
+  if (submit.disabled || studio.requestBusy) return;
   if (!instruction) {
     showToast("Add a revision note", "Tell the model what should change in the current prompt.");
     return;
@@ -2538,23 +2645,22 @@ async function submitRefinement() {
     return;
   }
   if (!generationModeIsAvailable()) return;
-  if (!await inspectDirectRuntime()) return;
+  if (!await prepareWriterRequest()) return;
 
   const previousPrompt = output.value;
   const previousMeta = studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent;
-  studio.activeRequestFamily = studio.selectedModel.family;
-  studio.activeRequestModelId = studio.selectedModel.family === "ollama" ? studio.selectedModel.remote_model : studio.selectedModel.id;
+  markActiveWriterRequest();
   submit.disabled = true;
   submit.innerHTML = `<span class="h3ps-spinner"></span>Refining…`;
   setGenerationState("busy", "Refining prompt", studio.selectedModel.name.split("/").pop());
   try {
-    const result = await refine(buildRefinePayload(studio, {
+    const result = await vramHandoffCoordinator.trackWriterRequest(refine(buildRefinePayload(studio, {
       currentPrompt: previousPrompt,
       instruction,
       creativeBrief: currentBriefTextarea().value.trim(),
       lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
       seed: newGenerationSeed(),
-    }));
+    })));
     studio.refineRestore = {
       prompt: previousPrompt,
       meta: previousMeta,
@@ -2593,8 +2699,7 @@ async function submitRefinement() {
       const status = await getStatus(studio.ollamaHost);
       updatePromptResidency(status);
     } catch {}
-    studio.activeRequestFamily = null;
-    studio.activeRequestModelId = null;
+    clearActiveWriterRequest();
     setGenerationState("idle", "", "");
   }
 }
@@ -2824,6 +2929,7 @@ function createStudio() {
           <span class="h3ps-generation-options">
             <label class="h3ps-toggle-control"><input type="checkbox" data-thinking><span></span>Thinking</label>
             <label class="h3ps-toggle-control" data-keep-loaded-control title="Keep the prompt model in VRAM for the next prompt"><input type="checkbox" data-keep-loaded><span></span>Keep model loaded</label>
+            ${autoVramControlMarkup(VRAM_HANDOFF_SUPPORTED)}
           </span>
           <button class="h3ps-primary-button" type="button" data-generate>${icon("spark", 16)}<span data-generate-label>Generate prompt</span></button>
         </div>
@@ -3036,6 +3142,10 @@ function createStudio() {
   });
   root.querySelector("[data-keep-loaded]").addEventListener("change", (event) => {
     studio.keepModelLoaded = event.target.checked;
+  });
+  root.querySelector("[data-vram-handoff]")?.addEventListener("change", (event) => {
+    studio.vramHandoff = event.target.checked;
+    saveUserPreferences(localStorage, studio);
   });
   const updateBriefCount = () => {
     updateBriefLayout();
@@ -3443,6 +3553,13 @@ app.registerExtension({
   menuCommands: [{ path: ["Extensions", "H3 Prompt Writer"], commands: ["h3-prompt-studio.open"] }],
   async setup() {
     injectStyles();
+    installVramHandoff(app, {
+      isEnabled: vramHandoffIsEnabled,
+      onQueueRequested: () => vramHandoffCoordinator.invalidateWriterAttempts(),
+      beforeQueue: unloadWriterModelsBeforeQueue,
+      onError: showVramHandoffQueueError,
+      onQueueHandoffEnd: () => vramHandoffCoordinator.finishQueueHandoff(),
+    });
     installLauncher();
   },
 });

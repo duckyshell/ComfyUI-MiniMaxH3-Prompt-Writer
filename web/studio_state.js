@@ -98,6 +98,7 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       fullscreen: value.fullscreen === true,
       theme: value.theme === "light" ? "light" : "dark",
       large_text: value.large_text === true,
+      vram_handoff: value.vram_handoff === true,
     };
   } catch {
     return null;
@@ -122,6 +123,7 @@ export function saveUserPreferences(storage, state) {
     fullscreen: state.fullscreen === true,
     theme: state.theme === "light" ? "light" : "dark",
     large_text: state.largeText === true,
+    vram_handoff: state.vramHandoff === true,
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -420,6 +422,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     reasoningEffort: "auto",
     thinking: false,
     keepModelLoaded: false,
+    vramHandoff: preferences?.vram_handoff === true,
     settingsProvider: preferences?.active_provider || "ollama",
     preferencesRestoring: true,
     preferredProvider: preferences?.active_provider || "ollama",
@@ -441,8 +444,10 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     promptResidency: { direct: null, ollama: [] },
     activeRequestFamily: null,
     activeRequestModelId: null,
+    activeRequestOllamaHost: null,
     requestBusy: false,
     comfyVramReleaseInFlight: false,
+    vramHandoffInFlight: false,
     lyricsRequestBusy: false,
     toastTimer: null,
     statusTimer: null,

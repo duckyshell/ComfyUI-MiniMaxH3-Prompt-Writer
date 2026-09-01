@@ -5,6 +5,13 @@
 >
 > This experimental branch adds a light theme and a larger text option. Both options can be enabled independently. These changes are not included in `main` or in the current stable release and may be changed or removed later.
 
+## Download accessibility preview
+
+- [Download ComfyUI Node](preview-downloads/H3-Prompt-Writer-Node-accessibility-preview-b1.zip?raw=1)
+- [Download Standalone for Windows](preview-downloads/H3-Prompt-Writer-Standalone-accessibility-preview-b1.zip?raw=1)
+
+These packages are built from this experimental branch and are separate from the current stable releases.
+
 <p align="center">
   <img src="web/assets/h3-prompt-writer-launcher.svg" width="96" alt="H3 Prompt Writer">
 </p>

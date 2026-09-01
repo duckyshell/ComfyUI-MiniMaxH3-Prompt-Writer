@@ -23,7 +23,7 @@ Workflow safetensors, checkpoints, and text encoders are unrelated to the Direct
 Open PowerShell or Command Prompt in the ComfyUI Portable folder that contains `python_embeded`, then run:
 
 ```powershell
-.\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.35,<0.4"
+.\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python==0.3.35"
 ```
 
 Restart ComfyUI and open **H3 Prompt Writer > Settings > Direct GGUF**. Settings shows a supported installed package as **Runtime detected**.
@@ -135,7 +135,7 @@ If an update replaces `python_embeded` or leaves mixed native packages, reinstal
 
 ```powershell
 .\python_embeded\python.exe -m pip uninstall llama-cpp-python -y
-.\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.35,<0.4"
+.\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python==0.3.35"
 ```
 
 Restart ComfyUI and confirm that Direct reports **Runtime detected**, then complete one real Direct generation. Do not copy native DLLs manually, replace ComfyUI's Python files, or install the package into an unrelated system Python.

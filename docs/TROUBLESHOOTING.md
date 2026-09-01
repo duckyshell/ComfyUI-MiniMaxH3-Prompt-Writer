@@ -2,7 +2,7 @@
 
 This page primarily covers the ComfyUI extension. Standalone users should start with the [Standalone setup guide](../standalone/README.md). The `llama-cpp-python` and ComfyUI VRAM instructions below do not apply to Standalone Local GGUF.
 
-Start by updating H3 Prompt Writer, restarting ComfyUI, and using `Ctrl+F5` if the browser still shows an older interface. The entries below describe problems that can still occur in v0.4.3.
+Start by updating H3 Prompt Writer, restarting ComfyUI, and using `Ctrl+F5` if the browser still shows an older interface. The entries below describe problems that can still occur in v0.4.4.
 
 ## I installed it but cannot find a node
 
@@ -37,7 +37,7 @@ Direct uses an optional native runtime. ComfyUI Manager installs the base extens
 For the NVIDIA Windows Portable build used for v0.3 validation, open a terminal in the folder containing `python_embeded` and run:
 
 ```powershell
-.\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.35,<0.4"
+.\python_embeded\python.exe -m pip install --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python==0.3.35"
 ```
 
 Restart ComfyUI.
@@ -62,7 +62,7 @@ From the Windows Portable folder containing `python_embeded`, perform one clean 
 
 ```powershell
 .\python_embeded\python.exe -m pip uninstall llama-cpp-python -y
-.\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python>=0.3.35,<0.4"
+.\python_embeded\python.exe -m pip install --no-cache-dir --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 "llama-cpp-python==0.3.35"
 ```
 
 Do not install into system Python, copy native DLLs manually, or replace ComfyUI's embedded Python files.

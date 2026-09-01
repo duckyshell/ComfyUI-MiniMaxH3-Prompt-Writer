@@ -2,9 +2,19 @@
 
 ## Unreleased
 
+## 0.4.4 - 2026-09-02
+
 ### Features
 
 - Added optional **Auto VRAM** coordination between ComfyUI workflows and Writer-managed Direct GGUF or local Ollama models.
+- Added a compact Clear menu for clearing prompts while keeping media, or clearing the entire workspace.
+- Added custom 2–16 frame contact sheets with more readable frame labels.
+
+### Fixes
+
+- Allowed private-network Ollama hostnames while pinning the validated address, and preserved unsaved host edits during background refreshes.
+- Pinned the tested Windows CUDA 13 install and recovery guidance to `llama-cpp-python 0.3.35`.
+- Skipped unnecessary ComfyUI VRAM release polling when no workflow models are loaded.
 
 ## 0.4.3 - 2026-08-29
 

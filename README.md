@@ -8,12 +8,13 @@ H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. St
 
 It is a ComfyUI UI extension, not a workflow node. It writes prompt text for your existing H3 workflow. It does not run MiniMax H3, change the graph, or queue a video.
 
-ComfyUI extension: **0.4.3** · [Download ZIP](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/v0.4.3/H3-Prompt-Writer-ComfyUI-v0.4.3.zip) · [Installation](docs/INSTALLATION.md)
+ComfyUI extension: **0.4.4** · [Download ZIP](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/v0.4.4/H3-Prompt-Writer-ComfyUI-v0.4.4.zip) · [Installation](docs/INSTALLATION.md)
 
 Standalone for Windows: **0.1.2** · [Download ZIP](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.2/H3-Prompt-Writer-Standalone-Windows-v0.1.2.zip) · [Setup guide](standalone/README.md)
 
-## What's new in v0.4.3
+## What's new in v0.4.4
 
+- Automatic VRAM management between Prompt Writer and ComfyUI for Direct GGUF and local Ollama.
 - Standalone for Windows. Use H3 Prompt Writer without ComfyUI.
 - Qwen 3.8 and Qwen3-VL support.
 - Expanded Direct GGUF support and runtime controls.

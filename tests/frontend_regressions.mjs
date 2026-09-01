@@ -8,6 +8,18 @@ const { availableReferenceTags, createSessionId, fileCountFromDataTransfer, inse
 const responseSource = await readFile(new URL("../web/api/response.js", import.meta.url), "utf8");
 const responseEncoded = Buffer.from(responseSource).toString("base64");
 const { readApiResponse } = await import(`data:text/javascript;base64,${responseEncoded}`);
+const vramHandoffSource = await readFile(new URL("../web/vram_handoff.js", import.meta.url), "utf8");
+const vramHandoffEncoded = Buffer.from(vramHandoffSource).toString("base64");
+const {
+  AUTO_VRAM_TOOLTIP,
+  autoVramControlMarkup,
+  createVramHandoffCoordinator,
+  installVramHandoff,
+  isLocalOllamaHost,
+  releaseComfyVramWhenIdle,
+  unloadWriterModels,
+  writerResidencyTargets,
+} = await import(`data:text/javascript;base64,${vramHandoffEncoded}`);
 const stateSource = await readFile(new URL("../web/studio_state.js", import.meta.url), "utf8");
 const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
@@ -120,6 +132,149 @@ test("createSessionId falls back to a valid UUID v4", () => {
 test("createSessionId preserves native randomUUID when available", () => {
   const expected = "11111111-2222-4333-8444-555555555555";
   assert.equal(createSessionId({ randomUUID: () => expected }), expected);
+});
+
+test("VRAM handoff targets only Writer-managed Direct and retained Ollama models", () => {
+  assert.deepEqual(writerResidencyTargets({
+    prompt_residency: {
+      direct: { loaded: true, model_id: "writer.gguf" },
+      ollama: { targets: [
+        { model_id: "gemma4:test", endpoint: "http://127.0.0.1:11434" },
+        { model_id: "gemma4:test", endpoint: "http://127.0.0.1:11434" },
+        { model_id: "remote:test", endpoint: "http://ollama.example:11434" },
+      ] },
+    },
+  }, "http://127.0.0.1:11434"), [
+    { family: "gguf", model_id: "writer.gguf" },
+    { family: "ollama", model_id: "gemma4:test", ollama_host: "http://127.0.0.1:11434" },
+  ]);
+  assert.equal(isLocalOllamaHost("http://localhost:11434"), true);
+  assert.equal(isLocalOllamaHost("http://[::1]:11434"), true);
+  assert.equal(isLocalOllamaHost("http://192.168.0.30:11434"), false);
+});
+
+test("VRAM handoff waits for targeted Writer models to leave residency", async () => {
+  const resident = {
+    prompt_residency: {
+      direct: { loaded: true, model_id: "writer.gguf" },
+      ollama: { targets: [{ model_id: "gemma4:test", endpoint: "http://127.0.0.1:11434" }] },
+    },
+  };
+  const released = { prompt_residency: { direct: { loaded: false }, ollama: { targets: [] } } };
+  const statuses = [resident, released];
+  const unloaded = [];
+  const targets = await unloadWriterModels({
+    getStatus: async () => statuses.shift() || released,
+    unloadModel: async (target) => { unloaded.push(target); return { unload_requested: true }; },
+    ollamaHost: "http://127.0.0.1:11434",
+    sleep: async () => {},
+  });
+  assert.deepEqual(unloaded, targets);
+  assert.deepEqual(unloaded, [
+    { family: "gguf", model_id: "writer.gguf" },
+    { family: "ollama", model_id: "gemma4:test", ollama_host: "http://127.0.0.1:11434" },
+  ]);
+});
+
+test("Auto VRAM uses standard /free only for idle ComfyUI and confirms stable release", async () => {
+  const freeReadings = [12000, 12016];
+  let freeCalls = 0;
+  const result = await releaseComfyVramWhenIdle({
+    getStatus: async () => ({
+      comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 0 },
+      gpu_memory: { free_mb: freeReadings.shift() ?? 12016 },
+    }),
+    freeComfyVram: async () => { freeCalls += 1; },
+    sleep: async () => {},
+  });
+  assert.equal(freeCalls, 1);
+  assert.equal(result.comfyui.loaded_models, 0);
+
+  freeCalls = 0;
+  await assert.rejects(releaseComfyVramWhenIdle({
+    getStatus: async () => ({
+      comfyui: { available: true, queue_running: 1, queue_pending: 0, loaded_models: 1 },
+      gpu_memory: { free_mb: 8000 },
+    }),
+    freeComfyVram: async () => { freeCalls += 1; },
+  }), { code: "COMFYUI_BUSY" });
+  assert.equal(freeCalls, 0);
+});
+
+test("Auto VRAM aborts Writer preparation when Queue wins the race", async () => {
+  let current = true;
+  await assert.rejects(releaseComfyVramWhenIdle({
+    getStatus: async () => ({
+      comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 0 },
+      gpu_memory: { free_mb: 12000 },
+    }),
+    freeComfyVram: async () => { current = false; },
+    isCurrent: () => current,
+  }), { code: "WRITER_PREPARATION_CANCELLED" });
+});
+
+test("VRAM handoff shares preparation without replacing native Queue semantics", async () => {
+  const order = [];
+  const app = {
+    async queuePrompt(value) { order.push(`queue:${value}`); return true; },
+  };
+  let enabled = false;
+  let failures = 0;
+  let releaseHandoff;
+  installVramHandoff(app, {
+    isEnabled: () => enabled,
+    beforeQueue: async () => {
+      order.push("unload");
+      await new Promise((resolve) => { releaseHandoff = resolve; });
+    },
+    onError: () => { failures += 1; },
+  });
+
+  assert.equal(await app.queuePrompt(1), true);
+  enabled = true;
+  const second = app.queuePrompt(2);
+  const third = app.queuePrompt(3);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(order, ["queue:1", "unload"]);
+  releaseHandoff();
+  assert.deepEqual(await Promise.all([second, third]), [true, true]);
+  assert.deepEqual(order, ["queue:1", "unload", "queue:2", "queue:3"]);
+
+  installVramHandoff(app, {
+    isEnabled: () => true,
+    beforeQueue: async () => { throw new Error("unload failed"); },
+    onError: () => { failures += 1; },
+  });
+  const failedA = app.queuePrompt(4);
+  const failedB = app.queuePrompt(5);
+  assert.deepEqual(await Promise.all([failedA, failedB]), [false, false]);
+  assert.equal(failures, 1);
+  assert.deepEqual(order, ["queue:1", "unload", "queue:2", "queue:3"]);
+});
+
+test("Queue invalidates Writer attempts synchronously and tracked requests remain awaitable", async () => {
+  const coordinator = createVramHandoffCoordinator();
+  const token = coordinator.beginWriterAttempt();
+  assert.equal(coordinator.isWriterAttemptCurrent(token), true);
+  coordinator.invalidateWriterAttempts();
+  assert.equal(coordinator.isWriterAttemptCurrent(token), false);
+  coordinator.finishQueueHandoff();
+  assert.equal(coordinator.isWriterAttemptCurrent(token), false);
+
+  let finish;
+  const request = coordinator.trackWriterRequest(new Promise((resolve) => { finish = resolve; }));
+  assert.equal(coordinator.activeWriterRequest(), request);
+  finish("done");
+  assert.equal(await request, "done");
+  assert.equal(coordinator.activeWriterRequest(), null);
+});
+
+test("Auto VRAM markup is absent outside ComfyUI and carries the approved tooltip", () => {
+  assert.equal(autoVramControlMarkup(false), "");
+  const markup = autoVramControlMarkup(true);
+  assert.match(markup, />Auto VRAM<\/label>/);
+  assert.match(markup, new RegExp(AUTO_VRAM_TOOLTIP.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("replacing a persistent media listener prevents duplicate dispatch", () => {
@@ -268,6 +423,7 @@ test("user preferences persist only stable non-secret settings", () => {
     directReasoningEffort: "medium",
     musicLyricsUseBrief: false,
     fullscreen: true,
+    vramHandoff: true,
     selectedModel: { id: "api::secret-connection::model", api_connection_id: "secret-connection" },
     apiProviderConfig: { api_key: "must-not-be-stored" },
     creativeBrief: "must-not-be-stored",
@@ -292,6 +448,7 @@ test("user preferences persist only stable non-secret settings", () => {
     direct_reasoning_effort: "medium",
     music_lyrics_use_brief: false,
     fullscreen: true,
+    vram_handoff: true,
   });
 });
 
@@ -326,6 +483,7 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     direct_reasoning_effort: "auto",
     music_lyrics_use_brief: true,
     fullscreen: false,
+    vram_handoff: false,
   });
 });
 
@@ -344,6 +502,7 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
       direct_generation_budget: "4096",
       direct_reasoning_effort: "low",
       fullscreen: true,
+      vram_handoff: true,
       ollama_context_profile: "standard",
     }),
   });
@@ -360,6 +519,7 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
   assert.equal(state.directReasoningEffort, "low");
   assert.equal(state.musicLyricsUseBrief, true);
   assert.equal(state.fullscreen, true);
+  assert.equal(state.vramHandoff, true);
   assert.equal(state.ollamaContextProfile, undefined);
   assert.equal(state.keepModelLoaded, false);
   assert.equal(state.thinking, false);
@@ -371,6 +531,7 @@ test("a clean first run defaults to Ollama while saved provider preferences rema
   const clean = createStudioState({ sessionId: "clean", storage: memoryStorage() });
   assert.equal(clean.settingsProvider, "ollama");
   assert.equal(clean.preferredProvider, "ollama");
+  assert.equal(clean.vramHandoff, false);
 
   const saved = createStudioState({
     sessionId: "saved",
@@ -886,6 +1047,14 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.doesNotMatch(markup, /data-comfy-memory-action/);
   assert.match(mainSource, /data-thinking/);
   assert.match(mainSource, /data-keep-loaded/);
+  assert.match(mainSource, /autoVramControlMarkup\(VRAM_HANDOFF_SUPPORTED\)/);
+  assert.match(vramHandoffSource, />Auto VRAM<\/label>/);
+  assert.match(vramHandoffSource, /data-vram-handoff-control/);
+  assert.match(mainSource, /isLocalOllamaHost\(studio\.ollamaHost\)/);
+  assert.match(mainSource, /VRAM_HANDOFF_SUPPORTED = typeof app\?\.queuePrompt === "function"/);
+  assert.match(mainSource, /installVramHandoff\(app/);
+  assert.match(mainSource, /releaseComfyVramWhenIdle\(\{/);
+  assert.match(mainSource, /onQueueRequested: \(\) => vramHandoffCoordinator\.invalidateWriterAttempts\(\)/);
   assert.match(mainSource, /data-comfy-memory-action/);
   const freeVramStart = mainSource.indexOf("async function releaseComfyVram");
   const freeVramEnd = mainSource.indexOf("function showVramRetry", freeVramStart);
@@ -1044,7 +1213,7 @@ test("Music 3 drafts and payload keep lyrics separate from H3 state", () => {
   assert.match(mainSource, /Leave Lyrics empty to create new lyrics, or describe how to rewrite the existing lyrics\./);
   assert.match(mainSource, /data-lyrics-use-brief checked/);
   assert.doesNotMatch(mainSource, /data-(?:lyrics-)?refine-submit[^>]*>[\s\S]{0,80}Rewrite<\/button>/);
-  const requestIndex = mainSource.indexOf("const result = await refine(buildLyricsRefinePayload");
+  const requestIndex = mainSource.indexOf("trackWriterRequest(refine(buildLyricsRefinePayload");
   const lyricsAssignmentIndex = mainSource.indexOf("lyrics.value = result.prompt", requestIndex);
   assert.ok(requestIndex >= 0 && lyricsAssignmentIndex > requestIndex);
   assert.match(mainSource, /studio\.lyricsRestore = \{ lyrics: currentLyrics \}[\s\S]{0,180}lyrics\.value = result\.prompt/);

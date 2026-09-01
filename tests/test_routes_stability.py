@@ -82,6 +82,7 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "active_request_id": None,
             "selected_model_id": None,
             "selected_model_family": None,
+            "selected_model_endpoint": None,
             "cancel_requested": False,
             "pending_unload_family": None,
             "pending_unload_model_id": None,
@@ -97,6 +98,7 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "active_request_id": None,
             "selected_model_id": None,
             "selected_model_family": None,
+            "selected_model_endpoint": None,
             "cancel_requested": False,
             "pending_unload_family": None,
             "pending_unload_model_id": None,
@@ -136,6 +138,27 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "aspect_ratio": "16:9",
             "model_id": "ollama::test-model",
         }
+
+    async def test_status_exposes_read_only_comfy_state_and_all_ollama_residency_targets(self):
+        direct = {"loaded": False, "loaded_model_id": None}
+        ollama = {"ollama_running": False, "writer_retained_models": []}
+        targets = [{"endpoint": "http://127.0.0.1:11434", "model_id": "gemma4:test"}]
+        with (
+            patch.object(routes.GGUF_BACKEND, "status", return_value=direct),
+            patch.object(routes.OLLAMA_BACKEND, "retained_status", return_value=ollama),
+            patch.object(routes.OLLAMA_BACKEND, "retained_targets", return_value=targets),
+            patch.object(routes, "gpu_memory_snapshot", return_value={"free_mb": 12000}),
+        ):
+            response = await routes.get_status(_Request())
+
+        payload = self.payload(response)
+        self.assertEqual(payload["comfyui"], {
+            "available": False,
+            "queue_running": None,
+            "queue_pending": None,
+            "loaded_models": None,
+        })
+        self.assertEqual(payload["prompt_residency"]["ollama"]["targets"], targets)
 
     async def test_ollama_resolution_passes_the_selected_host_to_detection_and_inference(self):
         host = "http://192.168.1.20:11434"
@@ -427,6 +450,101 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         resolved_backend.cancel.assert_called_once()
         resolved_backend.preflight.assert_not_called()
         self.assertIsNone(routes.STATE["active_request_id"])
+
+    async def test_targeted_local_ollama_unload_keeps_active_remote_request_running(self):
+        local_endpoint = "http://127.0.0.1:11434"
+        remote_endpoint = "http://192.168.0.20:11434"
+        local_model_id = "ollama::gemma4:local"
+        routes.STATE.update({
+            "phase": "generating",
+            "active_request_id": "remote-request",
+            "selected_model_id": f"ollama::{remote_endpoint}::gemma4:remote",
+            "selected_model_family": "ollama",
+            "selected_model_endpoint": remote_endpoint,
+        })
+        backend = MagicMock(externally_managed=False)
+
+        with (
+            patch.object(routes, "OLLAMA_BACKEND", backend),
+            patch.dict(routes.BACKENDS, {"ollama": backend}),
+        ):
+            unloaded = await routes.unload(_Request(body={
+                "family": "ollama",
+                "model_id": local_model_id,
+                "ollama_host": local_endpoint,
+            }))
+
+        self.assertEqual(self.payload(unloaded), {"unload_requested": True, "deferred": False})
+        backend.unload.assert_called_once_with(local_model_id, local_endpoint)
+        backend.request_unload.assert_not_called()
+        self.assertFalse(routes.STATE["cancel_requested"])
+        self.assertEqual(routes.STATE["phase"], "generating")
+
+    async def test_targeted_active_ollama_unload_still_cancels_matching_request(self):
+        local_endpoint = "http://127.0.0.1:11434"
+        local_model_name = "gemma4:local"
+        local_model_id = f"ollama::{local_model_name}"
+        routes.STATE.update({
+            "phase": "generating",
+            "active_request_id": "local-request",
+            "selected_model_id": local_model_id,
+            "selected_model_family": "ollama",
+            "selected_model_endpoint": local_endpoint,
+        })
+        backend = MagicMock(externally_managed=False)
+        backend.request_unload.return_value = True
+
+        with (
+            patch.object(routes, "OLLAMA_BACKEND", backend),
+            patch.dict(routes.BACKENDS, {"ollama": backend}),
+        ):
+            unloaded = await routes.unload(_Request(body={
+                "family": "ollama",
+                "model_id": local_model_name,
+                "ollama_host": local_endpoint,
+            }))
+
+        self.assertEqual(self.payload(unloaded), {"unload_requested": True, "deferred": True})
+        backend.request_unload.assert_called_once_with()
+        backend.unload.assert_not_called()
+
+    async def test_targeted_ollama_unload_is_resolved_before_cancelling_preparing_request(self):
+        local_endpoint = "http://127.0.0.1:11434"
+        remote_endpoint = "http://192.168.0.20:11434"
+        local_model_id = "ollama::gemma4:local"
+        remote_model = {
+            "id": f"ollama::{remote_endpoint}::gemma4:remote",
+            "name": "gemma4:remote",
+            "family": "ollama",
+            "endpoint": remote_endpoint,
+        }
+        routes.STATE.update({
+            "phase": "preparing",
+            "active_request_id": "resolving-request",
+            "selected_model_id": None,
+            "selected_model_family": None,
+            "selected_model_endpoint": None,
+        })
+        backend = MagicMock(externally_managed=False)
+
+        with (
+            patch.object(routes, "OLLAMA_BACKEND", backend),
+            patch.dict(routes.BACKENDS, {"ollama": backend}),
+        ):
+            unloaded = await routes.unload(_Request(body={
+                "family": "ollama",
+                "model_id": local_model_id,
+                "ollama_host": local_endpoint,
+            }))
+            cancelled, family, model_id, endpoint = routes._set_active_model("resolving-request", remote_model)
+            deferred_cancelled = await routes._apply_deferred_unload(family, model_id, remote_model, endpoint)
+
+        self.assertEqual(self.payload(unloaded), {"unload_requested": True, "deferred": True})
+        self.assertFalse(cancelled)
+        self.assertFalse(deferred_cancelled)
+        backend.unload.assert_called_once_with(local_model_id, local_endpoint)
+        backend.request_unload.assert_not_called()
+        self.assertFalse(routes.STATE["cancel_requested"])
 
     async def test_generate_and_refine_return_guide_load_json_errors(self):
         generate_body = self.generation_body("Use <Video 1>.")

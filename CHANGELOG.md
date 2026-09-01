@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Added optional **Auto VRAM** coordination between ComfyUI workflows and Writer-managed Direct GGUF or local Ollama models.
+
 ## 0.4.3 - 2026-08-29
 
 ### Features

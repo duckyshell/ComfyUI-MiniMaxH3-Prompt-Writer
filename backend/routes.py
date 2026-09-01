@@ -13,6 +13,7 @@ from server import PromptServer
 
 from .assembly import AssemblyError, assemble_lyrics_request, assemble_refinement, assemble_request
 from .catalog import discover_models_with_diagnostics, find_model, model_setup_catalog
+from .comfy_state import comfyui_runtime_snapshot
 from .devlog import DEVELOPER_MODE, LOG_PATH, PeakVRAMMonitor, gpu_memory_snapshot, write_event
 from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
 from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, parse_session_id
@@ -34,6 +35,7 @@ STATE: dict[str, Any] = {
     "active_request_id": None,
     "selected_model_id": None,
     "selected_model_family": None,
+    "selected_model_endpoint": None,
     "cancel_requested": False,
     "pending_unload_family": None,
     "pending_unload_model_id": None,
@@ -165,6 +167,7 @@ def _claim_generation_request() -> str | None:
             "active_request_id": request_id,
             "selected_model_id": None,
             "selected_model_family": None,
+            "selected_model_endpoint": None,
             "cancel_requested": False,
             "pending_unload_family": None,
             "pending_unload_model_id": None,
@@ -180,6 +183,7 @@ def _set_active_model(request_id: str, model: dict[str, Any]) -> tuple[bool, str
         STATE.update({
             "selected_model_id": model["id"],
             "selected_model_family": model["family"],
+            "selected_model_endpoint": model.get("endpoint") if model["family"] == "ollama" else None,
         })
         pending_family = STATE["pending_unload_family"]
         pending_model_id = STATE["pending_unload_model_id"]
@@ -293,26 +297,61 @@ async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
 async def _apply_deferred_unload(
     family: str,
     model_id: str | None,
-    resolved_family: str,
+    resolved_model: dict[str, Any],
     endpoint: str | None = None,
-) -> None:
+) -> bool:
     backend = BACKENDS.get(family)
     if backend is None:
-        return
-    if family == resolved_family:
+        return False
+    resolved_family = resolved_model["family"]
+    same_target = family == resolved_family
+    if same_target and family == "ollama":
+        same_target = _ollama_target_matches(
+            model_id,
+            endpoint,
+            resolved_model.get("id"),
+            resolved_model.get("endpoint"),
+        )
+    if same_target:
         request_unload = getattr(backend, "request_unload", None)
         if callable(request_unload):
             request_unload()
         else:
             backend.cancel()
-        return
+        return True
     if getattr(backend, "externally_managed", False):
-        return
+        return False
     if family == "ollama":
         _result, cancellation = await _run_thread_worker(backend.unload, model_id, endpoint)
     else:
         _result, cancellation = await _run_thread_worker(backend.unload)
     _propagate_worker_cancellation(cancellation)
+    return False
+
+
+def _ollama_target_matches(
+    requested_model_id: str | None,
+    requested_endpoint: str | None,
+    active_model_id: str | None,
+    active_endpoint: str | None,
+) -> bool:
+    if requested_endpoint is not None and requested_endpoint != active_endpoint:
+        return False
+    requested_model_name = _ollama_model_name(requested_model_id, requested_endpoint or active_endpoint)
+    active_model_name = _ollama_model_name(active_model_id, active_endpoint)
+    if requested_model_id is not None and requested_model_name != active_model_name:
+        return False
+    return True
+
+
+def _ollama_model_name(model_id: str | None, endpoint: str | None) -> str | None:
+    if model_id is None or not model_id.startswith("ollama::"):
+        return model_id
+    if endpoint:
+        endpoint_prefix = f"ollama::{endpoint}::"
+        if model_id.startswith(endpoint_prefix):
+            return model_id[len(endpoint_prefix):]
+    return model_id[len("ollama::"):]
 
 
 async def _prepare_generation_runtime(
@@ -329,14 +368,15 @@ async def _prepare_generation_runtime(
 
     cancel_requested, pending_unload_family, pending_unload_model_id, pending_unload_endpoint = _set_active_model(request_id, model)
     backend.prepare_request()
+    deferred_cancel_requested = False
     if pending_unload_family is not None:
-        await _apply_deferred_unload(
+        deferred_cancel_requested = await _apply_deferred_unload(
             pending_unload_family,
             pending_unload_model_id,
-            model["family"],
+            model,
             pending_unload_endpoint,
         )
-    if cancel_requested:
+    if cancel_requested or deferred_cancel_requested:
         backend.cancel()
         raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
 
@@ -448,6 +488,7 @@ async def get_status(request: web.Request) -> web.Response:
         asyncio.to_thread(GGUF_BACKEND.status),
         asyncio.to_thread(ollama_status_call, ollama_host),
     )
+    comfyui_status = comfyui_runtime_snapshot(getattr(PromptServer.instance, "prompt_queue", None))
     if family == "gguf" or family is None:
         backend_status = direct_status
     elif family == "ollama":
@@ -463,6 +504,7 @@ async def get_status(request: web.Request) -> web.Response:
         "version": VERSION,
         "developer_log_path": str(LOG_PATH) if DEVELOPER_MODE else None,
         "gpu_memory": gpu_memory_snapshot(),
+        "comfyui": comfyui_status,
         "prompt_residency": {
             "direct": {
                 "loaded": bool(direct_status.get("loaded")),
@@ -470,6 +512,7 @@ async def get_status(request: web.Request) -> web.Response:
             },
             "ollama": {
                 "models": ollama_status.get("writer_retained_models", []),
+                "targets": OLLAMA_BACKEND.retained_targets(),
                 "running": bool(ollama_status.get("ollama_running")),
             },
         },
@@ -751,19 +794,30 @@ async def unload(request: web.Request) -> web.Response:
         return _error("INVALID_REQUEST", "model_id must be a string.", status=400)
     if ollama_host is not None and not isinstance(ollama_host, str):
         return _error("INVALID_OLLAMA_URL", "The Ollama host must be a URL string.", status=400)
+    if family == "ollama" and ollama_host is not None:
+        try:
+            ollama_host = normalize_ollama_url(ollama_host)
+        except ModelError as error:
+            return _error(error.code, error.message, status=400, details=error.details)
     backend = BACKENDS[family]
     with STATE_LOCK:
         active = STATE["active_request_id"] is not None
         active_family = STATE.get("selected_model_family")
+        active_model_id = STATE.get("selected_model_id")
+        active_endpoint = STATE.get("selected_model_endpoint")
         if active and active_family is None:
-            STATE["phase"] = "cancelling"
-            STATE["cancel_requested"] = True
+            targeted_ollama_unload = family == "ollama" and (model_id is not None or ollama_host is not None)
+            if not targeted_ollama_unload:
+                STATE["phase"] = "cancelling"
+                STATE["cancel_requested"] = True
             STATE["pending_unload_family"] = family
             STATE["pending_unload_model_id"] = model_id
             STATE["pending_unload_endpoint"] = ollama_host
             return web.json_response({"unload_requested": True, "deferred": True})
-    active_same_family = active and active_family == family
-    if active_same_family:
+    active_same_target = active and active_family == family
+    if active_same_target and family == "ollama":
+        active_same_target = _ollama_target_matches(model_id, ollama_host, active_model_id, active_endpoint)
+    if active_same_target:
         request_unload = getattr(backend, "request_unload", None)
         if callable(request_unload):
             return web.json_response({"unload_requested": request_unload(), "deferred": True})

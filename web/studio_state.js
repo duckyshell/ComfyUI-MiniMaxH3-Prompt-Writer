@@ -96,6 +96,7 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       direct_reasoning_effort: typeof value.direct_reasoning_effort === "string" && value.direct_reasoning_effort ? value.direct_reasoning_effort : "auto",
       music_lyrics_use_brief: value.music_lyrics_use_brief !== false,
       fullscreen: value.fullscreen === true,
+      vram_handoff: value.vram_handoff === true,
     };
   } catch {
     return null;
@@ -118,6 +119,7 @@ export function saveUserPreferences(storage, state) {
     direct_reasoning_effort: typeof state.directReasoningEffort === "string" && state.directReasoningEffort ? state.directReasoningEffort : "auto",
     music_lyrics_use_brief: state.musicLyricsUseBrief !== false,
     fullscreen: state.fullscreen === true,
+    vram_handoff: state.vramHandoff === true,
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -416,6 +418,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     reasoningEffort: "auto",
     thinking: false,
     keepModelLoaded: false,
+    vramHandoff: preferences?.vram_handoff === true,
     settingsProvider: preferences?.active_provider || "ollama",
     preferencesRestoring: true,
     preferredProvider: preferences?.active_provider || "ollama",
@@ -435,8 +438,10 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     promptResidency: { direct: null, ollama: [] },
     activeRequestFamily: null,
     activeRequestModelId: null,
+    activeRequestOllamaHost: null,
     requestBusy: false,
     comfyVramReleaseInFlight: false,
+    vramHandoffInFlight: false,
     lyricsRequestBusy: false,
     toastTimer: null,
     statusTimer: null,

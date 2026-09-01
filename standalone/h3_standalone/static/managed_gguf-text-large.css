@@ -1,0 +1,66 @@
+/* The shell is always fullscreen; keep its managed controls readable when AA is on. */
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-managed {
+  gap: 30px;
+  margin-top: 30px;
+  padding-top: 30px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-section {
+  gap: 14px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-section header em {
+  font-size: 12px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-heading-actions > button,
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-add-control > button,
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-file-actions > button {
+  height: 36px;
+  padding-inline: 12px;
+  font-size: 13px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-add-menu > button {
+  min-height: 42px;
+  padding-inline: 11px;
+  font-size: 13px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-menu-heading {
+  padding: 14px 15px 12px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-menu-heading strong {
+  font-size: 14px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-menu-heading small,
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-location-copy small,
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-empty-location,
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-location-row > button {
+  font-size: 12px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-location-row {
+  min-height: 62px;
+  padding: 8px 9px 8px 11px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-location-copy strong {
+  font-size: 13px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-file-control {
+  min-height: 70px;
+  padding: 12px 14px;
+  gap: 16px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-file-copy strong {
+  font-size: 14px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-file-copy small,
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-section .h3ps-installed-model-source {
+  font-size: 12px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3-lite-error {
+  font-size: 13px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3ps-toast strong {
+  font-size: 13px;
+}
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3ps-toast > span:last-child > span,
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3ps-toast details,
+.h3ps-root[data-standalone-shell="true"].is-large-text .h3ps-toast-action {
+  font-size: 12px;
+}

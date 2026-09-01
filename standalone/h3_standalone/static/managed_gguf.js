@@ -501,10 +501,14 @@ function attach() {
 }
 
 export function startManagedGGUF() {
-  const stylesheet = document.createElement("link");
-  stylesheet.rel = "stylesheet";
-  stylesheet.href = "/scripts/managed_gguf.css";
-  document.head.append(stylesheet);
+  for (const name of ["managed_gguf", "managed_gguf-theme-light", "managed_gguf-text-large"]) {
+    if (document.querySelector(`link[data-h3-lite-stylesheet="${name}"]`)) continue;
+    const stylesheet = document.createElement("link");
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = `/scripts/${name}.css`;
+    stylesheet.dataset.h3LiteStylesheet = name;
+    document.head.append(stylesheet);
+  }
   if (!attach()) {
     const observer = new MutationObserver(() => {
       if (attach()) observer.disconnect();

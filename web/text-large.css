@@ -1,0 +1,413 @@
+/* Optional larger text mode. Active only on .h3ps-root.is-large-text. */
+.h3ps-root.is-large-text {
+  --h3ps-text-scale: 1.25;
+  font-size: 16.25px;
+}
+
+.h3ps-root.is-large-text .h3ps-modal {
+  grid-template-rows: 64px 58px minmax(0, 1fr) 72px;
+}
+
+.h3ps-root.is-large-text .h3ps-header-meta { gap: 6px; }
+
+.h3ps-root.is-large-text .h3ps-brand strong { font-size: 16.875px; }
+
+.h3ps-root.is-large-text .h3ps-guide-button,
+.h3ps-root.is-large-text [data-open-settings-header] { font-size: 13.125px; }
+
+.h3ps-root.is-large-text .h3ps-settings-heading > button,
+.h3ps-root.is-large-text .h3ps-ollama-primary { font-size: 13.125px; }
+
+.h3ps-root.is-large-text .h3ps-text-size-button { font-size: 12.5px; }
+
+.h3ps-root.is-large-text .h3ps-workspace-toolbar { min-height: 58px; }
+
+.h3ps-root.is-large-text .h3ps-modes button { flex: 1 1 0; min-width: 0; padding-inline: 8px; font-size: 14.375px; }
+
+.h3ps-root.is-large-text .h3ps-modes button[data-mode="Reference"] { margin-left: 6px; }
+
+.h3ps-root.is-large-text .h3ps-output-toolbar { font-size: 11.875px; }
+
+.h3ps-root.is-large-text .h3ps-section-heading small,
+.h3ps-root.is-large-text .h3ps-sample-heading small,
+.h3ps-root.is-large-text .h3ps-media-filters button,
+.h3ps-root.is-large-text .h3ps-field > span,
+.h3ps-root.is-large-text .h3ps-brief > span strong { font-size: 11.875px; }
+
+.h3ps-root.is-large-text .h3ps-section-heading strong,
+.h3ps-root.is-large-text .h3ps-sample-heading strong { font-size: 18.75px; }
+
+.h3ps-root.is-large-text .h3ps-section-hint { font-size: 14.375px; }
+
+.h3ps-root.is-large-text .h3ps-media-filters button b { font-size: 11.25px; }
+
+.h3ps-root.is-large-text .h3ps-asset-copy strong,
+.h3ps-root.is-large-text .h3ps-add-asset span,
+.h3ps-root.is-large-text .h3ps-active-model strong,
+.h3ps-root.is-large-text .h3ps-model-row strong { font-size: 13.125px; }
+
+.h3ps-root.is-large-text .h3ps-asset-copy small,
+.h3ps-root.is-large-text .h3ps-add-asset small,
+.h3ps-root.is-large-text .h3ps-active-model small,
+.h3ps-root.is-large-text .h3ps-active-model em,
+.h3ps-root.is-large-text .h3ps-model-row small,
+.h3ps-root.is-large-text .h3ps-char-count { font-size: 11.25px; }
+
+.h3ps-root.is-large-text .h3ps-field > span,
+.h3ps-root.is-large-text .h3ps-duration-field > span b,
+.h3ps-root.is-large-text .h3ps-field button em,
+.h3ps-root.is-large-text .h3ps-brief > span small { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-field > button { font-size: 14px; }
+
+.h3ps-root.is-large-text .h3ps-system-prompt-overview strong { font-size: 14px; }
+
+.h3ps-root.is-large-text .h3ps-system-prompt-overview small,
+.h3ps-root.is-large-text .h3ps-system-prompt-overview em,
+.h3ps-root.is-large-text .h3ps-system-prompt-overview b { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-provider-selector strong { font-size: 15px; }
+
+.h3ps-root.is-large-text .h3ps-provider-selector small { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-installed-model-control select { font-size: 14px; }
+
+.h3ps-root.is-large-text .h3ps-installed-model-heading,
+.h3ps-root.is-large-text .h3ps-model-utilities .h3ps-model-scan summary,
+.h3ps-root.is-large-text .h3ps-other-models-trigger strong { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-other-models-trigger small,
+.h3ps-root.is-large-text .h3ps-installed-model-source { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-model-scan pre { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-choice-menu button,
+.h3ps-root.is-large-text .h3ps-choice-menu button em,
+.h3ps-root.is-large-text .h3ps-runtime-menu button,
+.h3ps-root.is-large-text .h3ps-model-lifecycle,
+.h3ps-root.is-large-text .h3ps-model-lifecycle button { font-size: 11.25px; }
+
+.h3ps-root.is-large-text .h3ps-brief textarea { min-height: 166px; max-height: 280px; font-size: 15.5px; line-height: 1.5; }
+
+.h3ps-root.is-large-text .h3ps-refine-heading strong { font-size: 13.125px; }
+
+.h3ps-root.is-large-text .h3ps-refine-heading small,
+.h3ps-root.is-large-text .h3ps-refine-heading small em,
+.h3ps-root.is-large-text .h3ps-text-button,
+.h3ps-root.is-large-text .h3ps-refine-submit { font-size: 11.875px; }
+
+.h3ps-root.is-large-text .h3ps-refine textarea { font-size: 13.125px; line-height: 1.5; }
+
+.h3ps-root.is-large-text .h3ps-footer { min-height: 72px; flex-wrap: wrap; gap: 8px; }
+
+.h3ps-root.is-large-text .h3ps-footer-actions { gap: 12px; }
+
+.h3ps-root.is-large-text .h3ps-status strong { font-size: 13.125px; }
+
+.h3ps-root.is-large-text .h3ps-status small,
+.h3ps-root.is-large-text .h3ps-memory-action,
+.h3ps-root.is-large-text .h3ps-toggle-control { font-size: 12.5px; }
+
+.h3ps-root.is-large-text .h3ps-primary-button { font-size: 13.125px; }
+
+.h3ps-root.is-large-text .h3ps-settings-heading strong { font-size: 21.25px; }
+
+.h3ps-root.is-large-text .h3ps-settings-heading em { font-size: 13.75px; }
+
+.h3ps-root.is-large-text .h3ps-settings-card > header strong,
+.h3ps-root.is-large-text .h3ps-settings-section-heading strong { font-size: 16.25px; }
+
+.h3ps-root.is-large-text .h3ps-settings-card > header small,
+.h3ps-root.is-large-text .h3ps-settings-section-heading small { font-size: 11.875px; }
+
+.h3ps-root.is-large-text .h3ps-provider-selector small,
+.h3ps-root.is-large-text .h3ps-installed-model-source,
+.h3ps-root.is-large-text .h3ps-system-editor p { font-size: 11.25px; }
+
+.h3ps-root.is-large-text .h3ps-runtime-settings summary,
+.h3ps-root.is-large-text .h3ps-system-settings summary { font-size: 11.875px; }
+
+.h3ps-root.is-large-text .h3ps-runtime-settings [data-runtime-toggle] b { font-size: 11.25px; }
+
+.h3ps-root.is-large-text .h3ps-editor,
+.h3ps-root.is-large-text .h3ps-editor-highlight { font-size: 14.375px !important; line-height: 1.65 !important; }
+
+.h3ps-root.is-large-text .h3ps-preview-dialog header strong,
+.h3ps-root.is-large-text .h3ps-image-preview-dialog header strong { font-size: 15px; }
+
+.h3ps-root.is-large-text .h3ps-preview-dialog header small,
+.h3ps-root.is-large-text .h3ps-image-preview-dialog header small,
+.h3ps-root.is-large-text .h3ps-preview-dialog footer small { font-size: 11.25px; }
+
+.h3ps-root.is-large-text .h3ps-preview-dialog footer span { font-size: 11.875px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-modal { grid-template-rows: 72px 64px minmax(0, 1fr) 80px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-footer { min-height: 80px; }
+
+.h3ps-root.is-large-text .h3ps-provider-selector small,
+.h3ps-root.is-large-text .h3ps-installed-model-source,
+.h3ps-root.is-large-text .h3ps-system-editor p { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-journey li em { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-journey li span { width: 24px; height: 24px; font-size: 11px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-state-copy > strong,
+.h3ps-root.is-large-text .h3ps-ollama-ready-heading strong { font-size: 15px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-state-copy > p,
+.h3ps-root.is-large-text .h3ps-ollama-ready > p { font-size: 13px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-state-copy > small,
+.h3ps-root.is-large-text .h3ps-ollama-ready-heading small,
+.h3ps-root.is-large-text .h3ps-ollama-ready > small,
+.h3ps-root.is-large-text .h3ps-ollama-storage-help { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-ready-heading > em,
+.h3ps-root.is-large-text .h3ps-ollama-model-heading > span,
+.h3ps-root.is-large-text .h3ps-ollama-add-model-toggle { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-model-select select { font-size: 14px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-add-model > strong,
+.h3ps-root.is-large-text .h3ps-ollama-add-model > small,
+.h3ps-root.is-large-text .h3ps-ollama-tier-row,
+.h3ps-root.is-large-text .h3ps-ollama-tier-row code { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-tier-row em,
+.h3ps-root.is-large-text .h3ps-ollama-badges span { font-size: 10px; }
+
+.h3ps-root.is-large-text .h3ps-api-intro strong { font-size: 17px; }
+
+.h3ps-root.is-large-text .h3ps-api-intro p,
+.h3ps-root.is-large-text .h3ps-api-setup label > small,
+.h3ps-root.is-large-text .h3ps-api-cancel-note { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-runtime-custom,
+.h3ps-root.is-large-text .h3ps-runtime-custom span,
+.h3ps-root.is-large-text .h3ps-runtime-custom input,
+.h3ps-root.is-large-text .h3ps-external-connection-status small,
+.h3ps-root.is-large-text .h3ps-external-connection-status > em,
+.h3ps-root.is-large-text .h3ps-external-connection form label > span,
+.h3ps-root.is-large-text .h3ps-external-connection form > small,
+.h3ps-root.is-large-text .h3ps-external-connection form input,
+.h3ps-root.is-large-text .h3ps-api-preset small,
+.h3ps-root.is-large-text .h3ps-api-setup > label > span,
+.h3ps-root.is-large-text .h3ps-api-setup input,
+.h3ps-root.is-large-text .h3ps-api-custom-options > label > span,
+.h3ps-root.is-large-text .h3ps-api-custom-options > label > span em,
+.h3ps-root.is-large-text .h3ps-api-actions button,
+.h3ps-root.is-large-text .h3ps-api-actions a,
+.h3ps-root.is-large-text .h3ps-api-disclosure p,
+.h3ps-root.is-large-text .h3ps-api-disclosure strong,
+.h3ps-root.is-large-text .h3ps-api-disclosure small {
+  font-size: 12px;
+}
+
+.h3ps-root.is-large-text .h3ps-external-connection-status strong,
+.h3ps-root.is-large-text .h3ps-api-preset strong { font-size: 14px; }
+
+.h3ps-root.is-large-text .h3ps-external-connection form button,
+.h3ps-root.is-large-text .h3ps-api-setup button { font-size: 13px; }
+
+.h3ps-root.is-large-text .h3ps-ollama-tier-heading,
+.h3ps-root.is-large-text .h3ps-ollama-tier-vram,
+.h3ps-root.is-large-text .h3ps-ollama-host-settings summary,
+.h3ps-root.is-large-text .h3ps-ollama-host-settings label span,
+.h3ps-root.is-large-text .h3ps-ollama-host-settings input,
+.h3ps-root.is-large-text .h3ps-ollama-host-settings button,
+.h3ps-root.is-large-text .h3ps-ollama-host-settings > small { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-system-prompt-editor-heading > button { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-system-prompt-editor-heading small { font-size: 11px; }
+
+.h3ps-root.is-large-text .h3ps-system-prompt-editor-heading strong { font-size: 15px; }
+
+.h3ps-root.is-large-text .h3ps-music-system-prompt-toggle > strong { font-size: 14px; }
+
+.h3ps-root.is-large-text .h3ps-music-system-prompt-toggle em { font-size: 12px; }
+
+.h3ps-root.is-large-text .h3ps-system-prompt-panel > p { font-size: 12.5px; }
+
+.h3ps-root.is-large-text .h3ps-system-prompt-card textarea,
+.h3ps-root.is-large-text .h3ps-music-system-prompt textarea {
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.h3ps-root.is-large-text .h3ps-system-prompt-panel > footer small,
+.h3ps-root.is-large-text .h3ps-system-prompt-panel > footer button { font-size: 11.5px; }
+
+/* Fullscreen gets a wider canvas, so let the primary reading surfaces grow
+   while keeping the mode switcher compact. */
+.h3ps-root.is-large-text.is-fullscreen .h3ps-modes button {
+  padding-inline: 6px;
+  font-size: 12px;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-section-heading strong,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-sample-heading strong { font-size: 20px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-section-heading small,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-sample-heading small,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-field > span,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-brief > span strong { font-size: 14px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-brief textarea,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-music-inputs .h3ps-lyrics textarea {
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-brief textarea {
+  min-height: 190px;
+  max-height: 330px;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-editor,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-editor-highlight {
+  font-size: 17px !important;
+  line-height: 1.65 !important;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-output-toolbar,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-media-filters button { font-size: 14px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-media-filters button b { font-size: 13px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-asset-copy strong,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-add-asset span,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-active-model strong,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-model-row strong { font-size: 15px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-asset-copy small,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-add-asset small,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-active-model small,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-active-model em,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-model-row small { font-size: 13px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-primary-button,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-text-button,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-refine-submit { font-size: 14px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-secondary-button {
+  /* Keep utility actions at the original 13px while reading surfaces scale. */
+  font-size: 13px;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-workspaces {
+  height: 40px;
+  padding: 3px 4px;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-workspaces button {
+  height: 32px;
+  padding-inline: 14px;
+  font-size: 14px;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-sample-controls { gap: 14px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-frame-count {
+  gap: 5px;
+  padding: 5px;
+  border-radius: 9px;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-frame-count > span {
+  padding-inline: 8px;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-frame-count button,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-sample-controls > button {
+  min-height: 38px;
+  height: 38px;
+  padding-inline: 12px;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-sample-controls > button { padding-inline: 15px; }
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-endpoints {
+  gap: 9px;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-endpoints input {
+  width: 18px;
+  height: 18px;
+}
+
+.h3ps-root.is-large-text.is-fullscreen .h3ps-preview-dialog footer span,
+.h3ps-root.is-large-text.is-fullscreen .h3ps-preview-dialog footer small { font-size: 14px; }
+
+/* Video-preview sampling controls are part of the large-text surface too.
+   Keep the group readable in both regular and fullscreen dialogs, and allow
+   the controls to wrap rather than overflow a narrow preview. */
+.h3ps-root.is-large-text .h3ps-sample-heading {
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 18px 20px 14px;
+}
+
+.h3ps-root.is-large-text .h3ps-sample-controls {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: min(100%, 430px);
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.h3ps-root.is-large-text .h3ps-frame-count {
+  gap: 5px;
+  padding: 5px;
+  border-radius: 9px;
+}
+
+.h3ps-root.is-large-text .h3ps-frame-count > span {
+  padding-inline: 8px;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.h3ps-root.is-large-text .h3ps-frame-count button,
+.h3ps-root.is-large-text .h3ps-sample-controls > button {
+  min-height: 38px;
+  height: 38px;
+  padding-inline: 12px;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.h3ps-root.is-large-text .h3ps-sample-controls > button { padding-inline: 15px; }
+
+.h3ps-root.is-large-text .h3ps-endpoints {
+  gap: 9px;
+  font-size: 16px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.h3ps-root.is-large-text .h3ps-endpoints input {
+  width: 18px;
+  height: 18px;
+}
+
+.h3ps-root.is-large-text .h3ps-asset-copy {
+  /* Lower the caption a little so its Picture/Video label clears the image. */
+  bottom: 4px;
+  gap: 2px;
+}
+
+.h3ps-root.is-large-text .h3ps-asset-copy strong,
+.h3ps-root.is-large-text .h3ps-asset-copy small { line-height: 1.2; }
+
+.h3ps-root.is-large-text .h3ps-control-grid { gap: 18px; }

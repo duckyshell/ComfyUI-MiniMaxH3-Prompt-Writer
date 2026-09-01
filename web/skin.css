@@ -20,7 +20,8 @@
 .h3ps-root button:focus-visible,
 .h3ps-root textarea:focus-visible,
 .h3ps-root input:focus-visible,
-.h3ps-root select:focus-visible {
+.h3ps-root select:focus-visible,
+.h3ps-root summary:focus-visible {
   outline: 1.5px solid rgba(232, 97, 60, .55);
   outline-offset: 2px;
   box-shadow: none;
@@ -69,6 +70,7 @@
 .h3ps-guide-menu a:hover,
 .h3ps-choice-menu button:hover { background: rgba(255, 255, 255, .04); }
 .h3ps-icon-button:hover { border-color: #2d2d32; background: #17171b; }
+.h3ps-text-size-button { font-size: 10px; font-weight: 700; letter-spacing: -.04em; }
 
 /* Generate navigation and workspace */
 .h3ps-workspace-toolbar {
@@ -1315,4 +1317,10 @@
 @media (max-width: 760px) {
   .h3ps-workspaces { margin-left: 10px; }
   .h3ps-workspaces button { padding-inline: 8px; }
+}
+
+.h3ps-other-models-popover {
+  /* The shared header is 62px tall in the visual skin. Reserve the full
+     track in every theme so the first model row never slides underneath it. */
+  grid-template-rows: 62px minmax(0, 1fr);
 }

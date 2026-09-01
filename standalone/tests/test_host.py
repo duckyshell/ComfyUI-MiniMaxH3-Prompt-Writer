@@ -72,6 +72,15 @@ class StandaloneHostTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Forget runtime", script)
         self.assertNotIn("Test / start selected model", script)
 
+        for path in (
+            "/scripts/managed_gguf.css",
+            "/scripts/managed_gguf-theme-light.css",
+            "/scripts/managed_gguf-text-large.css",
+        ):
+            with self.subTest(path=path):
+                response = await self.client.get(path)
+                self.assertEqual(response.status, 200)
+
         response = await self.client.get("/scripts/standalone_shell.js")
         self.assertEqual(response.status, 200)
         shell = await response.text()

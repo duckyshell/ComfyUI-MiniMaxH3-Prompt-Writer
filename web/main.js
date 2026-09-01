@@ -328,19 +328,19 @@ function syncModifiedState() {
 }
 
 function injectStyles() {
-  if (!document.querySelector("link[data-h3ps-styles]")) {
+  const stylesheets = [
+    ["styles", "./styles.css"],
+    ["skin", "./skin.css"],
+    ["light-theme", "./theme-light.css"],
+    ["large-text", "./text-large.css"],
+  ];
+  for (const [name, path] of stylesheets) {
+    if (document.querySelector(`link[data-h3ps-stylesheet="${name}"]`)) continue;
     const link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = new URL("./styles.css", import.meta.url).href;
-    link.dataset.h3psStyles = "true";
+    link.href = new URL(path, import.meta.url).href;
+    link.dataset.h3psStylesheet = name;
     document.head.appendChild(link);
-  }
-  if (!document.querySelector("link[data-h3ps-skin]")) {
-    const skin = document.createElement("link");
-    skin.rel = "stylesheet";
-    skin.href = new URL("./skin.css", import.meta.url).href;
-    skin.dataset.h3psSkin = "true";
-    document.head.appendChild(skin);
   }
 }
 
@@ -361,6 +361,8 @@ function icon(name, size = 16) {
     memory: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9h6v6H9zM9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/>',
     expand: '<path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5"/>',
     collapse: '<path d="M8 8H3V3m13 5h5V3M8 16H3v5m13-5h5v5"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>',
+    moon: '<path d="M20.2 15.3A8.5 8.5 0 0 1 8.7 3.8 8.5 8.5 0 1 0 20.2 15.3Z"/>',
   };
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">${paths[name] || paths.info}</svg>`;
 }
@@ -2621,6 +2623,38 @@ function syncFullscreenState() {
   button.innerHTML = icon(studio.fullscreen ? "collapse" : "expand", 17);
 }
 
+function syncAccessibilityState() {
+  if (!studio) return;
+  const light = studio.theme === "light";
+  studio.root.classList.toggle("is-light-theme", light);
+  studio.root.classList.toggle("is-large-text", studio.largeText);
+  const themeButton = studio.root.querySelector("[data-theme-toggle]");
+  const textButton = studio.root.querySelector("[data-text-size-toggle]");
+  if (!themeButton || !textButton) return;
+  themeButton.innerHTML = icon(light ? "moon" : "sun", 17);
+  themeButton.setAttribute("aria-label", light ? "Switch to dark theme" : "Switch to light theme");
+  themeButton.title = light ? "Switch to dark theme" : "Switch to light theme";
+  themeButton.setAttribute("aria-pressed", String(light));
+  textButton.textContent = studio.largeText ? "AA" : "Aa";
+  textButton.setAttribute("aria-label", studio.largeText ? "Use normal text" : "Use large text");
+  textButton.title = studio.largeText ? "Use normal text" : "Use large text";
+  textButton.setAttribute("aria-pressed", String(studio.largeText));
+}
+
+function setTheme(theme) {
+  if (!studio) return;
+  studio.theme = theme === "light" ? "light" : "dark";
+  syncAccessibilityState();
+  saveUserPreferences(localStorage, studio);
+}
+
+function setLargeText(large) {
+  if (!studio) return;
+  studio.largeText = large === true;
+  syncAccessibilityState();
+  saveUserPreferences(localStorage, studio);
+}
+
 function setFullscreen(fullscreen) {
   if (!studio || studio.fullscreen === fullscreen) return;
   studio.fullscreen = fullscreen;
@@ -2654,6 +2688,8 @@ function createStudio() {
             <div class="h3ps-guide-menu" data-guide-menu hidden><span>Loading guides…</span></div>
           </div>
           <button class="h3ps-guide-button" type="button" data-open-settings-header>Settings</button>
+          <button class="h3ps-icon-button" type="button" title="Switch to light theme" aria-label="Switch to light theme" aria-pressed="false" data-theme-toggle></button>
+          <button class="h3ps-icon-button h3ps-text-size-button" type="button" title="Use large text" aria-label="Use large text" aria-pressed="false" data-text-size-toggle>Aa</button>
           <button class="h3ps-icon-button" type="button" title="Enter fullscreen" aria-label="Enter fullscreen" aria-pressed="false" data-fullscreen-toggle>${icon("expand", 17)}</button>
           <button class="h3ps-icon-button" type="button" title="Close" data-close-studio>${icon("close", 18)}</button>
         </div>
@@ -2830,8 +2866,11 @@ function createStudio() {
   const restoredAspect = ASPECT_RATIOS.find(([value]) => value === studio.aspectRatio) || ASPECT_RATIOS.find(([value]) => value === "16:9");
   root.querySelector("[data-aspect-label]").textContent = restoredAspect[0];
   root.querySelector("[data-aspect-description]").textContent = restoredAspect[1];
+  syncAccessibilityState();
   syncFullscreenState();
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
+  root.querySelector("[data-theme-toggle]").addEventListener("click", () => setTheme(studio.theme === "light" ? "dark" : "light"));
+  root.querySelector("[data-text-size-toggle]").addEventListener("click", () => setLargeText(!studio.largeText));
   root.querySelector("[data-fullscreen-toggle]").addEventListener("click", () => setFullscreen(!studio.fullscreen));
   root.addEventListener("click", (event) => {
     if (studio.draftDefaultsArmed && !event.target.closest("[data-restore-default-drafts]")) disarmDraftDefaults();

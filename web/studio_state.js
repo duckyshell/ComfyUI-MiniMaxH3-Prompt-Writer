@@ -96,6 +96,8 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       direct_reasoning_effort: typeof value.direct_reasoning_effort === "string" && value.direct_reasoning_effort ? value.direct_reasoning_effort : "auto",
       music_lyrics_use_brief: value.music_lyrics_use_brief !== false,
       fullscreen: value.fullscreen === true,
+      theme: value.theme === "light" ? "light" : "dark",
+      large_text: value.large_text === true,
     };
   } catch {
     return null;
@@ -118,6 +120,8 @@ export function saveUserPreferences(storage, state) {
     direct_reasoning_effort: typeof state.directReasoningEffort === "string" && state.directReasoningEffort ? state.directReasoningEffort : "auto",
     music_lyrics_use_brief: state.musicLyricsUseBrief !== false,
     fullscreen: state.fullscreen === true,
+    theme: state.theme === "light" ? "light" : "dark",
+    large_text: state.largeText === true,
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -428,6 +432,8 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     directReasoningEffort: preferences?.direct_reasoning_effort || "auto",
     musicLyricsUseBrief: preferences?.music_lyrics_use_brief !== false,
     fullscreen: preferences?.fullscreen === true,
+    theme: preferences?.theme === "light" ? "light" : "dark",
+    largeText: preferences?.large_text === true,
     settingsPromptProfile: "standard",
     musicSystemPromptProfile: "music3",
     musicSystemPromptExpanded: false,

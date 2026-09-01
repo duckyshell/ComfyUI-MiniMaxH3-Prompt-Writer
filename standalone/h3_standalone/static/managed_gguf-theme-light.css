@@ -1,0 +1,55 @@
+/* Keep the standalone-only managed llama-server surface on the shared skin. */
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-managed {
+  border-top-color: var(--h3ps-border-soft);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-add-menu {
+  border-color: var(--h3ps-border);
+  background: var(--h3ps-surface);
+  box-shadow: 0 12px 30px rgba(31, 41, 53, .16);
+  color: var(--h3ps-text);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-add-menu > button {
+  color: var(--h3ps-text);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-add-menu > button:hover,
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-location-row:hover {
+  background: var(--h3ps-surface-3);
+  color: var(--h3ps-text);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-menu-heading,
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-add-menu > .h3-lite-menu-footer {
+  border-color: var(--h3ps-border-soft);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-location-row > button {
+  color: var(--h3ps-muted);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-location-row > button:hover,
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-add-menu > button.is-danger:hover {
+  background: rgba(232, 97, 60, .08);
+  color: var(--h3ps-accent-strong);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-file-control {
+  border-color: var(--h3ps-border);
+  background: var(--h3ps-surface-2);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-section header em.is-running,
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-section header em.is-ready {
+  color: var(--h3ps-green);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-section .h3ps-installed-model-source a {
+  color: var(--h3ps-muted);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-section .h3ps-installed-model-source a:hover {
+  color: var(--h3ps-text);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-heading-actions > button:hover,
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-add-control > button:hover,
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-file-actions > button:hover {
+  border-color: #aeb9c6;
+  color: var(--h3ps-text);
+}
+.h3ps-root[data-standalone-shell="true"].is-light-theme .h3-lite-error {
+  border-color: rgba(232, 97, 60, .28);
+  background: rgba(232, 97, 60, .07);
+  color: #a9442f;
+}

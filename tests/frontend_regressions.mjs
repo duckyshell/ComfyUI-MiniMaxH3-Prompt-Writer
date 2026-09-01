@@ -55,6 +55,12 @@ const { settingsMarkup } = await import(`data:text/javascript;base64,${settingsE
 const mainSource = await readFile(new URL("../web/main.js", import.meta.url), "utf8");
 const skinSource = await readFile(new URL("../web/skin.css", import.meta.url), "utf8");
 const stylesSource = await readFile(new URL("../web/styles.css", import.meta.url), "utf8");
+const lightThemeSource = await readFile(new URL("../web/theme-light.css", import.meta.url), "utf8");
+const largeTextSource = await readFile(new URL("../web/text-large.css", import.meta.url), "utf8");
+const standaloneManagedSource = await readFile(new URL("../standalone/h3_standalone/static/managed_gguf.css", import.meta.url), "utf8");
+const standaloneManagedScript = await readFile(new URL("../standalone/h3_standalone/static/managed_gguf.js", import.meta.url), "utf8");
+const standaloneLightThemeSource = await readFile(new URL("../standalone/h3_standalone/static/managed_gguf-theme-light.css", import.meta.url), "utf8");
+const standaloneLargeTextSource = await readFile(new URL("../standalone/h3_standalone/static/managed_gguf-text-large.css", import.meta.url), "utf8");
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -292,6 +298,8 @@ test("user preferences persist only stable non-secret settings", () => {
     direct_reasoning_effort: "medium",
     music_lyrics_use_brief: false,
     fullscreen: true,
+    theme: "dark",
+    large_text: false,
   });
 });
 
@@ -326,6 +334,8 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     direct_reasoning_effort: "auto",
     music_lyrics_use_brief: true,
     fullscreen: false,
+    theme: "dark",
+    large_text: false,
   });
 });
 
@@ -360,11 +370,51 @@ test("studio restores safe preferences but not transient lifecycle state", () =>
   assert.equal(state.directReasoningEffort, "low");
   assert.equal(state.musicLyricsUseBrief, true);
   assert.equal(state.fullscreen, true);
+  assert.equal(state.theme, "dark");
+  assert.equal(state.largeText, false);
   assert.equal(state.ollamaContextProfile, undefined);
   assert.equal(state.keepModelLoaded, false);
   assert.equal(state.thinking, false);
   assert.equal(state.selectedModel, null);
   assert.deepEqual(state.assets, []);
+});
+
+test("accessibility preferences persist with safe defaults and sanitize invalid values", () => {
+  const storage = memoryStorage();
+  const state = createStudioState({ sessionId: "accessibility", storage });
+  assert.equal(state.theme, "dark");
+  assert.equal(state.largeText, false);
+
+  state.theme = "light";
+  state.largeText = true;
+  saveUserPreferences(storage, state);
+  assert.deepEqual(loadUserPreferences(storage), {
+    version: 1,
+    mode: "Reference",
+    duration_seconds: 10,
+    aspect_ratio: "16:9",
+    active_provider: "ollama",
+    direct_model_id: null,
+    direct_context_profile: "auto",
+    direct_context_tokens: null,
+    direct_kv_cache: "auto",
+    direct_generation_budget: "auto",
+    direct_generation_budget_tokens: null,
+    direct_reasoning_effort: "auto",
+    music_lyrics_use_brief: true,
+    fullscreen: false,
+    theme: "light",
+    large_text: true,
+  });
+
+  const sanitized = createStudioState({
+    sessionId: "accessibility-invalid",
+    storage: memoryStorage({
+      [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({ version: 1, theme: "sepia", large_text: "yes" }),
+    }),
+  });
+  assert.equal(sanitized.theme, "dark");
+  assert.equal(sanitized.largeText, false);
 });
 
 test("a clean first run defaults to Ollama while saved provider preferences remain authoritative", () => {
@@ -1083,6 +1133,48 @@ test("fullscreen reuses the studio root and persists its UI state", () => {
   assert.match(mainSource, /current\.root\.classList\.add\("is-open"\)[\s\S]{0,220}requestAnimationFrame\(updateBriefLayout\)/);
   assert.match(mainSource, /const fullscreen = studio\.fullscreen && studio\.root\.classList\.contains\("is-open"\)/);
   assert.match(stylesSource, /\.h3ps-root\.is-fullscreen \.h3ps-brief textarea \{ max-height: none; \}/);
+});
+
+test("accessibility toggles expose persistent theme and text-size state", () => {
+  assert.match(mainSource, /data-theme-toggle/);
+  assert.match(mainSource, /data-text-size-toggle/);
+  assert.match(mainSource, /studio\.root\.classList\.toggle\("is-light-theme", light\)/);
+  assert.match(mainSource, /studio\.root\.classList\.toggle\("is-large-text", studio\.largeText\)/);
+  assert.match(mainSource, /Switch to dark theme/);
+  assert.match(mainSource, /Switch to light theme/);
+  assert.match(mainSource, /Use normal text/);
+  assert.match(mainSource, /Use large text/);
+  assert.match(mainSource, /data-theme-toggle.*data-text-size-toggle/s);
+  assert.match(mainSource, /\["light-theme", "\.\/theme-light\.css"\]/);
+  assert.match(mainSource, /\["large-text", "\.\/text-large\.css"\]/);
+  assert.doesNotMatch(skinSource, /\.h3ps-root\.is-light-theme/);
+  assert.doesNotMatch(skinSource, /\.h3ps-root\.is-large-text/);
+  assert.match(lightThemeSource, /\.h3ps-root\.is-light-theme/);
+  assert.match(largeTextSource, /\.h3ps-root\.is-large-text/);
+  assert.doesNotMatch(lightThemeSource, /\.h3ps-root\.is-large-text/);
+  assert.doesNotMatch(largeTextSource, /\.h3ps-root\.is-light-theme/);
+  assert.doesNotMatch(largeTextSource, /transform:\s*scale/);
+  assert.match(lightThemeSource, /\.h3ps-root\.is-light-theme \.h3ps-duration-field input::\-webkit-slider-thumb[\s\S]{0,180}border-color: #ffffff !important/);
+  assert.match(skinSource, /\.h3ps-other-models-popover[\s\S]{0,220}grid-template-rows: 62px minmax\(0, 1fr\)/);
+  assert.match(largeTextSource, /\.h3ps-root\.is-large-text\.is-fullscreen \.h3ps-secondary-button[\s\S]{0,140}font-size: 13px/);
+  assert.match(largeTextSource, /\.h3ps-root\.is-large-text \.h3ps-sample-controls[\s\S]{0,240}flex-wrap: wrap[\s\S]{0,120}gap: 14px/);
+  assert.match(largeTextSource, /\.h3ps-root\.is-large-text \.h3ps-frame-count button[\s\S]{0,220}height: 38px[\s\S]{0,120}font-size: 16px/);
+  assert.match(largeTextSource, /\.h3ps-root\.is-large-text \.h3ps-endpoints[\s\S]{0,180}font-size: 16px/);
+  assert.match(largeTextSource, /\.h3ps-root\.is-large-text \.h3ps-asset-copy[\s\S]{0,120}bottom: 4px/);
+  assert.match(largeTextSource, /\.h3ps-root\.is-large-text \.h3ps-control-grid[\s\S]{0,80}gap: 18px/);
+  assert.match(lightThemeSource, /\.h3ps-root\.is-light-theme \.h3ps-preview-dialog footer span[\s\S]{0,80}color: #26734d/);
+});
+
+test("Standalone managed llama controls follow the accessible skin", () => {
+  assert.doesNotMatch(standaloneManagedSource, /\.is-light-theme|\.is-large-text/);
+  assert.match(standaloneManagedScript, /managed_gguf-theme-light/);
+  assert.match(standaloneManagedScript, /managed_gguf-text-large/);
+  assert.match(standaloneLightThemeSource, /\.h3ps-root\[data-standalone-shell="true"\]\.is-light-theme \.h3-lite-add-menu/);
+  assert.match(standaloneLightThemeSource, /\.h3ps-root\[data-standalone-shell="true"\]\.is-light-theme \.h3-lite-file-control/);
+  assert.doesNotMatch(standaloneLightThemeSource, /\.is-large-text/);
+  assert.match(standaloneLargeTextSource, /\.h3ps-root\[data-standalone-shell="true"\]\.is-large-text \.h3-lite-add-menu > button/);
+  assert.match(standaloneLargeTextSource, /\.h3ps-root\[data-standalone-shell="true"\]\.is-large-text \.h3-lite-file-copy strong/);
+  assert.doesNotMatch(standaloneLargeTextSource, /\.is-light-theme/);
 });
 
 test("prompt refinement keeps actions above a vertically resizable editor", () => {

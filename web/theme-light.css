@@ -1,0 +1,613 @@
+/* Optional light theme. Active only on .h3ps-root.is-light-theme. */
+.h3ps-root.is-light-theme {
+  --h3ps-bg: #f5f7fa;
+  --h3ps-surface: #ffffff;
+  --h3ps-surface-2: #eef1f5;
+  --h3ps-surface-3: #e4e8ee;
+  --h3ps-border: #d6dde6;
+  --h3ps-border-soft: #e9edf2;
+  --h3ps-text: #1f2935;
+  --h3ps-muted: #5d6977;
+  --h3ps-dim: #536170;
+  --h3ps-shadow: 0 24px 70px rgba(31, 41, 53, .18), 0 3px 14px rgba(31, 41, 53, .12);
+  color-scheme: light;
+}
+
+/* Dark theme behavior remains in the base styles. */
+.h3ps-root.is-light-theme .h3ps-modal {
+  border-color: var(--h3ps-border);
+}
+
+.h3ps-root.is-light-theme .h3ps-header,
+.h3ps-root.is-light-theme .h3ps-footer,
+.h3ps-root.is-light-theme .h3ps-settings-heading {
+  background: var(--h3ps-surface);
+  border-color: var(--h3ps-border-soft);
+}
+
+.h3ps-root.is-light-theme .h3ps-workspace-toolbar,
+.h3ps-root.is-light-theme .h3ps-workspaces,
+.h3ps-root.is-light-theme .h3ps-generation-options {
+  background: var(--h3ps-surface-2);
+  border-color: var(--h3ps-border);
+}
+
+.h3ps-root.is-light-theme .h3ps-input-panel,
+.h3ps-root.is-light-theme .h3ps-settings-view {
+  background: var(--h3ps-surface);
+  border-color: var(--h3ps-border);
+}
+
+.h3ps-root.is-light-theme .h3ps-output-panel {
+  background: #f8fafc;
+}
+
+.h3ps-root.is-light-theme .h3ps-guide-button,
+.h3ps-root.is-light-theme .h3ps-secondary-button,
+.h3ps-root.is-light-theme .h3ps-field > button,
+.h3ps-root.is-light-theme .h3ps-duration-field > div,
+.h3ps-root.is-light-theme .h3ps-brief textarea,
+.h3ps-root.is-light-theme .h3ps-active-model,
+.h3ps-root.is-light-theme .h3ps-model-row,
+.h3ps-root.is-light-theme .h3ps-settings-card,
+.h3ps-root.is-light-theme .h3ps-runtime-settings,
+.h3ps-root.is-light-theme .h3ps-system-settings,
+.h3ps-root.is-light-theme .h3ps-refine,
+.h3ps-root.is-light-theme .h3ps-reference-peek,
+.h3ps-root.is-light-theme .h3ps-memory-action,
+.h3ps-root.is-light-theme .h3ps-generation-options {
+  background: var(--h3ps-surface-2);
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-guide-button:hover,
+.h3ps-root.is-light-theme .h3ps-secondary-button:hover,
+.h3ps-root.is-light-theme .h3ps-field > button:hover,
+.h3ps-root.is-light-theme .h3ps-active-model:hover,
+.h3ps-root.is-light-theme .h3ps-model-row:hover,
+.h3ps-root.is-light-theme .h3ps-memory-action:hover {
+  background: var(--h3ps-surface-3);
+  border-color: #aeb9c6;
+}
+
+.h3ps-root.is-light-theme .h3ps-settings-card,
+.h3ps-root.is-light-theme .h3ps-runtime-settings {
+  background: transparent;
+  border-color: var(--h3ps-border-soft);
+}
+
+.h3ps-root.is-light-theme .h3ps-guide-menu,
+.h3ps-root.is-light-theme .h3ps-choice-menu,
+.h3ps-root.is-light-theme .h3ps-model-menu,
+.h3ps-root.is-light-theme .h3ps-runtime-menu,
+.h3ps-root.is-light-theme .h3ps-reference-insert-popover,
+.h3ps-root.is-light-theme .h3ps-prompt-models-menu > span,
+.h3ps-root.is-light-theme .h3ps-other-models-popover {
+  background: #ffffff;
+  border-color: var(--h3ps-border);
+  box-shadow: 0 12px 30px rgba(31, 41, 53, .16);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-provider-selector > button:hover,
+.h3ps-root.is-light-theme .h3ps-provider-selector > button.is-selected {
+  background: var(--h3ps-surface-3);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-provider-icon,
+.h3ps-root.is-light-theme .h3ps-model-icon,
+.h3ps-root.is-light-theme .h3ps-active-model-icon {
+  background: var(--h3ps-surface-3);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-direct-runtime-command,
+.h3ps-root.is-light-theme .h3ps-model-scan pre {
+  background: #ffffff;
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-direct-runtime-command code {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-direct-runtime-command button,
+.h3ps-root.is-light-theme .h3ps-external-connection form button {
+  background: var(--h3ps-surface-3);
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-muted);
+}
+
+.h3ps-root.is-light-theme .h3ps-guide-menu a:hover,
+.h3ps-root.is-light-theme .h3ps-choice-menu button:hover,
+.h3ps-root.is-light-theme .h3ps-runtime-menu button:hover,
+.h3ps-root.is-light-theme .h3ps-model-menu > header button:hover {
+  background: var(--h3ps-surface-3);
+}
+
+.h3ps-root.is-light-theme .h3ps-model-menu > header,
+.h3ps-root.is-light-theme .h3ps-model-menu > footer,
+.h3ps-root.is-light-theme .h3ps-settings-heading,
+.h3ps-root.is-light-theme .h3ps-editor-meta,
+.h3ps-root.is-light-theme .h3ps-preview-dialog header,
+.h3ps-root.is-light-theme .h3ps-image-preview-dialog header,
+.h3ps-root.is-light-theme .h3ps-preview-dialog footer {
+  background: var(--h3ps-surface-2);
+  border-color: var(--h3ps-border-soft);
+}
+
+.h3ps-root.is-light-theme .h3ps-modes button,
+.h3ps-root.is-light-theme .h3ps-workspaces button,
+.h3ps-root.is-light-theme .h3ps-output-toolbar,
+.h3ps-root.is-light-theme .h3ps-section-hint,
+.h3ps-root.is-light-theme .h3ps-field > span,
+.h3ps-root.is-light-theme .h3ps-brief > span strong,
+.h3ps-root.is-light-theme .h3ps-add-asset span,
+.h3ps-root.is-light-theme .h3ps-settings-heading em,
+.h3ps-root.is-light-theme .h3ps-runtime-settings summary,
+.h3ps-root.is-light-theme .h3ps-system-settings summary,
+.h3ps-root.is-light-theme .h3ps-refine textarea,
+.h3ps-root.is-light-theme .h3ps-footer,
+.h3ps-root.is-light-theme .h3ps-preview-dialog,
+.h3ps-root.is-light-theme .h3ps-image-preview-dialog {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-modes button:hover,
+.h3ps-root.is-light-theme .h3ps-workspaces button:hover {
+  background: var(--h3ps-surface-3);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-modes button.is-active,
+.h3ps-root.is-light-theme .h3ps-workspaces button.is-active {
+  background: #dce6f0;
+  border-color: #b9c7d5;
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-asset:hover,
+.h3ps-root.is-light-theme .h3ps-add-asset:hover {
+  background-color: var(--h3ps-surface-3);
+}
+
+.h3ps-root.is-light-theme .h3ps-asset-preview,
+.h3ps-root.is-light-theme .h3ps-image-preview-stage,
+.h3ps-root.is-light-theme .h3ps-video-stage,
+.h3ps-root.is-light-theme .h3ps-video-stage video,
+.h3ps-root.is-light-theme .h3ps-frame img,
+.h3ps-root.is-light-theme .h3ps-contact-sheet {
+  background: #e4e8ee;
+}
+
+.h3ps-root.is-light-theme .h3ps-refine textarea,
+.h3ps-root.is-light-theme .h3ps-system-editor textarea,
+.h3ps-root.is-light-theme .h3ps-music-system-prompt textarea {
+  background: #ffffff;
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-empty-drop,
+.h3ps-root.is-light-theme .h3ps-editor-wrap {
+  background: var(--h3ps-surface-2);
+  border-color: var(--h3ps-border);
+}
+
+.h3ps-root.is-light-theme .h3ps-editor,
+.h3ps-root.is-light-theme .h3ps-editor-highlight {
+  color: var(--h3ps-text);
+  scrollbar-color: #b9c2cd transparent;
+}
+
+.h3ps-root.is-light-theme .h3ps-preview-backdrop {
+  background: rgba(31, 41, 53, .42);
+}
+
+.h3ps-root.is-light-theme .h3ps-preview-dialog,
+.h3ps-root.is-light-theme .h3ps-image-preview-dialog {
+  background: var(--h3ps-surface);
+  border-color: var(--h3ps-border);
+}
+
+/* Controls that carry explicit dark-skin colors in the shared layout. */
+.h3ps-root.is-light-theme .h3ps-provider-selector > button,
+.h3ps-root.is-light-theme .h3ps-installed-model-control,
+.h3ps-root.is-light-theme .h3ps-external-connection-status,
+.h3ps-root.is-light-theme .h3ps-ollama-command,
+.h3ps-root.is-light-theme .h3ps-ollama-tier-list,
+.h3ps-root.is-light-theme .h3ps-ollama-add-model,
+.h3ps-root.is-light-theme .h3ps-api-preset,
+.h3ps-root.is-light-theme .h3ps-api-setup,
+.h3ps-root.is-light-theme .h3ps-api-custom-options > label:first-child {
+  background: var(--h3ps-surface-2);
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-provider-selector > button:hover,
+.h3ps-root.is-light-theme .h3ps-provider-selector > button.is-selected,
+.h3ps-root.is-light-theme .h3ps-api-preset:hover,
+.h3ps-root.is-light-theme .h3ps-api-preset.is-selected {
+  background: var(--h3ps-surface-3);
+  border-color: transparent;
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-provider-selector > button.is-selected {
+  box-shadow: inset 2px 0 var(--h3ps-accent);
+}
+
+.h3ps-root.is-light-theme .h3ps-provider-selector > button,
+.h3ps-root.is-light-theme .h3ps-api-preset {
+  border-color: transparent;
+}
+
+.h3ps-root.is-light-theme .h3ps-provider-selector small,
+.h3ps-root.is-light-theme .h3ps-installed-model-source,
+.h3ps-root.is-light-theme .h3ps-api-preset small,
+.h3ps-root.is-light-theme .h3ps-api-setup label > small,
+.h3ps-root.is-light-theme .h3ps-api-cancel-note,
+.h3ps-root.is-light-theme .h3ps-ollama-state-copy > small,
+.h3ps-root.is-light-theme .h3ps-ollama-ready-heading small,
+.h3ps-root.is-light-theme .h3ps-ollama-storage-help,
+.h3ps-root.is-light-theme .h3ps-ollama-ready > small {
+  color: var(--h3ps-muted);
+}
+
+.h3ps-root.is-light-theme .h3ps-installed-model-control select,
+.h3ps-root.is-light-theme .h3ps-installed-model-control select option,
+.h3ps-root.is-light-theme .h3ps-ollama-model-select select,
+.h3ps-root.is-light-theme .h3ps-ollama-model-select option,
+.h3ps-root.is-light-theme .h3ps-api-setup select,
+.h3ps-root.is-light-theme .h3ps-api-setup option,
+.h3ps-root.is-light-theme .h3ps-api-model-select select,
+.h3ps-root.is-light-theme .h3ps-api-model-select option {
+  background: #ffffff;
+  color: var(--h3ps-text);
+  color-scheme: light;
+}
+
+.h3ps-root.is-light-theme .h3ps-installed-model-control {
+  background: #ffffff;
+}
+
+.h3ps-root.is-light-theme .h3ps-model-scan,
+.h3ps-root.is-light-theme .h3ps-model-scan pre {
+  background: #ffffff;
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-model-scan summary,
+.h3ps-root.is-light-theme .h3ps-model-utilities,
+.h3ps-root.is-light-theme .h3ps-model-utilities > p {
+  color: var(--h3ps-muted);
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-trigger strong {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-trigger svg {
+  color: var(--h3ps-muted);
+}
+
+.h3ps-root.is-light-theme .h3ps-model-utilities,
+.h3ps-root.is-light-theme .h3ps-model-utilities .h3ps-model-scan,
+.h3ps-root.is-light-theme .h3ps-model-utilities .h3ps-other-models-trigger,
+.h3ps-root.is-light-theme .h3ps-system-prompt-overview,
+.h3ps-root.is-light-theme .h3ps-system-prompt-overview > button {
+  border-color: var(--h3ps-border-soft);
+}
+
+.h3ps-root.is-light-theme .h3ps-system-prompt-overview > button:hover {
+  background: var(--h3ps-surface-2);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-music-system-prompt-toggle:hover > strong {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-settings-view .h3ps-direct-advanced,
+.h3ps-root.is-light-theme .h3ps-settings-view .h3ps-direct-advanced[open] > summary {
+  border-color: var(--h3ps-border);
+}
+
+.h3ps-root.is-light-theme .h3ps-settings-view .h3ps-direct-advanced > summary,
+.h3ps-root.is-light-theme .h3ps-settings-view .h3ps-runtime-settings > summary,
+.h3ps-root.is-light-theme .h3ps-settings-view .h3ps-system-settings > summary {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-settings-heading > button,
+.h3ps-root.is-light-theme .h3ps-ollama-primary {
+  font-size: 10.5px;
+}
+
+.h3ps-root.is-light-theme .h3ps-settings-view .h3ps-direct-advanced > summary:hover,
+.h3ps-root.is-light-theme .h3ps-runtime-menu button:hover,
+.h3ps-root.is-light-theme .h3ps-runtime-menu button.is-selected {
+  background: var(--h3ps-surface-3);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-runtime-menu button,
+.h3ps-root.is-light-theme .h3ps-choice-menu button {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-runtime-menu button:disabled,
+.h3ps-root.is-light-theme .h3ps-choice-menu button:disabled {
+  color: var(--h3ps-dim);
+}
+
+.h3ps-root.is-light-theme .h3ps-settings-view [data-runtime-toggle],
+.h3ps-root.is-light-theme .h3ps-settings-view .h3ps-runtime-custom input,
+.h3ps-root.is-light-theme .h3ps-external-connection form input,
+.h3ps-root.is-light-theme .h3ps-system-editor textarea,
+.h3ps-root.is-light-theme .h3ps-api-setup input,
+.h3ps-root.is-light-theme .h3ps-api-model-select select,
+.h3ps-root.is-light-theme .h3ps-ollama-host-settings input {
+  background: #ffffff;
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-duration-field > div {
+  /* Keep the control shell unchanged; only the thumb receives the white keyline. */
+  border-color: var(--h3ps-border);
+  background: var(--h3ps-surface-2);
+}
+
+.h3ps-root.is-light-theme .h3ps-duration-field > span b { color: var(--h3ps-muted); }
+
+.h3ps-root.is-light-theme .h3ps-duration-field > div:focus-within {
+  border-color: rgba(232, 97, 60, .45);
+  box-shadow: inset 0 0 0 1px rgba(232, 97, 60, .2);
+}
+
+.h3ps-root.is-light-theme [data-restore-default-drafts],
+.h3ps-root.is-light-theme .h3ps-reference-insert-toggle,
+.h3ps-root.is-light-theme .h3ps-refine-submit,
+.h3ps-root.is-light-theme .h3ps-sample-controls > button,
+.h3ps-root.is-light-theme .h3ps-frame-count {
+  background: var(--h3ps-surface-3);
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text) !important;
+}
+
+.h3ps-root.is-light-theme [data-restore-default-drafts]:hover,
+.h3ps-root.is-light-theme .h3ps-reference-insert-toggle:hover,
+.h3ps-root.is-light-theme .h3ps-refine-submit:hover,
+.h3ps-root.is-light-theme .h3ps-sample-controls > button:hover,
+.h3ps-root.is-light-theme .h3ps-frame-count button:hover,
+.h3ps-root.is-light-theme .h3ps-frame-count button.is-active {
+  background: #d7e0e9;
+  color: var(--h3ps-text) !important;
+}
+
+.h3ps-root.is-light-theme .h3ps-add-asset,
+.h3ps-root.is-light-theme .h3ps-asset {
+  background: var(--h3ps-surface-2);
+  border-color: var(--h3ps-border);
+}
+
+.h3ps-root.is-light-theme .h3ps-add-asset,
+.h3ps-root.is-light-theme .h3ps-add-asset span,
+.h3ps-root.is-light-theme .h3ps-asset-copy strong,
+.h3ps-root.is-light-theme .h3ps-asset-copy small {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-add-asset small,
+.h3ps-root.is-light-theme .h3ps-asset-copy small {
+  color: var(--h3ps-muted);
+}
+
+.h3ps-root.is-light-theme .h3ps-api-actions button,
+.h3ps-root.is-light-theme .h3ps-api-actions a,
+.h3ps-root.is-light-theme .h3ps-ollama-command button,
+.h3ps-root.is-light-theme .h3ps-ollama-host-settings button,
+.h3ps-root.is-light-theme .h3ps-ollama-tier-row button {
+  background: var(--h3ps-surface-3);
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-tier-row,
+.h3ps-root.is-light-theme .h3ps-ollama-tier-row code,
+.h3ps-root.is-light-theme .h3ps-api-intro,
+.h3ps-root.is-light-theme .h3ps-api-connected,
+.h3ps-root.is-light-theme .h3ps-api-badges span,
+.h3ps-root.is-light-theme .h3ps-api-disclosure p {
+  color: var(--h3ps-text);
+  border-color: var(--h3ps-border-soft);
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-tier-row.is-detected {
+  background: rgba(232, 97, 60, .08);
+}
+
+.h3ps-root.is-light-theme .h3ps-api-disclosure {
+  border-color: rgba(183, 126, 39, .28);
+  background: rgba(183, 126, 39, .08);
+}
+
+.h3ps-root.is-light-theme .h3ps-api-disclosure strong,
+.h3ps-root.is-light-theme .h3ps-api-disclosure small {
+  color: #765b25;
+}
+
+.h3ps-root.is-light-theme .h3ps-system-prompt-card textarea,
+.h3ps-root.is-light-theme .h3ps-music-system-prompt textarea {
+  background: #ffffff;
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+  scrollbar-color: #b9c2cd transparent;
+}
+
+.h3ps-root.is-light-theme .h3ps-replace-asset,
+.h3ps-root.is-light-theme .h3ps-remove-asset {
+  border-color: var(--h3ps-border);
+  background: rgba(255, 255, 255, .94);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-replace-asset:hover {
+  background: #ffffff;
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-remove-asset:hover {
+  border-color: #d4877b;
+  background: #fff1ee;
+  color: #8e2f24;
+}
+
+.h3ps-root.is-light-theme .h3ps-duration-field input::-webkit-slider-thumb {
+  border-color: #ffffff !important;
+}
+
+.h3ps-root.is-light-theme .h3ps-duration-field input::-moz-range-thumb {
+  border-color: #ffffff !important;
+}
+
+.h3ps-root.is-light-theme .h3ps-draft-defaults-action button {
+  background: var(--h3ps-surface-3);
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-draft-defaults-action button:hover {
+  background: #d7e0e9;
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-icon-button,
+.h3ps-root.is-light-theme .h3ps-media-filters button.is-active,
+.h3ps-root.is-light-theme .h3ps-active-model > em,
+.h3ps-root.is-light-theme .h3ps-toast {
+  background: var(--h3ps-surface-3);
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-icon-button:hover,
+.h3ps-root.is-light-theme .h3ps-media-filters button:hover {
+  background: #d7e0e9;
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-media-filters button.is-active b,
+.h3ps-root.is-light-theme .h3ps-active-model > em {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-toggle-control > span {
+  background: #aeb9c6;
+}
+
+.h3ps-root.is-light-theme .h3ps-toast pre {
+  background: #ffffff;
+  border: 1px solid var(--h3ps-border-soft);
+  color: var(--h3ps-text);
+}
+
+/* The catalog has its own dark header/list rules in the shared skin. */
+.h3ps-root.is-light-theme .h3ps-other-models-popover > header {
+  background: var(--h3ps-surface-2);
+  border-color: var(--h3ps-border-soft);
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-popover > header strong,
+.h3ps-root.is-light-theme .h3ps-other-models-popover > header small,
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row strong,
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row small,
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row .h3ps-model-source {
+  color: var(--h3ps-text);
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-popover > header small,
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row small,
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row .h3ps-model-source {
+  color: var(--h3ps-muted);
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row {
+  border-color: var(--h3ps-border-soft);
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row:hover {
+  background: var(--h3ps-surface-2);
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row a {
+  color: #356ea8;
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row a:hover {
+  color: #24527f;
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-catalog {
+  padding-top: 0;
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-popover {
+  /* Keep the catalog below the full header; the shared 49px grid track
+     otherwise lets the first hover row slide underneath the 62px header. */
+  grid-template-rows: 62px minmax(0, 1fr);
+}
+
+.h3ps-root.is-light-theme .h3ps-other-models-catalog .h3ps-model-setup-row:first-child {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-journey li:not(:last-child)::after {
+  background: var(--h3ps-border);
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-journey li em {
+  background: var(--h3ps-surface);
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-state,
+.h3ps-root.is-light-theme .h3ps-ollama-ready,
+.h3ps-root.is-light-theme .h3ps-ollama-ready-heading,
+.h3ps-root.is-light-theme .h3ps-ollama-host-settings {
+  border-color: var(--h3ps-border-soft);
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-badges span {
+  border-color: var(--h3ps-border);
+  color: var(--h3ps-muted);
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-badges span.is-tested {
+  border-color: rgba(47, 133, 90, .35);
+  color: #2f855a;
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-tier-row {
+  grid-template-columns: 70px minmax(0, 1fr) 66px 32px;
+  padding-right: 8px;
+}
+
+.h3ps-root.is-light-theme .h3ps-ollama-tier-heading {
+  color: var(--h3ps-muted);
+}
+
+/* Keep large text consistent for controls whose shared reset otherwise inherits the root size. */
+.h3ps-root.is-light-theme .h3ps-installed-model-control select,
+.h3ps-root.is-light-theme .h3ps-ollama-model-select select,
+.h3ps-root.is-light-theme .h3ps-api-model-select select {
+  border-color: var(--h3ps-border);
+}
+
+.h3ps-root.is-light-theme .h3ps-preview-dialog footer span { color: #26734d; }

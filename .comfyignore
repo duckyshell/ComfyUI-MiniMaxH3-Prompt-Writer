@@ -5,4 +5,5 @@ scripts/
 standalone/
 tests/
 docs/dev/standalone/
+preview-downloads/
 *.pyc

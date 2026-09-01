@@ -477,6 +477,23 @@
   border-color: #ffffff !important;
 }
 
+.h3ps-root.is-light-theme .h3ps-primary-button.is-cancel {
+  border-color: #d6dde6;
+  background: #ffffff;
+  color: #111111 !important;
+}
+
+.h3ps-root.is-light-theme .h3ps-primary-button.is-cancel:hover {
+  border-color: #b8c2ce;
+  background: #f5f7fa;
+  color: #111111 !important;
+}
+
+.h3ps-root.is-light-theme .h3ps-primary-button.is-cancel .h3ps-spinner {
+  border-color: #aeb7c2;
+  border-top-color: #111111;
+}
+
 .h3ps-root.is-light-theme .h3ps-draft-defaults-action button {
   background: var(--h3ps-surface-3);
   border-color: var(--h3ps-border);

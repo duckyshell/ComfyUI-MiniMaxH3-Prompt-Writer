@@ -1325,6 +1325,8 @@ test("accessibility toggles expose persistent theme and text-size state", () => 
   assert.doesNotMatch(largeTextSource, /\.h3ps-root\.is-light-theme/);
   assert.doesNotMatch(largeTextSource, /transform:\s*scale/);
   assert.match(lightThemeSource, /\.h3ps-root\.is-light-theme \.h3ps-duration-field input::\-webkit-slider-thumb[\s\S]{0,180}border-color: #ffffff !important/);
+  assert.match(lightThemeSource, /\.h3ps-root\.is-light-theme \.h3ps-primary-button\.is-cancel[\s\S]{0,180}background: #ffffff[\s\S]{0,100}color: #111111 !important/);
+  assert.match(lightThemeSource, /\.h3ps-root\.is-light-theme \.h3ps-primary-button\.is-cancel \.h3ps-spinner[\s\S]{0,140}border-top-color: #111111/);
   assert.match(skinSource, /\.h3ps-other-models-popover[\s\S]{0,220}grid-template-rows: 62px minmax\(0, 1fr\)/);
   assert.match(largeTextSource, /\.h3ps-root\.is-large-text\.is-fullscreen \.h3ps-secondary-button[\s\S]{0,140}font-size: 13px/);
   assert.match(largeTextSource, /\.h3ps-root\.is-large-text \.h3ps-sample-controls[\s\S]{0,240}flex-wrap: wrap[\s\S]{0,120}gap: 14px/);

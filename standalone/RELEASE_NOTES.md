@@ -1,18 +1,19 @@
-# H3 Prompt Writer Standalone v0.1.2
+# H3 Prompt Writer Standalone v0.1.3
 
 Standalone Windows version. ComfyUI is not required.
 
 ## Download
 
-[Download H3-Prompt-Writer-Standalone-Windows-v0.1.2.zip](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.2/H3-Prompt-Writer-Standalone-Windows-v0.1.2.zip)
+[Download H3-Prompt-Writer-Standalone-Windows-v0.1.3.zip](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/releases/download/standalone-v0.1.3/H3-Prompt-Writer-Standalone-Windows-v0.1.3.zip)
 
 Do not download **Source code (zip)** or **Source code (tar.gz)** for normal use.
 Do not install this package into ComfyUI `custom_nodes`.
 
-## Fixed
+## What's new
 
-- Fixed Local GGUF generation failing before the model could respond.
-- Restored Thinking controls for Local GGUF models whose templates support them.
+- Added a compact Clear menu for clearing prompts while keeping media, or clearing the entire workspace.
+- Added custom 2–16 frame contact sheets with more readable frame labels.
+- Improved safe remote Ollama host editing and private-network hostname handling.
 
 ## Features
 
@@ -36,4 +37,4 @@ libraries are not bundled.
 - Python 3.10 or newer, or `uv`
 - At least one configured provider
 
-Based on H3 Prompt Writer extension `0.4.3`.
+Based on H3 Prompt Writer extension `0.4.4`.

@@ -1,5 +1,12 @@
 # Standalone changelog
 
+## 0.1.3 - 2026-09-02
+
+- Updated the shared Writer interface and core to H3 Prompt Writer extension `0.4.4`.
+- Added a compact Clear menu for clearing prompts while keeping media, or clearing the entire workspace.
+- Added custom 2–16 frame contact sheets with more readable frame labels.
+- Improved safe remote Ollama host editing and private-network hostname handling.
+
 ## 0.1.2 - 2026-08-30
 
 - Fixed Local GGUF generation failing before the model could respond.

@@ -17,11 +17,11 @@ class VersionContractTest(unittest.TestCase):
         backend_source = (REPOSITORY_ROOT / "backend" / "version.py").read_text(encoding="utf-8")
         match = re.search(r'^VERSION\s*=\s*"([^"]+)"', backend_source, re.MULTILINE)
         self.assertIsNotNone(match)
-        self.assertEqual(extension_version, "0.4.3")
+        self.assertEqual(extension_version, "0.4.4")
         self.assertEqual(match.group(1), extension_version)
 
         standalone_version = (STANDALONE_ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        self.assertEqual(standalone_version, "0.1.2")
+        self.assertEqual(standalone_version, "0.1.3")
         self.assertNotEqual(standalone_version, extension_version)
         self.assertNotIn("standalone", project["project"]["name"].lower())
 

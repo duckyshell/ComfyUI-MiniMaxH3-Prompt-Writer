@@ -4,7 +4,7 @@ import test from "node:test";
 
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");
-const { availableReferenceTags, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } = await import(`data:text/javascript;base64,${encoded}`);
+const { availableReferenceTags, comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } = await import(`data:text/javascript;base64,${encoded}`);
 const responseSource = await readFile(new URL("../web/api/response.js", import.meta.url), "utf8");
 const responseEncoded = Buffer.from(responseSource).toString("base64");
 const { readApiResponse } = await import(`data:text/javascript;base64,${responseEncoded}`);
@@ -761,6 +761,22 @@ test("VRAM retry waits for the required free-memory target", () => {
   assert.equal(vramReleaseReachedTarget(4_000, 10_000, 10_000), true);
   assert.equal(vramReleaseReachedTarget(4_000, 4_063), false);
   assert.equal(vramReleaseReachedTarget(4_000, 4_064), true);
+});
+
+test("manual VRAM release skips polling when idle ComfyUI has no loaded models", () => {
+  assert.equal(comfyVramIsAlreadyEmpty({
+    comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 0 },
+  }), true);
+  assert.equal(comfyVramIsAlreadyEmpty({
+    comfyui: { available: true, queue_running: 1, queue_pending: 0, loaded_models: 0 },
+  }), false);
+  assert.equal(comfyVramIsAlreadyEmpty({
+    comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 1 },
+  }), false);
+  assert.equal(comfyVramIsAlreadyEmpty({
+    comfyui: { available: false, queue_running: 0, queue_pending: 0, loaded_models: 0 },
+  }), false);
+  assert.match(mainSource, /typeof retry !== "function" && requiredFree == null && comfyVramIsAlreadyEmpty\(before\)/);
 });
 
 test("Direct context preferences preserve Qwen 32K and 48K tiers", () => {

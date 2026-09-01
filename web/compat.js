@@ -33,6 +33,14 @@ export function vramReleaseReachedTarget(beforeFreeMb, currentFreeMb, requiredFr
   return Number.isFinite(beforeFreeMb) && currentFreeMb - beforeFreeMb >= 64;
 }
 
+export function comfyVramIsAlreadyEmpty(status) {
+  const comfyui = status?.comfyui;
+  return comfyui?.available === true
+    && Number(comfyui.queue_running || 0) === 0
+    && Number(comfyui.queue_pending || 0) === 0
+    && Number(comfyui.loaded_models) === 0;
+}
+
 export function fileCountFromDataTransfer(dataTransfer) {
   const items = [...(dataTransfer?.items || [])];
   if (items.length) return items.filter((item) => item?.kind === "file").length;

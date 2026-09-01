@@ -1,5 +1,10 @@
 # ComfyUI MiniMax H3 Prompt Writer
 
+> [!IMPORTANT]
+> **Experimental accessibility branch**
+>
+> This experimental branch adds a light theme and a larger text option. Both options can be enabled independently. These changes are not included in `main` or in the current stable release and may be changed or removed later.
+
 <p align="center">
   <img src="web/assets/h3-prompt-writer-launcher.svg" width="96" alt="H3 Prompt Writer">
 </p>

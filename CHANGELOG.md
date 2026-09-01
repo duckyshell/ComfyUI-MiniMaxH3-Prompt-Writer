@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — Accessibility Preview
+
+This experimental branch adds a light theme and a larger text option. The changes are separate from `main` and are not part of the current stable release.
+
+### Added
+
+- Added independent light-theme and larger-text controls with saved preferences.
+- Added matching display support for the Standalone Direct llama.cpp interface.
+
+### Improved
+
+- Increased text and control sizes across the main workspace, Settings, media previews, and video frame selection when larger text is enabled.
+- Refined light-theme contrast, borders, hover states, spacing, and model setup surfaces.
+
+### Notes
+
+- This branch uses local preview packages only. It does not create or replace the stable ComfyUI or Standalone releases.
+
 ## 0.4.3 - 2026-08-29
 
 ### Features

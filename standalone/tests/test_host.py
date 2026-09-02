@@ -151,8 +151,10 @@ class ManagedGGUFTest(unittest.TestCase):
             other_model.touch()
             projector.touch()
 
+            model_paths = {model.resolve(), other_model.resolve()}
+
             def reader(path: Path) -> dict[str, object]:
-                if path in {model, other_model}:
+                if path.resolve() in model_paths:
                     return {
                         "architecture": "qwen35",
                         "name": "Qwen3.8-27B",

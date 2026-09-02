@@ -47,6 +47,42 @@ export async function freeComfyVram() {
   }
 }
 
+export async function fetchComfyImageFile(source, filenameOverride = null) {
+  const filename = String(source?.filename ?? "").trim();
+  const subfolder = String(source?.subfolder ?? "").trim();
+  const type = String(source?.type ?? "input").trim().toLowerCase();
+  if (!filename || filename.includes("/") || !["input", "output", "temp"].includes(type)) {
+    const error = new Error("The workflow image source cannot be resolved through ComfyUI's image view endpoint.");
+    error.code = "WORKFLOW_REFERENCE_UNAVAILABLE";
+    throw error;
+  }
+  const query = new URLSearchParams({ filename, subfolder, type });
+  const response = await api.fetchApi(`/view?${query.toString()}`);
+  if (!response.ok) {
+    const error = new Error(`ComfyUI could not read workflow image ${filename} (${response.status}).`);
+    error.code = "WORKFLOW_REFERENCE_READ_FAILED";
+    throw error;
+  }
+  const blob = await response.blob();
+  const contentType = blob.type || response.headers.get("content-type") || "image/png";
+  if (!contentType.startsWith("image/")) {
+    const error = new Error(`Workflow source ${filename} did not resolve to an image.`);
+    error.code = "WORKFLOW_REFERENCE_READ_FAILED";
+    throw error;
+  }
+  return new File([blob], filenameOverride || filename, { type: contentType });
+}
+
+export function materializeWorkflowImage(sessionId, mode, file, plan, replaceAssetId = null) {
+  const body = new FormData();
+  body.append("session_id", sessionId);
+  body.append("mode", mode);
+  body.append("materialization_plan", JSON.stringify(plan));
+  body.append("file", file);
+  const replace = replaceAssetId ? `?replace_asset_id=${encodeURIComponent(replaceAssetId)}` : "";
+  return request(`/media/materialize-workflow-image${replace}`, { method: "POST", body });
+}
+
 export function uploadMedia(sessionId, mode, files, replaceAssetId = null) {
   const body = new FormData();
   body.append("session_id", sessionId);

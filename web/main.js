@@ -1,6 +1,24 @@
 import { app } from "/scripts/app.js";
-import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
+import { cancel, clearMedia, diagnoseGGUFRuntime, disconnectApiProvider, fetchComfyImageFile, freeComfyVram, generate, getApiProviderModels, getApiProviderPresets, getGuides, getModels, getOllamaStatus, getStatus, getSystemPrompt, materializeWorkflowImage, probeApiProvider, probeExternalServer, refine, removeMedia, reorderMedia, resampleMedia, unloadModel, uploadMedia } from "./api/h3studio.js";
 import { availableReferenceTags, comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
+import {
+  applySequenceToContinuum,
+  chooseContinuumSampler,
+  CONTINUUM_MAX_CHUNKS,
+  CONTINUUM_MAX_SECONDS,
+  CONTINUUM_MIN_CHUNKS,
+  CONTINUUM_MIN_SECONDS,
+  bindContinuumReferenceMedia,
+  continuumDraftOutput,
+  continuumSamplerLabel,
+  discoverContinuumReferenceInventory,
+  discoverContinuumWorkflowImageMedia,
+  parseContinuumTimeline,
+  sequenceStateFromResult,
+  sameContinuumReferenceInventory,
+  updateContinuumDraftFromEditor,
+  validateContinuumModeTopology,
+} from "./continuum.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
@@ -373,6 +391,217 @@ function icon(name, size = 16) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">${paths[name] || paths.info}</svg>`;
 }
 
+function workflowReferenceState() {
+  if (!studio || studio.mode !== "Reference" || studio.generationTarget !== "continuum") {
+    return { status: "hidden", candidates: [], inventory: null };
+  }
+  const choice = chooseContinuumSampler(app);
+  if (choice.status !== "selected") return { status: choice.status, candidates: [], inventory: null };
+  try {
+    const discovered = discoverContinuumWorkflowImageMedia(app, choice.sampler);
+    return { status: "ready", sampler: choice.sampler, ...discovered };
+  } catch (error) {
+    return { status: "error", candidates: [], inventory: null, error };
+  }
+}
+
+function workflowBindingStatus(candidate) {
+  const binding = studio.workflowReferenceBindings?.[candidate.key] || null;
+  const asset = binding
+    ? studio.assets.find((item) => String(item.id) === String(binding.asset_id)) || null
+    : null;
+  if (!binding || !asset) return { binding, asset, state: "missing" };
+  const currentIdentity = candidate.source_identity == null ? null : String(candidate.source_identity);
+  const boundIdentity = binding.source_identity == null ? null : String(binding.source_identity);
+  return {
+    binding,
+    asset,
+    state: currentIdentity === boundIdentity ? "current" : "stale",
+  };
+}
+
+function workflowReferencePreviewUrl(candidate) {
+  if (!candidate?.file) return "";
+  const query = new URLSearchParams({
+    filename: candidate.file.filename,
+    subfolder: candidate.file.subfolder || "",
+    type: candidate.file.type || "input",
+  });
+  return `/view?${query.toString()}`;
+}
+
+function workflowReferenceReason(candidate) {
+  return {
+    dynamic_queue_group: "Dynamic queue-group image; the file is chosen when the workflow is queued.",
+    queue_driven_output: "Queue-driven image; there is no stable file to attach before execution.",
+    processed_image_chain: "This slot passes through an unsupported image-processing chain; Writer cannot copy the exact runtime pixels before execution.",
+    dynamic_transform_parameters: "Scale Image to Total Pixels Adv has connected width/height overrides, so its final pixels are dynamic.",
+    unsupported_transform_configuration: "Scale Image to Total Pixels Adv has a configuration Writer cannot reproduce safely.",
+    unsupported_transform_method: "Only Lanczos Scale Image to Total Pixels Adv chains are currently materialized exactly.",
+    unsupported_transform_output: "Writer only materializes the image output of Scale Image to Total Pixels Adv.",
+    missing_transform_source: "Scale Image to Total Pixels Adv has no resolvable static image source.",
+    unsupported_transform_source: "Scale Image to Total Pixels Adv is fed by a source that Writer cannot materialize exactly.",
+    unreadable_reference_file: "The active Reference Shelf slot has no readable ComfyUI file descriptor.",
+    unsupported_runtime_source: "This active workflow source cannot be materialized into Writer media safely.",
+    missing_connection: "The active workflow image connection could not be resolved.",
+  }[candidate?.reason] || "This workflow image cannot be attached automatically.";
+}
+
+function renderWorkflowReferencePanel() {
+  const state = workflowReferenceState();
+  if (state.status === "hidden") return "";
+  const header = (detail, action = "") => `
+    <section class="h3ps-workflow-references">
+      <header>
+        <span><strong>Active workflow images</strong><small>${detail}</small></span>
+        <span class="h3ps-workflow-reference-actions">${action}<button type="button" class="h3ps-quiet-button" data-workflow-ref-refresh>Refresh</button></span>
+      </header>`;
+
+  if (state.status === "missing") {
+    return `${header("Add H3 Continuum Sampler V3.4–V3.7 to expose its active image conditioning.")}<p class="h3ps-workflow-reference-empty">No compatible Continuum sampler is present.</p></section>`;
+  }
+  if (state.status === "multiple") {
+    return `${header("Select exactly one H3 Continuum Sampler V3.4–V3.7 on the canvas.")}<p class="h3ps-workflow-reference-empty">Multiple compatible samplers are present.</p></section>`;
+  }
+  if (state.status === "error") {
+    return `${header("Writer could not resolve the active workflow image state.")}<p class="h3ps-workflow-reference-empty">${escapeHtml(state.error?.message || "Workflow reference discovery failed.")}</p></section>`;
+  }
+
+  const candidates = state.candidates;
+  const actionable = candidates.filter((candidate) => {
+    if (!candidate.importable) return false;
+    return workflowBindingStatus(candidate).state !== "current";
+  });
+  const addAll = candidates.length
+    ? `<button type="button" class="h3ps-secondary-button h3ps-workflow-add-all" data-workflow-ref-add-all ${!actionable.length || studio.workflowReferenceImportBusy ? "disabled" : ""}>${actionable.length ? `Add active workflow refs (${actionable.length})` : "Active refs added"}</button>`
+    : "";
+  const detail = candidates.length
+    ? `${candidates.length} active image conditioning input${candidates.length === 1 ? "" : "s"} on the selected sampler. Add stable images here so the prompt model can actually inspect them.`
+    : "The selected sampler currently has no active image conditioning inputs.";
+
+  const rows = candidates.map((candidate, index) => {
+    const binding = workflowBindingStatus(candidate);
+    // Once a stable workflow source has been imported, show the exact Writer
+    // asset the prompt model will inspect. For a materialized transform this is
+    // the post-transform image, not the upstream source thumbnail.
+    const preview = binding.state === "current" && binding.asset?.preview_url
+      ? binding.asset.preview_url
+      : candidate.importable ? workflowReferencePreviewUrl(candidate) : "";
+    const status = binding.state === "current"
+      ? "Writer can see"
+      : binding.state === "stale"
+        ? "Update needed"
+        : candidate.importable
+          ? "Workflow only"
+          : candidate.reason === "dynamic_queue_group" || candidate.reason === "queue_driven_output"
+            ? "Dynamic at execution"
+            : candidate.reason === "unsupported_transform_method"
+              ? "Unsupported resize method"
+              : candidate.reason === "dynamic_transform_parameters"
+                ? "Dynamic resize inputs"
+                : "Exact pixels unavailable";
+    const action = candidate.importable
+      ? `<button type="button" data-workflow-ref-add="${index}" ${studio.workflowReferenceImportBusy || binding.state === "current" ? "disabled" : ""}>${binding.state === "current" ? "Added" : binding.state === "stale" ? "Update" : "Add"}</button>`
+      : `<button type="button" disabled title="${escapeHtml(workflowReferenceReason(candidate))}">Unavailable</button>`;
+    const detailText = candidate.source_label
+      ? `${candidate.input_name} · ${candidate.source_label}`
+      : candidate.input_name;
+    return `
+      <div class="h3ps-workflow-reference-row ${binding.state === "current" ? "is-bound" : binding.state === "stale" ? "is-stale" : ""}">
+        <span class="h3ps-workflow-reference-thumb">${preview ? `<img src="${escapeHtml(preview)}" alt="">` : icon("image", 16)}</span>
+        <span class="h3ps-workflow-reference-copy"><strong>${escapeHtml(candidate.label)}</strong><small>${escapeHtml(detailText)}</small></span>
+        <em title="${candidate.importable ? "" : escapeHtml(workflowReferenceReason(candidate))}">${status}</em>
+        ${action}
+      </div>`;
+  }).join("");
+
+  return `${header(detail, addAll)}<div class="h3ps-workflow-reference-list">${rows || '<p class="h3ps-workflow-reference-empty">No active workflow image slots.</p>'}</div></section>`;
+}
+
+function forgetWorkflowReferenceAsset(assetId) {
+  for (const [key, binding] of Object.entries(studio.workflowReferenceBindings || {})) {
+    if (String(binding?.asset_id ?? "") === String(assetId ?? "")) delete studio.workflowReferenceBindings[key];
+  }
+}
+
+async function importWorkflowReferenceCandidates(candidates) {
+  if (studio.workflowReferenceImportBusy || !Array.isArray(candidates) || !candidates.length) return;
+  const actionable = candidates.filter((candidate) => {
+    if (!candidate?.importable || !candidate.file) return false;
+    return workflowBindingStatus(candidate).state !== "current";
+  });
+  if (!actionable.length) {
+    showToast("Workflow references are current", "All importable active workflow images are already visible to the prompt model.");
+    return;
+  }
+
+  const referenceImages = studio.assets.filter((asset) => asset.mode === "Reference" && asset.type === "image").length;
+  const additions = actionable.filter((candidate) => !workflowBindingStatus(candidate).asset).length;
+  if (referenceImages + additions > 9) {
+    showToast(
+      "Reference image limit reached",
+      `Adding these workflow references would require ${referenceImages + additions} images, but Reference mode accepts at most 9. Remove unused analysis images first.`,
+    );
+    return;
+  }
+
+  studio.workflowReferenceImportBusy = true;
+  renderMedia(studio.mode);
+  let imported = 0;
+  try {
+    for (const candidate of actionable) {
+      const before = workflowBindingStatus(candidate);
+      const file = await fetchComfyImageFile(candidate.file, candidate.file.filename);
+      const replaceAssetId = before.asset?.id || null;
+      const result = candidate.materialization_plan
+        ? await materializeWorkflowImage(
+          studio.sessionId,
+          "Reference",
+          file,
+          candidate.materialization_plan,
+          replaceAssetId,
+        )
+        : await uploadMedia(studio.sessionId, "Reference", [file], replaceAssetId);
+      let assetId = replaceAssetId;
+      if (replaceAssetId) {
+        studio.assets = result.assets;
+      } else {
+        const added = result.assets?.[0];
+        if (!added?.id) throw new Error("Writer did not return the imported workflow image asset.");
+        studio.assets = [...studio.assets, ...result.assets];
+        assetId = added.id;
+      }
+      studio.workflowReferenceBindings[candidate.key] = {
+        asset_id: assetId,
+        source_identity: candidate.source_identity ?? null,
+        label: candidate.label,
+        input_name: candidate.input_name,
+      };
+      imported += 1;
+    }
+    showToast(
+      "Workflow references added",
+      `${imported} active workflow image${imported === 1 ? "" : "s"} ${imported === 1 ? "is" : "are"} now visible to the prompt model and bound to the matching downstream conditioning slot${imported === 1 ? "" : "s"}.`,
+      null,
+      null,
+      { durationMs: 5200 },
+    );
+  } catch (error) {
+    showToast(error.code || "Workflow reference import failed", error.message, error.details);
+  } finally {
+    studio.workflowReferenceImportBusy = false;
+    renderMedia(studio.mode);
+  }
+}
+
+function bindActiveWorkflowReferenceMedia(inventory) {
+  return bindContinuumReferenceMedia(
+    inventory,
+    studio.workflowReferenceBindings,
+    studio.assets,
+  );
+}
+
 function renderAsset(asset, index) {
   const destructiveDisabled = studio.requestBusy ? "disabled" : "";
   const draggable = studio.requestBusy ? "false" : "true";
@@ -425,6 +654,7 @@ function renderMedia(mode) {
     const filter = isReference ? studio.mediaFilter : "all";
     const visibleAssets = filter === "all" ? assets : assets.filter((asset) => asset.type === filter);
     const counts = assets.reduce((result, asset) => ({ ...result, [asset.type]: (result[asset.type] || 0) + 1 }), {});
+    const workflowReferences = isReference ? renderWorkflowReferencePanel() : "";
     const filters = isReference ? `
       <div class="h3ps-media-filters" aria-label="Reference type">
         <button type="button" data-media-filter="all" class="${filter === "all" ? "is-active" : ""}">All <b>${assets.length}/12</b></button>
@@ -435,6 +665,7 @@ function renderMedia(mode) {
     const addLabel = !isReference || filter === "image" ? "Add image" : filter === "video" ? "Add video" : filter === "audio" ? "Add audio" : "Add media";
     const canAdd = isReference || assets.length < data.limit;
     media.innerHTML = `
+      ${workflowReferences}
       ${filters}
       <div class="h3ps-assets ${isReference ? "is-reference" : ""}">${visibleAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
         ${canAdd ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 18)}<span>${addLabel}</span><small>Drop files here</small></button>` : ""}
@@ -482,6 +713,15 @@ function referenceTagKind(reference) {
 
 function referenceTagsForCurrentDraft() {
   if (!studio || studio.mode !== "Reference") return [];
+  if (studio.generationTarget === "continuum") {
+    const workflow = workflowReferenceState();
+    if (workflow.status === "ready") {
+      return workflow.inventory.items
+        .map((item) => item?.tag)
+        .filter(Boolean)
+        .map(String);
+    }
+  }
   return availableReferenceTags(studio.assets, studio.root.querySelector("[data-output]").value);
 }
 
@@ -540,6 +780,24 @@ function insertSelectedReference(reference) {
 
 function bindMediaActions(mode) {
   const media = studio.root.querySelector("[data-h3ps-media]");
+  studio.root.querySelectorAll("[data-workflow-ref-refresh]").forEach((button) => {
+    button.addEventListener("click", () => renderMedia(mode));
+  });
+  studio.root.querySelectorAll("[data-workflow-ref-add-all]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const current = workflowReferenceState();
+      if (current.status === "ready") void importWorkflowReferenceCandidates(current.candidates);
+    });
+  });
+  studio.root.querySelectorAll("[data-workflow-ref-add]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const current = workflowReferenceState();
+      const candidate = current.status === "ready"
+        ? current.candidates[Number(button.dataset.workflowRefAdd)]
+        : null;
+      if (candidate) void importWorkflowReferenceCandidates([candidate]);
+    });
+  });
   studio.root.querySelectorAll("[data-media-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       studio.mediaFilter = button.dataset.mediaFilter;
@@ -564,8 +822,10 @@ function bindMediaActions(mode) {
     button.addEventListener("click", async (event) => {
       event.stopPropagation();
       try {
-        const result = await removeMedia(studio.sessionId, button.dataset.removeAsset);
+        const removedAssetId = button.dataset.removeAsset;
+        const result = await removeMedia(studio.sessionId, removedAssetId);
         studio.assets = result.assets;
+        forgetWorkflowReferenceAsset(removedAssetId);
         renderMedia(mode);
       } catch (error) {
         showToast(error.code || "Remove failed", error.message, error.details);
@@ -680,6 +940,10 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
     const result = await uploadMedia(studio.sessionId, mode, files, replaceAssetId);
     studio.sessionId = result.session_id;
     studio.assets = replaceAssetId ? result.assets : [...studio.assets, ...result.assets];
+    // A manual Replace changes the Prompt Writer copy independently of its
+    // workflow source. Drop any workflow binding only after replacement
+    // succeeds; the Active workflow images panel will then offer Add again.
+    if (replaceAssetId) forgetWorkflowReferenceAsset(replaceAssetId);
     renderMedia(mode);
     hideToast();
     if (audioWasAdded(previousAssets, studio.assets)) {
@@ -856,10 +1120,32 @@ function defaultModeDraft(mode) {
 }
 
 function currentDraftFields() {
-  return {
+  const output = studio.root.querySelector("[data-output]").value;
+  const existing = studio.modeDrafts[studio.mode] || {};
+  const base = {
     brief: currentBriefTextarea().value,
     lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
-    prompt: studio.root.querySelector("[data-output]").value,
+  };
+  if (studio.mode === "Music3") return { ...base, prompt: output };
+  if (studio.generationTarget === "continuum") {
+    const continuum = studio.continuumSequence?.plan
+      ? updateContinuumDraftFromEditor(studio.continuumSequence, output)
+      : studio.continuumSequence;
+    studio.continuumSequence = continuum;
+    return {
+      ...base,
+      prompt: "",
+      single_prompt: existing.single_prompt || existing.prompt || defaultModeDraft(studio.mode).prompt,
+      generation_target: "continuum",
+      continuum,
+    };
+  }
+  return {
+    ...base,
+    prompt: output,
+    single_prompt: output,
+    generation_target: "single",
+    continuum: studio.continuumSequence || existing.continuum || null,
   };
 }
 
@@ -882,6 +1168,7 @@ function clearCurrentPrompts({ notify = true } = {}) {
   const output = studio.root.querySelector("[data-output]");
   currentBriefTextarea().value = draft.brief;
   output.value = draft.prompt;
+  if (studio.mode !== "Music3") studio.continuumSequence = draft.continuum || null;
   studio.lastModelPrompt = null;
   studio.lastModelMeta = null;
   studio.refineRestore = null;
@@ -893,7 +1180,8 @@ function clearCurrentPrompts({ notify = true } = {}) {
   renderPromptHighlights();
   syncModifiedState();
   syncReferenceInsertControl();
-  saveCurrentModeDraft();
+  studio.modeDrafts[studio.mode] = draft;
+  saveModeDrafts(localStorage, studio.modeDrafts);
   if (notify) {
     const detail = studio.mode === "Music3"
       ? "The Music Brief and generated caption were cleared. Lyrics and media were kept."
@@ -908,6 +1196,7 @@ async function clearCurrentMedia({ notify = true } = {}) {
   try {
     const result = await clearMedia(studio.sessionId, studio.mode);
     studio.assets = result.assets;
+    if (studio.mode === "Reference") studio.workflowReferenceBindings = {};
     closeVideoPreview();
     closeImagePreview();
     renderMedia(studio.mode);
@@ -966,9 +1255,19 @@ function restoreModeDraft(mode) {
   const output = studio.root.querySelector("[data-output]");
   currentBriefTextarea().value = draft.brief;
   if (mode === "Music3") studio.root.querySelector("[data-music-lyrics]").value = draft.lyrics || "";
-  output.value = draft.prompt;
-  studio.lastModelPrompt = draft.prompt;
-  studio.lastModelMeta = promptLengthMeta(draft.prompt);
+  const savedTarget = mode === "Music3" ? "single" : draft.generation_target || studio.generationTarget || "single";
+  studio.generationTarget = savedTarget;
+  studio.continuumSequence = mode === "Music3" ? null : draft.continuum || null;
+  if (studio.continuumSequence?.settings) {
+    studio.continuumChunks = studio.continuumSequence.settings.chunks;
+    studio.continuumChunkSeconds = studio.continuumSequence.settings.chunk_seconds;
+  }
+  const prompt = savedTarget === "continuum"
+    ? studio.continuumSequence ? continuumDraftOutput(studio.continuumSequence) : ""
+    : draft.single_prompt || draft.prompt;
+  output.value = prompt;
+  studio.lastModelPrompt = prompt;
+  studio.lastModelMeta = promptLengthMeta(prompt);
   studio.refineRestore = null;
   studio.root.querySelector("[data-refine-restore]").hidden = true;
   studio.lyricsRestore = null;
@@ -976,8 +1275,215 @@ function restoreModeDraft(mode) {
   studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = promptLengthMeta(output.value);
   updateBriefLayout();
   updateMusicLyricsCount();
+  syncGenerationTarget();
+  syncModeAvailability();
   renderPromptHighlights();
   syncModifiedState();
+}
+
+function syncContinuumChunkSelector() {
+  if (!studio?.root) return;
+  const field = studio.root.querySelector("[data-refine-chunk-field]");
+  const select = studio.root.querySelector("[data-refine-chunk]");
+  const active = studio.mode !== "Music3" && studio.generationTarget === "continuum";
+  field.hidden = !active;
+  if (!active) return;
+  const previous = Number(select.value) || 1;
+  select.innerHTML = Array.from({ length: studio.continuumChunks }, (_, offset) => (
+    `<option value="${offset + 1}">Chunk ${offset + 1}</option>`
+  )).join("");
+  select.value = String(Math.min(previous, studio.continuumChunks));
+}
+
+function syncGenerationTarget() {
+  if (!studio?.root) return;
+  const active = studio.mode !== "Music3" && studio.generationTarget === "continuum";
+  studio.root.querySelectorAll("[data-generation-target]").forEach((button) => {
+    const selected = button.dataset.generationTarget === (active ? "continuum" : "single");
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+    button.disabled = studio.requestBusy;
+  });
+  studio.root.querySelector("[data-generation-target-control]").hidden = studio.mode === "Music3";
+  studio.root.querySelector("[data-single-duration-field]").hidden = active;
+  studio.root.querySelector("[data-continuum-settings]").hidden = !active;
+  studio.root.querySelector("[data-continuum-chunks]").value = String(studio.continuumChunks);
+  studio.root.querySelector("[data-continuum-seconds]").value = String(studio.continuumChunkSeconds);
+  studio.root.querySelector("[data-continuum-total]").textContent = `${(studio.continuumChunks * studio.continuumChunkSeconds).toFixed(1).replace(/\.0$/, "")} seconds total`;
+  const badge = studio.root.querySelector("[data-continuum-output-badge]");
+  badge.hidden = !active;
+  badge.textContent = active ? `${studio.continuumChunks} chunks · ${Number(studio.continuumChunkSeconds).toLocaleString()}s each` : "";
+  studio.root.querySelector("[data-output-label]").textContent = studio.mode === "Music3" ? "Generated caption" : active ? "Continuum sequence" : "Generated prompt";
+  studio.root.querySelector("[data-copy-label]").textContent = studio.mode === "Music3" ? "Copy caption" : active ? "Copy sequence" : "Copy prompt";
+  const generateLabel = studio.root.querySelector("[data-generate-label]");
+  if (generateLabel && !studio.requestBusy) generateLabel.textContent = studio.mode === "Music3" ? "Generate caption" : active ? "Generate sequence" : "Generate prompt";
+  studio.root.querySelector("[data-apply-continuum]").hidden = !active;
+  studio.root.querySelector("[data-apply-continuum]").disabled = studio.requestBusy || !studio.continuumSequence?.plan;
+  studio.root.querySelector("[data-refine-title]").textContent = active ? "Refine one chunk" : studio.mode === "Music3" ? "Refine caption" : "Refine prompt";
+  studio.root.querySelector("[data-refine-helper]").textContent = active ? "Only the selected chunk changes" : studio.mode === "Music3" ? "Describe the musical change" : "Describe only what should change";
+  syncContinuumChunkSelector();
+}
+
+function setGenerationTarget(target) {
+  if (studio.mode === "Music3" || !["single", "continuum"].includes(target) || target === studio.generationTarget) return;
+  saveCurrentModeDraft();
+  studio.generationTarget = target;
+  const draft = studio.modeDrafts[studio.mode] || {};
+  const output = studio.root.querySelector("[data-output]");
+  if (target === "continuum") {
+    studio.continuumSequence = draft.continuum || studio.continuumSequence;
+    if (studio.continuumSequence?.settings) {
+      studio.continuumChunks = studio.continuumSequence.settings.chunks;
+      studio.continuumChunkSeconds = studio.continuumSequence.settings.chunk_seconds;
+      output.value = continuumDraftOutput(studio.continuumSequence);
+    } else {
+      output.value = "";
+    }
+  } else {
+    output.value = draft.single_prompt || draft.prompt || defaultModeDraft(studio.mode).prompt;
+  }
+  studio.lastModelPrompt = output.value;
+  studio.lastModelMeta = promptLengthMeta(output.value);
+  studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
+  syncGenerationTarget();
+  renderMedia(studio.mode);
+  renderPromptHighlights();
+  syncModifiedState();
+  saveCurrentModeDraft();
+  saveUserPreferences(localStorage, studio);
+}
+
+async function applyCurrentSequence(syncSettings = false) {
+  if (!studio.continuumSequence?.plan) {
+    showToast("No Continuum sequence", "Generate a valid H3 Continuum sequence first.");
+    return;
+  }
+  studio.continuumSequence = updateContinuumDraftFromEditor(
+    studio.continuumSequence,
+    studio.root.querySelector("[data-output]").value,
+  );
+  if (studio.continuumSequence.raw_prompt != null) {
+    showToast("Sequence syntax is invalid", "Restore canonical Timeline sections with exact [start-end] boundaries before applying the sequence.");
+    return;
+  }
+  const choice = chooseContinuumSampler(app);
+  if (choice.status === "missing") {
+    showToast("Continuum sampler not found", "Add H3 Continuum Sampler V3.4–V3.7 to the current workflow.");
+    return;
+  }
+  if (choice.status === "multiple") {
+    showToast("Select a Continuum sampler", "Multiple compatible samplers are present. Select exactly one H3 Continuum Sampler V3.4–V3.7 on the canvas, then apply again.");
+    return;
+  }
+  let result;
+  try {
+    result = applySequenceToContinuum(app, choice.sampler, studio.continuumSequence, {
+      syncSettings,
+      mode: studio.mode,
+    });
+  } catch (error) {
+    showToast("Continuum conditioning could not be read", error.message);
+    return;
+  }
+  if (result.status === "apply_failed") {
+    showToast(
+      "Continuum apply failed",
+      "Writer restored the previous sampler settings and Sequence Prompt value after a graph widget callback failed.",
+      result.message || null,
+      null,
+      { dismissOnWorkspaceClick: true },
+    );
+    return;
+  }
+  if (result.status === "source_inventory_mismatch") {
+    showToast(
+      "Continuum conditioning changed",
+      "The selected H3 Continuum reference/keyframe sources differ from the inventory used to generate this sequence. Regenerate the sequence before applying it.",
+      null,
+      null,
+      { dismissOnWorkspaceClick: true },
+    );
+    return;
+  }
+  if (result.status === "mode_topology_mismatch") {
+    const required = result.mode_topology?.required || {};
+    const actual = result.mode_topology?.actual || {};
+    const describe = (value) => value.first_frame && value.last_frame
+      ? "First Frame + Last Frame"
+      : value.first_frame
+        ? "First Frame only"
+        : value.last_frame
+          ? "Last Frame only"
+          : "no First/Last keyframes";
+    const detail = result.mode_topology?.reason === "reference_images_require_reference_mode"
+      ? `T2VA cannot be applied to a sampler with ${actual.reference_images || 0} active Reference Image input(s). Switch to Reference mode or remove those inputs.`
+      : `${studio.mode} requires ${describe(required)}, while the selected H3 Continuum sampler currently has ${describe(actual)}. Rewire First/Last Frame or switch to the matching mode before applying.`;
+    showToast(
+      "Continuum mode does not match sampler",
+      detail,
+      null,
+      null,
+      { dismissOnWorkspaceClick: true },
+    );
+    return;
+  }
+  if (result.status === "reference_mismatch") {
+    const first = result.violations?.[0] || {};
+    const location = first.scope === "chunk"
+      ? `Chunk ${first.chunk_index}`
+      : "the shared preamble";
+    const tags = Array.isArray(first.tags) && first.tags.length
+      ? first.tags.join(", ")
+      : "a public reference tag";
+    const rule = first.kind === "undeclared"
+      ? "is not present in the selected H3 Continuum sampler conditioning inventory"
+      : "is outside the downstream conditioning scope for that part of the sequence";
+    showToast(
+      "Continuum reference scope is invalid",
+      `${location}: ${tags} ${rule}. Correct the Timeline or sampler reference wiring before applying.`,
+      null,
+      null,
+      { dismissOnWorkspaceClick: true },
+    );
+    return;
+  }
+  if (result.status === "mismatch") {
+    const detail = result.mismatches.map((item) => {
+      const label = item.field === "chunks" ? "Chunks" : item.field === "chunk_seconds" ? "Chunk seconds" : "Prompt Format";
+      return `${label}: Writer ${item.writer}, sampler ${item.sampler}`;
+    }).join(" · ");
+    showToast(
+      "Continuum settings differ",
+      detail,
+      null,
+      { label: "Sync settings & apply", onClick: () => applyCurrentSequence(true) },
+      { dismissOnWorkspaceClick: true },
+    );
+    return;
+  }
+  if (result.status === "unconnected" || result.status === "incompatible_source") {
+    try {
+      await navigator.clipboard.writeText(result.prompt);
+      showToast(
+        "Sequence copied",
+        result.status === "unconnected"
+          ? "Connect a Text (Multiline) node to Sequence Prompt, then paste the copied sequence into it."
+          : "Sequence Prompt is connected to a non-editable source. Connect a Text (Multiline) node and paste the copied sequence into it.",
+        null,
+        null,
+        { dismissOnWorkspaceClick: true },
+      );
+    } catch (error) {
+      showToast("Continuum handoff needs a text node", "Connect a Text (Multiline) node to Sequence Prompt and copy the sequence manually.", error.message);
+    }
+    return;
+  }
+  if (result.status !== "applied") {
+    showToast("Continuum handoff failed", "The selected node does not expose the required H3 Continuum sequence inputs.");
+    return;
+  }
+  saveCurrentModeDraft();
+  showToast("Sequence applied", `${continuumSamplerLabel(choice.sampler)} now has the canonical Timeline sequence with Prompt Format = Timeline.`);
 }
 
 function syncWorkspace() {
@@ -1012,17 +1518,31 @@ function syncWorkspace() {
     setMusicSystemPromptExpanded(false);
   }
   syncModeAvailability();
+  syncGenerationTarget();
+}
+
+function modeHasPromptWriterVisualMedia(mode) {
+  return studio.assets.some(
+    (asset) => asset.mode === mode && (asset.type === "image" || asset.type === "video"),
+  );
 }
 
 function syncModeAvailability() {
   if (!studio?.root) return;
   const textOnlyDirect = isTextOnlyDirectModel(studio.selectedModel);
   studio.root.querySelectorAll("[data-mode]").forEach((control) => {
-    const unavailable = !isGenerationModeAvailable(studio.selectedModel, control.dataset.mode);
+    const mode = control.dataset.mode;
+    const hasVisualMedia = modeHasPromptWriterVisualMedia(mode);
+    const unavailable = !isGenerationModeAvailable(studio.selectedModel, mode, {
+      generationTarget: studio.generationTarget,
+      hasVisualMedia,
+    });
     control.disabled = studio.requestBusy || unavailable;
     control.setAttribute("aria-disabled", String(control.disabled));
     control.title = unavailable && textOnlyDirect
-      ? "This Direct GGUF is text-only. Add its matching mmproj to enable visual modes."
+      ? studio.generationTarget === "continuum" && hasVisualMedia
+        ? "This Direct GGUF is text-only. Remove Prompt Writer image/video analysis media or add its matching mmproj; workflow-only Continuum conditioning does not require vision."
+        : "This Direct GGUF is text-only. Add its matching mmproj to enable this mode."
       : "";
   });
   studio.root.querySelectorAll("[data-workspace]").forEach((control) => {
@@ -1030,16 +1550,23 @@ function syncModeAvailability() {
     control.disabled = studio.requestBusy || unavailable;
     control.setAttribute("aria-disabled", String(control.disabled));
     control.title = unavailable
-      ? "This Direct GGUF is text-only. Only H3 Video · T2VA is available."
+      ? "This Direct GGUF is text-only. Music 3 is unavailable for this Direct model."
       : "";
   });
 }
 
-function generationModeIsAvailable() {
-  if (isGenerationModeAvailable(studio.selectedModel, studio.mode)) return true;
+function generationModeIsAvailable({ continuumRefinement = false } = {}) {
+  const hasVisualMedia = modeHasPromptWriterVisualMedia(studio.mode);
+  if (isGenerationModeAvailable(studio.selectedModel, studio.mode, {
+    generationTarget: studio.generationTarget,
+    hasVisualMedia,
+    continuumRefinement,
+  })) return true;
   showToast(
     "Text-only Direct GGUF",
-    "Use H3 Video · T2VA, or add the matching mmproj to enable visual modes.",
+    studio.generationTarget === "continuum" && hasVisualMedia && !continuumRefinement
+      ? "Remove Prompt Writer image/video analysis media to use workflow-only Continuum conditioning, or add the matching mmproj."
+      : "Use H3 Video · T2VA, or add the matching mmproj to enable visual analysis.",
   );
   return false;
 }
@@ -1125,6 +1652,7 @@ function setGenerationState(state, label, detail) {
   } else {
     studio.generationDotCount = 0;
   }
+  syncGenerationTarget();
 }
 
 function updatePromptResidency(status) {
@@ -1383,12 +1911,71 @@ async function startGenerationPreview() {
   const remote = external || apiProvider;
   markActiveWriterRequest();
   const generationDetail = external ? `${modelName} · the server may load its model if idle` : apiProvider ? `${modelName} · ${studio.selectedModel.api_preset}` : modelName;
-  setGenerationState("busy", remote ? "Contacting provider" : "Loading model", generationDetail);
+  const continuumRequest = studio.mode !== "Music3" && studio.generationTarget === "continuum";
+  let downstreamReferenceInventory = null;
+  if (continuumRequest) {
+    const target = chooseContinuumSampler(app);
+    if (target.status === "missing") {
+      showToast(
+        "Continuum sampler not found",
+        "Add H3 Continuum Sampler V3.4–V3.7 to the current workflow before generating so Writer can derive the authoritative keyframe and reference identities.",
+      );
+      studio.activeRequestFamily = null;
+      studio.activeRequestModelId = null;
+      return;
+    }
+    if (target.status === "multiple") {
+      showToast(
+        "Select a Continuum sampler",
+        "Multiple H3 Continuum Sampler V3.4–V3.7 nodes are present. Select exactly one target on the canvas before generating.",
+      );
+      studio.activeRequestFamily = null;
+      studio.activeRequestModelId = null;
+      return;
+    }
+    try {
+      downstreamReferenceInventory = bindActiveWorkflowReferenceMedia(
+        discoverContinuumReferenceInventory(app, target.sampler),
+      );
+    } catch (error) {
+      showToast("Continuum conditioning could not be read", error.message);
+      clearActiveWriterRequest();
+      return;
+    }
+    const modeTopology = validateContinuumModeTopology(studio.mode, downstreamReferenceInventory);
+    if (!modeTopology.valid) {
+      const required = modeTopology.required;
+      const actual = modeTopology.actual;
+      const describe = (value) => value.first_frame && value.last_frame
+        ? "First Frame + Last Frame"
+        : value.first_frame
+          ? "First Frame only"
+          : value.last_frame
+            ? "Last Frame only"
+            : "no First/Last keyframes";
+      const detail = modeTopology.reason === "reference_images_require_reference_mode"
+        ? `T2VA requires no First/Last keyframes and no Reference Images, while the selected H3 Continuum sampler has ${actual.reference_images} active Reference Image input(s). Choose Reference mode or remove those inputs.`
+        : `${studio.mode} requires ${describe(required)}, while the selected H3 Continuum sampler currently has ${describe(actual)}. Rewire First/Last Frame or choose the matching Prompt Writer mode.`;
+      showToast(
+        "Continuum mode does not match sampler",
+        detail,
+      );
+      studio.activeRequestFamily = null;
+      studio.activeRequestModelId = null;
+      return;
+    }
+  }
+  setGenerationState("busy", continuumRequest ? "Planning sequence" : remote ? "Contacting provider" : "Loading model", generationDetail);
   studio.statusTimer = setInterval(async () => {
     try {
       const status = await getStatus(studio.ollamaHost);
-      const labels = { loading_model: remote ? "Contacting provider" : "Loading model", processing_media: "Processing references", generating: "Generating", cancelling: "Cancelling" };
-      if (labels[status.phase]) setGenerationState("busy", labels[status.phase], generationDetail);
+      const labels = { loading_model: remote ? "Contacting provider" : "Loading model", processing_media: "Processing references", planning_sequence: "Planning sequence", generating_chunk: "Generating chunk", generating: "Generating", cancelling: "Cancelling" };
+      if (labels[status.phase]) {
+        const sequenceDetail = status.phase === "generating_chunk" && status.sequence_chunk_index
+          ? `Chunk ${status.sequence_chunk_index} of ${status.sequence_chunk_total} · ${generationDetail}`
+          : generationDetail;
+        setGenerationState("busy", labels[status.phase], sequenceDetail);
+      }
     } catch {}
   }, 650);
   try {
@@ -1396,8 +1983,14 @@ async function startGenerationPreview() {
       creativeBrief: currentBriefTextarea().value,
       lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
       seed: newGenerationSeed(),
+      downstreamReferenceInventory,
     })));
     const output = studio.root.querySelector("[data-output]");
+    if (continuumRequest) {
+      studio.continuumSequence = sequenceStateFromResult(result);
+      studio.continuumChunks = studio.continuumSequence.settings.chunks;
+      studio.continuumChunkSeconds = studio.continuumSequence.settings.chunk_seconds;
+    }
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
     renderPromptHighlights();
@@ -1408,7 +2001,14 @@ async function startGenerationPreview() {
     saveCurrentModeDraft();
     studio.refineRestore = null;
     studio.root.querySelector("[data-refine-restore]").hidden = true;
-    if (result.thinking_fallback) {
+    syncGenerationTarget();
+    if (continuumRequest && result.planner_repair_attempted) {
+      showToast("Sequence generated", `The sequence plan needed one structural repair before ${studio.continuumChunks} chunks were written.`, null, null, { dismissOnWorkspaceClick: true });
+    } else if (continuumRequest) {
+      const providerRequests = result.provider_request_count ?? result.sequence_request_count ?? studio.continuumChunks + 1;
+      const requestCount = result.api_provider ? ` · ${providerRequests} API requests` : "";
+      showToast("Sequence generated", `${studio.continuumChunks} chunks · ${result.total_seconds.toFixed(1)}s${requestCount}`);
+    } else if (result.thinking_fallback) {
       showToast("Prompt completed", thinkingFallbackMessage(result, "final prompt"), null, null, { dismissOnWorkspaceClick: true });
     } else if (result.format_repair_applied) {
       const repairDetail = result.format_repair_multimodal
@@ -1978,7 +2578,7 @@ function renderInferenceSettings() {
       : runtimeRequirement.state === "update_required"
         ? renderDirectModelRuntimeUpdate(directModel)
         : isTextOnlyDirectModel(directModel)
-          ? `<div class="h3ps-direct-model-note"><strong>Text-only model · T2VA available</strong><span>${escapeHtml(directModel.capability_message || "No compatible vision projector is active.")}</span></div>`
+          ? `<div class="h3ps-direct-model-note"><strong>Text-only model · T2VA + workflow-only Continuum</strong><span>${escapeHtml(directModel.capability_message || "No compatible vision projector is active. Continuum can still use workflow-declared conditioning without Prompt Writer visual analysis.")}</span></div>`
           : "";
   } else {
     directStatus.innerHTML = "";
@@ -2068,7 +2668,16 @@ function selectSettingsProvider(provider) {
 function selectModel(model, { preserveSettingsProvider = false } = {}) {
   rememberRuntimePreferences();
   selectModelState(studio, model, { preserveSettingsProvider });
-  const switchedToT2VA = !isGenerationModeAvailable(model, studio.mode);
+  const hasVisualMedia = modeHasPromptWriterVisualMedia(studio.mode);
+  const savedContinuumRefinement = (
+    studio.generationTarget === "continuum"
+    && Boolean(studio.continuumSequence?.plan)
+  );
+  const switchedToT2VA = !isGenerationModeAvailable(model, studio.mode, {
+    generationTarget: studio.generationTarget,
+    hasVisualMedia,
+    continuumRefinement: savedContinuumRefinement,
+  });
   if (switchedToT2VA) {
     stashCurrentModeDraft();
     studio.mode = "T2VA";
@@ -2722,6 +3331,29 @@ async function submitRefinement() {
     showToast("Add a revision note", "Tell the model what should change in the current prompt.");
     return;
   }
+  const continuumRefinement = studio.mode !== "Music3" && studio.generationTarget === "continuum";
+  if (continuumRefinement) {
+    if (!studio.continuumSequence?.plan) {
+      showToast("No sequence plan", "Generate a Continuum sequence before refining one of its chunks.");
+      return;
+    }
+    try {
+      const parsed = parseContinuumTimeline(output.value, {
+        expectedChunks: studio.continuumChunks,
+        chunkSeconds: studio.continuumChunkSeconds,
+      });
+      studio.continuumSequence = {
+        ...studio.continuumSequence,
+        schema_version: 2,
+        preamble: parsed.preamble,
+        prompts: parsed.prompts,
+        raw_prompt: null,
+      };
+    } catch (error) {
+      showToast("Sequence syntax is invalid", error.message);
+      return;
+    }
+  }
   if (!studio.selectedModel) {
     showToast("No prompt model selected", "Choose a local model, connect llama.cpp, or configure an API provider.");
     return;
@@ -2730,15 +3362,76 @@ async function submitRefinement() {
     showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}.`);
     return;
   }
-  if (!generationModeIsAvailable()) return;
+  if (!generationModeIsAvailable({ continuumRefinement })) return;
+  let downstreamReferenceInventory = null;
+  if (continuumRefinement) {
+    const target = chooseContinuumSampler(app);
+    if (target.status === "missing") {
+      showToast(
+        "Continuum sampler not found",
+        "Add H3 Continuum Sampler V3.4–V3.7 to the current workflow before refining so Writer can validate the saved Timeline against the active conditioning topology.",
+      );
+      return;
+    }
+    if (target.status === "multiple") {
+      showToast(
+        "Select a Continuum sampler",
+        "Multiple H3 Continuum Sampler V3.4–V3.7 nodes are present. Select exactly one target on the canvas before refining.",
+      );
+      return;
+    }
+    try {
+      downstreamReferenceInventory = bindActiveWorkflowReferenceMedia(
+        discoverContinuumReferenceInventory(app, target.sampler),
+      );
+    } catch (error) {
+      showToast("Continuum conditioning could not be read", error.message);
+      return;
+    }
+    if (
+      studio.continuumSequence?.downstream_reference_inventory
+      && !sameContinuumReferenceInventory(
+        studio.continuumSequence.downstream_reference_inventory,
+        downstreamReferenceInventory,
+      )
+    ) {
+      showToast(
+        "Continuum conditioning changed",
+        "The selected H3 Continuum reference/keyframe sources differ from the workflow inventory used to generate this saved sequence. Regenerate the sequence before refining it.",
+      );
+      return;
+    }
+    const modeTopology = validateContinuumModeTopology(studio.mode, downstreamReferenceInventory);
+    if (!modeTopology.valid) {
+      const required = modeTopology.required;
+      const actual = modeTopology.actual;
+      const describe = (value) => value.first_frame && value.last_frame
+        ? "First Frame + Last Frame"
+        : value.first_frame
+          ? "First Frame only"
+          : value.last_frame
+            ? "Last Frame only"
+            : "no First/Last keyframes";
+      const detail = modeTopology.reason === "reference_images_require_reference_mode"
+        ? `This T2VA sequence cannot be refined against a sampler with ${actual.reference_images} active Reference Image input(s). Restore the original T2VA topology or regenerate in Reference mode.`
+        : `${studio.mode} requires ${describe(required)}, while the selected H3 Continuum sampler currently has ${describe(actual)}. Restore the expected First/Last Frame wiring before refining this sequence.`;
+      showToast(
+        "Continuum mode does not match sampler",
+        detail,
+      );
+      return;
+    }
+  }
   if (!await prepareWriterRequest()) return;
 
   const previousPrompt = output.value;
+  const previousContinuumSequence = studio.continuumSequence;
   const previousMeta = studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent;
   markActiveWriterRequest();
   submit.disabled = true;
   submit.innerHTML = `<span class="h3ps-spinner"></span>Refining…`;
-  setGenerationState("busy", "Refining prompt", studio.selectedModel.name.split("/").pop());
+  const selectedChunk = continuumRefinement ? Number(panel.querySelector("[data-refine-chunk]").value) : null;
+  setGenerationState("busy", continuumRefinement ? `Refining Chunk ${selectedChunk}` : "Refining prompt", studio.selectedModel.name.split("/").pop());
   try {
     const result = await vramHandoffCoordinator.trackWriterRequest(refine(buildRefinePayload(studio, {
       currentPrompt: previousPrompt,
@@ -2746,13 +3439,17 @@ async function submitRefinement() {
       creativeBrief: currentBriefTextarea().value.trim(),
       lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
       seed: newGenerationSeed(),
+      chunkIndex: selectedChunk,
+      downstreamReferenceInventory,
     })));
     studio.refineRestore = {
       prompt: previousPrompt,
       meta: previousMeta,
       lastModelPrompt: studio.lastModelPrompt,
       lastModelMeta: studio.lastModelMeta,
+      continuumSequence: previousContinuumSequence,
     };
+    if (continuumRefinement) studio.continuumSequence = sequenceStateFromResult(result);
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
     renderPromptHighlights();
@@ -2765,7 +3462,9 @@ async function submitRefinement() {
     saveCurrentModeDraft();
     showToast(
       result.thinking_fallback ? "Rewrite completed" : "Prompt rewritten",
-      result.thinking_fallback
+      continuumRefinement
+        ? `Chunk ${selectedChunk} was rewritten; all other chunks were preserved byte-for-byte.`
+        : result.thinking_fallback
         ? thinkingFallbackMessage(result, "rewrite")
         : result.format_repair_applied
           ? result.format_repair_multimodal
@@ -2860,7 +3559,7 @@ function createStudio() {
         </nav>
         <div class="h3ps-output-toolbar">
           <span data-output-label>Generated prompt</span>
-          <div class="h3ps-output-badges"><button type="button" data-undo-edits hidden>Undo</button></div>
+          <div class="h3ps-output-badges"><span class="h3ps-continuum-badge" data-continuum-output-badge hidden></span><button type="button" data-undo-edits hidden>Undo</button></div>
         </div>
       </div>
 
@@ -2881,8 +3580,22 @@ function createStudio() {
           <p class="h3ps-section-hint" data-h3ps-mode-hint></p>
           <div class="h3ps-media" data-h3ps-media></div>
 
+          <div class="h3ps-generation-target" data-generation-target-control>
+            <span>Output target</span>
+            <div role="group" aria-label="Output target">
+              <button type="button" data-generation-target="single" aria-pressed="true">Single clip</button>
+              <button type="button" data-generation-target="continuum" aria-pressed="false">H3 Continuum</button>
+            </div>
+          </div>
+
+          <div class="h3ps-continuum-settings" data-continuum-settings hidden>
+            <label class="h3ps-field"><span>Chunks</span><input type="number" min="${CONTINUUM_MIN_CHUNKS}" max="${CONTINUUM_MAX_CHUNKS}" step="1" value="3" data-continuum-chunks></label>
+            <label class="h3ps-field"><span>Seconds per chunk</span><input type="number" min="${CONTINUUM_MIN_SECONDS}" max="${CONTINUUM_MAX_SECONDS}" step="0.5" value="5" data-continuum-seconds></label>
+            <strong data-continuum-total>15 seconds total</strong>
+          </div>
+
           <div class="h3ps-control-grid">
-            <label class="h3ps-field h3ps-duration-field"><span>Duration <b data-duration-label>10 seconds</b></span><div><input type="range" min="1" max="20" step="1" value="10" style="--h3ps-range:47.37%" data-duration-slider><i></i></div></label>
+            <label class="h3ps-field h3ps-duration-field" data-single-duration-field><span>Duration <b data-duration-label>10 seconds</b></span><div><input type="range" min="1" max="20" step="1" value="10" style="--h3ps-range:47.37%" data-duration-slider><i></i></div></label>
             <label class="h3ps-field h3ps-choice"><span>Aspect ratio</span><button type="button" data-choice-toggle="aspect"><b data-aspect-label>16:9</b><em data-aspect-description>Widescreen</em>${icon("chevron", 13)}</button><div class="h3ps-choice-menu h3ps-aspect-menu" data-choice-menu="aspect" hidden>${ASPECT_RATIOS.map(([value, label]) => `<button type="button" data-aspect="${value}"><b>${value}</b><em>${label}</em></button>`).join("")}</div></label>
           </div>
 
@@ -2958,6 +3671,7 @@ function createStudio() {
             <div class="h3ps-refine-heading">
               <span><strong data-refine-title>Refine prompt</strong><small><span data-refine-helper>Describe only what should change</span><em data-refine-media-note>No media re-upload</em></small></span>
               <div class="h3ps-refine-heading-actions">
+                <label class="h3ps-refine-chunk" data-refine-chunk-field hidden><span>Chunk</span><select data-refine-chunk></select></label>
                 <button type="button" class="h3ps-text-button" data-refine-restore hidden>Restore original</button>
                 <button type="button" class="h3ps-text-button" data-refine-cancel>Cancel</button>
                 <button type="button" class="h3ps-refine-submit" data-refine-submit>${icon("spark", 13)} Refine</button>
@@ -2968,6 +3682,7 @@ function createStudio() {
           <div class="h3ps-output-actions">
             <span class="h3ps-output-primary-actions">
               <button class="h3ps-secondary-button" type="button" title="Refine with local LLM" data-refine-toggle>${icon("spark", 15)} Refine</button>
+              <button class="h3ps-secondary-button" type="button" data-apply-continuum hidden>${icon("check", 15)} Apply to Continuum</button>
               <span class="h3ps-reference-insert" data-reference-insert hidden>
                 <button class="h3ps-reference-insert-toggle" type="button" title="Insert reference" aria-label="Insert reference" aria-haspopup="menu" aria-expanded="false" data-reference-insert-toggle></button>
                 <span class="h3ps-reference-insert-popover" data-reference-insert-popover role="menu" hidden></span>
@@ -3100,6 +3815,38 @@ function createStudio() {
     clearEverything();
   });
   root.querySelector("[data-generate]").addEventListener("click", startGenerationPreview);
+  root.querySelectorAll("[data-generation-target]").forEach((button) => button.addEventListener("click", () => {
+    setGenerationTarget(button.dataset.generationTarget);
+  }));
+  const updateContinuumSettings = () => {
+    const chunksInput = root.querySelector("[data-continuum-chunks]");
+    const secondsInput = root.querySelector("[data-continuum-seconds]");
+    const chunks = Number(chunksInput.value);
+    const seconds = Number(secondsInput.value);
+    if (!Number.isInteger(chunks) || chunks < CONTINUUM_MIN_CHUNKS || chunks > CONTINUUM_MAX_CHUNKS || !Number.isFinite(seconds) || seconds < CONTINUUM_MIN_SECONDS || seconds > CONTINUUM_MAX_SECONDS) {
+      showToast("Invalid Continuum settings", `Use ${CONTINUUM_MIN_CHUNKS}–${CONTINUUM_MAX_CHUNKS} chunks and ${CONTINUUM_MIN_SECONDS}–${CONTINUUM_MAX_SECONDS} seconds per chunk.`);
+      syncGenerationTarget();
+      return;
+    }
+    const invalidatesSequence = studio.continuumSequence?.plan
+      && (studio.continuumSequence.settings.chunks !== chunks
+        || Math.abs(studio.continuumSequence.settings.chunk_seconds - seconds) > 1e-6);
+    studio.continuumChunks = chunks;
+    studio.continuumChunkSeconds = seconds;
+    if (invalidatesSequence) {
+      studio.continuumSequence = null;
+      root.querySelector("[data-output]").value = "";
+      studio.lastModelPrompt = "";
+      studio.lastModelMeta = promptLengthMeta("");
+      root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
+      showToast("Sequence settings changed", "Generate a new sequence for the updated chunk settings.");
+    }
+    syncGenerationTarget();
+    saveCurrentModeDraft();
+    saveUserPreferences(localStorage, studio);
+  };
+  root.querySelector("[data-continuum-chunks]").addEventListener("change", updateContinuumSettings);
+  root.querySelector("[data-continuum-seconds]").addEventListener("change", updateContinuumSettings);
   root.querySelector("[data-restore-default-drafts]").addEventListener("click", restoreDefaultDrafts);
   root.querySelector("[data-comfy-memory-action]").addEventListener("click", () => releaseComfyVram());
   root.querySelector("[data-guide-toggle]").addEventListener("click", async () => {
@@ -3363,6 +4110,7 @@ function createStudio() {
     if (!root.querySelector("[data-other-models-popover]").hidden) positionOtherModelsPopover();
   });
   root.querySelector("[data-refine-toggle]").addEventListener("click", () => toggleRefine(root.querySelector("[data-refine-panel]").hidden));
+  root.querySelector("[data-apply-continuum]").addEventListener("click", () => applyCurrentSequence());
   root.querySelector("[data-refine-cancel]").addEventListener("click", () => toggleRefine(false));
   root.querySelector("[data-refine-submit]").addEventListener("click", submitRefinement);
   root.querySelector("[data-lyrics-refine-toggle]").addEventListener("click", () => {
@@ -3395,6 +4143,7 @@ function createStudio() {
     if (studio.refineRestore == null) return;
     const output = root.querySelector("[data-output]");
     output.value = studio.refineRestore.prompt;
+    studio.continuumSequence = studio.refineRestore.continuumSequence || studio.continuumSequence;
     studio.lastModelPrompt = studio.refineRestore.lastModelPrompt;
     studio.lastModelMeta = studio.refineRestore.lastModelMeta;
     renderPromptHighlights();
@@ -3402,6 +4151,7 @@ function createStudio() {
     studio.refineRestore = null;
     root.querySelector("[data-refine-restore]").hidden = true;
     syncModifiedState();
+    syncGenerationTarget();
     saveCurrentModeDraft();
     showToast("Previous prompt restored", "The AI rewrite was discarded.");
   });
@@ -3418,7 +4168,8 @@ function createStudio() {
   root.querySelector("[data-copy]").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(root.querySelector("[data-output]").value);
-      showToast(studio.mode === "Music3" ? "Caption copied" : "Prompt copied", studio.mode === "Music3" ? "The generated Music 3 caption is on your clipboard." : "The generated H3 prompt is on your clipboard.");
+      const continuum = studio.mode !== "Music3" && studio.generationTarget === "continuum";
+      showToast(studio.mode === "Music3" ? "Caption copied" : continuum ? "Sequence copied" : "Prompt copied", studio.mode === "Music3" ? "The generated Music 3 caption is on your clipboard." : continuum ? "The canonical Continuum Timeline sequence is on your clipboard." : "The generated H3 prompt is on your clipboard.");
     } catch (error) {
       showToast("Copy failed", "Clipboard access was denied.", error.message);
     }

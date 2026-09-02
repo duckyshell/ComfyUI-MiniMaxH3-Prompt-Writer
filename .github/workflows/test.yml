@@ -1,18 +1,173 @@
-name: Test
+name: tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  unit:
+    name: Python ${{ matrix.python-version }} · unit/static
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.12"
+          - "3.13"
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out Prompt Writer
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+            requirements-gguf.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff aiohttp "av>=17.0.0" pillow
+
+      - name: Run static Python checks
+        run: |
+          python -m ruff check backend tests --select E9,F63,F7,F82
+          python -m compileall -q backend tests
+
+      - name: Run Python unit suite
+        env:
+          PYTHONPATH: tests/ci_stubs
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+  frontend:
+    name: Node 22 · frontend regressions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Prompt Writer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check JavaScript syntax
+        run: |
+          find web tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
+
+      - name: Run frontend regression suite
+        run: node --test tests/frontend_regressions.mjs tests/test_continuum_image_conveyor.mjs
+
+  standalone-windows:
+    name: Windows · standalone/build contracts
+    runs-on: windows-latest
+    steps:
+      - name: Check out Prompt Writer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: standalone/requirements.txt
+
+      - name: Install standalone test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r standalone/requirements.txt ruff
+
+      - name: Run standalone static checks
+        run: |
+          python -m ruff check standalone/h3_standalone standalone/tests --select E9,F63,F7,F82
+          python -m compileall -q standalone/h3_standalone standalone/tests
+
+      - name: Build extension package
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts\build_extension.ps1
+
+      - name: Build standalone package
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts\build_standalone.ps1
+
+      - name: Run standalone test suite
+        env:
+          PYTHONPATH: ${{ github.workspace }};${{ github.workspace }}\standalone
+        run: python -m unittest discover -s standalone/tests -p "test_*.py"
+
+  continuum-contract:
+    name: H3 Continuum V3.4–V3.7 · reviewed contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Prompt Writer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out reviewed H3 Continuum source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: ukr8b3g-cmyk/ComfyUI-H3-Continuum
+          ref: 0a7c6703b7715689c7aab4177e44e5fcd318fe5b
+          path: .continuum-source
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Install contract-test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest aiohttp "av>=17.0.0" pillow
+
+      - name: Run focused Continuum contract suites
+        env:
+          PYTHONPATH: tests/ci_stubs
+          H3_CONTINUUM_SOURCE: ${{ github.workspace }}/.continuum-source
+        run: python -m unittest discover -s tests -p "test_continuum*.py"
+
+  image-conveyor-contract:
+    name: Image Conveyor 1.7.2 · reviewed contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Prompt Writer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out reviewed Image Conveyor source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: xmarre/ComfyUI-Image-Conveyor
+          ref: e316cb028f21105a8ea303ace30d9d92acff6198
+          path: .image-conveyor-source
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -24,13 +179,58 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install test dependencies
-        run: python -m pip install aiohttp av pillow
-
-      - name: Run Python tests
+      - name: Run Prompt Writer cross-repository contract
         env:
-          PYTHONPATH: tests/ci_stubs
-        run: python -m unittest discover -s tests -p "test_*.py"
+          IMAGE_CONVEYOR_SOURCE: ${{ github.workspace }}/.image-conveyor-source
+        run: python -m unittest discover -s tests -p "test_image_conveyor_cross_repo.py"
 
-      - name: Run frontend tests
-        run: node --test tests/frontend_regressions.mjs
+      - name: Run reviewed Image Conveyor topology suites
+        working-directory: .image-conveyor-source
+        run: node --test tests/test_reference_toggles.mjs tests/test_toggle_state_sync.mjs tests/test_queue_groups.mjs
+
+  scale-image-total-pixels-x-contract:
+    name: Scale Image to Total Pixels Adv · reviewed contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Prompt Writer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out reviewed scaler source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          repository: BigStationW/ComfyUi-Scale-Image-to-Total-Pixels-Advanced
+          ref: 79e831097bb7a76ade3a28359300e62332086c42
+          path: .scale-image-total-pixels-x-source
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run scaler cross-repository contract
+        env:
+          SCALE_IMAGE_TOTAL_PIXELS_X_SOURCE: ${{ github.workspace }}/.scale-image-total-pixels-x-source
+        run: python -m unittest discover -s tests -p "test_scale_image_total_pixels_x_cross_repo.py"
+
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Prompt Writer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check patch whitespace
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            git diff --check "origin/$BASE_REF...HEAD"
+          else
+            git diff-tree --check --no-commit-id --root -r HEAD
+          fi

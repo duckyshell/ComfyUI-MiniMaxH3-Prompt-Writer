@@ -29,8 +29,18 @@ export function isTextOnlyDirectModel(model) {
   return model?.family === "gguf" && model?.capabilities?.images === false;
 }
 
-export function isGenerationModeAvailable(model, mode) {
-  return !isTextOnlyDirectModel(model) || mode === "T2VA";
+export function isGenerationModeAvailable(
+  model,
+  mode,
+  {
+    generationTarget = "single",
+    hasVisualMedia = false,
+    continuumRefinement = false,
+  } = {},
+) {
+  if (!isTextOnlyDirectModel(model) || mode === "T2VA") return true;
+  if (mode === "Music3" || generationTarget !== "continuum") return false;
+  return continuumRefinement || !hasVisualMedia;
 }
 
 export function isModeDraftDirty(mode, draft, defaults) {
@@ -49,7 +59,10 @@ export function resetModeDraft(drafts, mode) {
 }
 
 export function clearPromptDraft(draft = {}) {
-  return { ...draft, brief: "", prompt: "" };
+  const cleared = { ...draft, brief: "", prompt: "" };
+  if (Object.prototype.hasOwnProperty.call(draft, "single_prompt")) cleared.single_prompt = "";
+  if (Object.prototype.hasOwnProperty.call(draft, "continuum")) cleared.continuum = null;
+  return cleared;
 }
 
 export function normalizeCustomFrameCount(value) {
@@ -60,12 +73,22 @@ export function normalizeCustomFrameCount(value) {
 export function loadModeDrafts(storage = globalThis.localStorage) {
   try {
     const value = JSON.parse(storage?.getItem(MODE_DRAFTS_STORAGE_KEY) || "null");
-    if (!value || value.version !== 1 || !value.drafts || typeof value.drafts !== "object") return {};
+    if (!value || ![1, 2].includes(value.version) || !value.drafts || typeof value.drafts !== "object") return {};
     return Object.fromEntries(DRAFT_MODES.flatMap((mode) => {
       const draft = value.drafts[mode];
       if (!draft || typeof draft.brief !== "string" || typeof draft.prompt !== "string") return [];
       const briefLimit = mode === "Music3" ? 2000 : 8000;
-      const safeDraft = { brief: draft.brief.slice(0, briefLimit), prompt: draft.prompt.slice(0, 16000) };
+      const legacy = value.version === 1;
+      const generationTarget = !legacy && draft.generation_target === "continuum" && mode !== "Music3" ? "continuum" : "single";
+      const singlePrompt = typeof draft.single_prompt === "string" ? draft.single_prompt : draft.prompt;
+      const continuum = !legacy && mode !== "Music3" ? safeContinuumDraft(draft.continuum) : null;
+      const safeDraft = {
+        brief: draft.brief.slice(0, briefLimit),
+        prompt: generationTarget === "continuum" ? "" : singlePrompt.slice(0, 20000),
+        single_prompt: singlePrompt.slice(0, 20000),
+        generation_target: generationTarget,
+        continuum,
+      };
       if (mode === "Music3") safeDraft.lyrics = typeof draft.lyrics === "string" ? draft.lyrics.slice(0, 4000) : "";
       return [[mode, safeDraft]];
     }));
@@ -74,24 +97,136 @@ export function loadModeDrafts(storage = globalThis.localStorage) {
   }
 }
 
+function safeContinuumInventory(value) {
+  if (value == null) return { valid: true, value: null };
+  if (!value || typeof value !== "object" || Number(value.schema_version ?? 1) !== 1 || !Array.isArray(value.items)) {
+    return { valid: false, value: null };
+  }
+  if (value.items.length > 13) return { valid: false, value: null };
+
+  const roles = new Set(["reference_image", "first_frame", "last_frame", "video_reference", "driving_audio"]);
+  const singletonRoles = new Set();
+  const items = [];
+  for (const raw of value.items) {
+    if (!raw || typeof raw !== "object" || !roles.has(raw.role)) return { valid: false, value: null };
+    if (raw.role !== "reference_image") {
+      if (singletonRoles.has(raw.role)) return { valid: false, value: null };
+      singletonRoles.add(raw.role);
+    }
+    if (typeof raw.kind !== "string" || raw.kind.length > 32) return { valid: false, value: null };
+    if (typeof raw.source !== "string" || raw.source.length > 32) return { valid: false, value: null };
+    if (typeof raw.visible_to_model !== "boolean") return { valid: false, value: null };
+    const item = {
+      role: raw.role,
+      kind: raw.kind,
+      source: raw.source,
+      visible_to_model: raw.visible_to_model,
+    };
+    for (const field of ["tag", "input_name", "source_node_class", "source_output_name", "source_identity", "model_asset_id"]) {
+      if (raw[field] != null) {
+        if (typeof raw[field] !== "string" || raw[field].length > 512) {
+          return { valid: false, value: null };
+        }
+        item[field] = raw[field];
+      }
+    }
+    if (raw.source_node_id != null) {
+      if (typeof raw.source_node_id === "number") {
+        if (!Number.isSafeInteger(raw.source_node_id)) return { valid: false, value: null };
+      } else if (typeof raw.source_node_id === "string") {
+        if (!raw.source_node_id || raw.source_node_id.length > 512) return { valid: false, value: null };
+      } else {
+        return { valid: false, value: null };
+      }
+      item.source_node_id = raw.source_node_id;
+    }
+    if (raw.source_slot != null) {
+      if (!Number.isInteger(raw.source_slot) || raw.source_slot < 0) return { valid: false, value: null };
+      item.source_slot = raw.source_slot;
+    }
+    items.push(item);
+  }
+  return { valid: true, value: { schema_version: 1, items } };
+}
+
+function safeContinuumDraft(value) {
+  if (!value || ![1, 2].includes(value.schema_version) || !value.settings || typeof value.settings !== "object") return null;
+  const chunks = Number(value.settings.chunks);
+  const chunkSeconds = Number(value.settings.chunk_seconds);
+  if (!Number.isInteger(chunks) || chunks < 1 || chunks > 16 || !Number.isFinite(chunkSeconds) || chunkSeconds < 4 || chunkSeconds > 30) return null;
+  if (
+    !Array.isArray(value.prompts)
+    || value.prompts.length !== chunks
+    || value.prompts.some((prompt) => typeof prompt !== "string" || !prompt.trim() || prompt.length > 20000)
+  ) return null;
+
+  let plan = null;
+  try {
+    const serializedPlan = JSON.stringify(value.plan ?? null);
+    if (serializedPlan.length <= 100000) plan = JSON.parse(serializedPlan);
+  } catch {}
+  if (!plan || typeof plan !== "object") return null;
+
+  const inventory = safeContinuumInventory(value.downstream_reference_inventory);
+  if (!inventory.valid) return null;
+
+  const preambleSource = typeof value.preamble === "string"
+    ? value.preamble
+    : typeof plan?.global?.sequence_preamble === "string"
+      ? plan.global.sequence_preamble
+      : "";
+  if (preambleSource.length > 20000) return null;
+  if (typeof value.raw_prompt === "string" && value.raw_prompt.length > 320000) return null;
+  const result = {
+    schema_version: 2,
+    settings: {
+      schema_version: 2,
+      chunks,
+      chunk_seconds: chunkSeconds,
+      total_seconds: Number((chunks * chunkSeconds).toFixed(12)),
+    },
+    plan,
+    preamble: preambleSource,
+    prompts: [...value.prompts],
+    downstream_reference_inventory: inventory.value,
+    raw_prompt: typeof value.raw_prompt === "string" ? value.raw_prompt : null,
+  };
+  if (value.schema_version === 1 || value.migrated_from_schema_version === 1) {
+    result.migrated_from_schema_version = 1;
+  }
+  if (result.raw_prompt != null && typeof value.timeline_error === "string") {
+    result.timeline_error = value.timeline_error.slice(0, 4000);
+  }
+  return result;
+}
+
 export function saveModeDrafts(storage, drafts) {
   const safeDrafts = Object.fromEntries(DRAFT_MODES.flatMap((mode) => {
     const draft = drafts?.[mode];
     if (!draft || typeof draft.brief !== "string" || typeof draft.prompt !== "string") return [];
     const briefLimit = mode === "Music3" ? 2000 : 8000;
-    const safeDraft = { brief: draft.brief.slice(0, briefLimit), prompt: draft.prompt.slice(0, 16000) };
+    const generationTarget = draft.generation_target === "continuum" && mode !== "Music3" ? "continuum" : "single";
+    const singlePrompt = typeof draft.single_prompt === "string" ? draft.single_prompt : draft.prompt;
+    const continuum = safeContinuumDraft(draft.continuum);
+    const safeDraft = {
+      brief: draft.brief.slice(0, briefLimit),
+      prompt: generationTarget === "single" ? String(singlePrompt || "").slice(0, 20000) : "",
+      single_prompt: String(singlePrompt || "").slice(0, 20000),
+      generation_target: generationTarget,
+      continuum,
+    };
     if (mode === "Music3") safeDraft.lyrics = typeof draft.lyrics === "string" ? draft.lyrics.slice(0, 4000) : "";
     return [[mode, safeDraft]];
   }));
-  storage?.setItem(MODE_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: safeDrafts }));
+  storage?.setItem(MODE_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 2, drafts: safeDrafts }));
 }
 
 export function loadUserPreferences(storage = globalThis.localStorage) {
   try {
     const value = JSON.parse(storage?.getItem(USER_PREFERENCES_STORAGE_KEY) || "null");
-    if (!value || value.version !== 1) return null;
+    if (!value || ![1, 2].includes(value.version)) return null;
     return {
-      version: 1,
+      version: 2,
       mode: MODES.includes(value.mode) ? value.mode : "Reference",
       duration_seconds: Number.isInteger(value.duration_seconds) && value.duration_seconds >= 1 && value.duration_seconds <= 20 ? value.duration_seconds : 10,
       aspect_ratio: ASPECT_RATIOS.includes(value.aspect_ratio) ? value.aspect_ratio : "16:9",
@@ -106,6 +241,9 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       music_lyrics_use_brief: value.music_lyrics_use_brief !== false,
       fullscreen: value.fullscreen === true,
       vram_handoff: value.vram_handoff === true,
+      generation_target: value.generation_target === "continuum" ? "continuum" : "single",
+      continuum_chunks: Number.isInteger(value.continuum_chunks) && value.continuum_chunks >= 1 && value.continuum_chunks <= 16 ? value.continuum_chunks : 3,
+      continuum_chunk_seconds: Number.isFinite(value.continuum_chunk_seconds) && value.continuum_chunk_seconds >= 4 && value.continuum_chunk_seconds <= 30 ? value.continuum_chunk_seconds : 5,
     };
   } catch {
     return null;
@@ -114,7 +252,7 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
 
 export function saveUserPreferences(storage, state) {
   const safe = {
-    version: 1,
+    version: 2,
     mode: MODES.includes(state.mode) ? state.mode : "Reference",
     duration_seconds: Number.isInteger(state.durationSeconds) && state.durationSeconds >= 1 && state.durationSeconds <= 20 ? state.durationSeconds : 10,
     aspect_ratio: ASPECT_RATIOS.includes(state.aspectRatio) ? state.aspectRatio : "16:9",
@@ -129,6 +267,9 @@ export function saveUserPreferences(storage, state) {
     music_lyrics_use_brief: state.musicLyricsUseBrief !== false,
     fullscreen: state.fullscreen === true,
     vram_handoff: state.vramHandoff === true,
+    generation_target: state.generationTarget === "continuum" ? "continuum" : "single",
+    continuum_chunks: Number.isInteger(state.continuumChunks) && state.continuumChunks >= 1 && state.continuumChunks <= 16 ? state.continuumChunks : 3,
+    continuum_chunk_seconds: Number.isFinite(state.continuumChunkSeconds) && state.continuumChunkSeconds >= 4 && state.continuumChunkSeconds <= 30 ? state.continuumChunkSeconds : 5,
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -325,6 +466,7 @@ function sharedInferencePayload(state) {
   return {
     session_id: state.sessionId,
     mode: state.mode,
+    generation_target: state.mode !== "Music3" ? state.generationTarget : "single",
     model_id: state.selectedModel?.id,
     external_server: selectedExternalServer(state),
     ollama_model: selectedOllamaModel(state),
@@ -343,7 +485,7 @@ function sharedInferencePayload(state) {
   };
 }
 
-export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }) {
+export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed, downstreamReferenceInventory = null }) {
   const directRuntime = state.selectedModel?.family === "gguf";
   const thinking = state.selectedModel?.family === "external" ? false : state.thinking;
   const generationBudgetMode = state.generationBudget || "auto";
@@ -353,7 +495,8 @@ export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }
   const payload = {
     session_id: state.sessionId,
     mode: state.mode,
-    duration_seconds: state.durationSeconds,
+    generation_target: state.mode !== "Music3" ? state.generationTarget : "single",
+    duration_seconds: state.generationTarget === "continuum" && state.mode !== "Music3" ? state.continuumChunkSeconds : state.durationSeconds,
     aspect_ratio: state.aspectRatio,
     creative_brief: creativeBrief,
     model_id: state.selectedModel?.id,
@@ -373,20 +516,45 @@ export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }
     seed,
     unload_after: !state.keepModelLoaded,
   };
+  if (state.generationTarget === "continuum" && state.mode !== "Music3") {
+    payload.continuum = {
+      schema_version: 2,
+      chunks: state.continuumChunks,
+      chunk_seconds: state.continuumChunkSeconds,
+    };
+    if (downstreamReferenceInventory != null) {
+      payload.downstream_reference_inventory = downstreamReferenceInventory;
+    }
+  }
   if (state.mode === "Music3") payload.lyrics = lyrics;
   return payload;
 }
 
-export function buildRefinePayload(state, { currentPrompt, instruction, creativeBrief, lyrics = "", seed }) {
+export function buildRefinePayload(state, { currentPrompt, instruction, creativeBrief, lyrics = "", seed, chunkIndex = null, downstreamReferenceInventory = null }) {
   const payload = {
     ...sharedInferencePayload(state),
     current_prompt: currentPrompt,
     instruction,
-    duration_seconds: state.durationSeconds,
+    duration_seconds: state.generationTarget === "continuum" && state.mode !== "Music3" ? state.continuumChunkSeconds : state.durationSeconds,
     aspect_ratio: state.aspectRatio,
     creative_brief: creativeBrief,
     seed,
   };
+  if (state.generationTarget === "continuum" && state.mode !== "Music3") {
+    payload.continuum = {
+      schema_version: 2,
+      chunks: state.continuumChunks,
+      chunk_seconds: state.continuumChunkSeconds,
+      chunk_index: chunkIndex,
+      plan: state.continuumSequence?.plan || null,
+      ...(state.continuumSequence?.downstream_reference_inventory
+        ? { downstream_reference_inventory: state.continuumSequence.downstream_reference_inventory }
+        : {}),
+    };
+    if (downstreamReferenceInventory != null) {
+      payload.downstream_reference_inventory = downstreamReferenceInventory;
+    }
+  }
   if (state.mode === "Music3") payload.lyrics = lyrics;
   return payload;
 }
@@ -418,6 +586,10 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     lastVideoMode: preferences?.mode && preferences.mode !== "Music3" ? preferences.mode : "Reference",
     mediaFilter: "all",
     durationSeconds: preferences?.duration_seconds || 10,
+    generationTarget: preferences?.generation_target || "single",
+    continuumChunks: preferences?.continuum_chunks || 3,
+    continuumChunkSeconds: preferences?.continuum_chunk_seconds || 5,
+    continuumSequence: null,
     aspectRatio: preferences?.aspect_ratio || "16:9",
     contextProfile: "auto",
     contextTokens: null,
@@ -458,6 +630,8 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     generationDotCount: 0,
     sessionId,
     assets: [],
+    workflowReferenceBindings: {},
+    workflowReferenceImportBusy: false,
     previewAssetId: null,
     audioSupported: false,
     models: [],

@@ -86,6 +86,201 @@ class MediaError(Exception):
         self.message = message
 
 
+WORKFLOW_SCALE_X_NODE_CLASS = "ImageScaleToTotalPixelsX"
+WORKFLOW_SCALE_X_CONTRACT_SHA = "79e831097bb7a76ade3a28359300e62332086c42"
+WORKFLOW_SCALE_X_PLAN_VERSION = 1
+WORKFLOW_SCALE_X_RESIZE_MODES = {"stretch", "crop", "pad"}
+# Only Lanczos is admitted for exact pre-execution materialization today. The
+# reviewed node delegates this method to comfy.utils.lanczos, which is itself a
+# Pillow RGB uint8 Lanczos resize; reproducing it here does not require a GPU or
+# an unpinned torch interpolation implementation.
+WORKFLOW_SCALE_X_UPSCALE_METHODS = {"lanczos"}
+
+
+def normalize_workflow_materialization_plan(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Workflow image materialization plan must be an object.")
+    required = {
+        "kind",
+        "version",
+        "node_class",
+        "contract_sha",
+        "megapixels",
+        "multiple_of",
+        "resize_mode",
+        "upscale_method",
+    }
+    if set(value) != required:
+        raise MediaError(
+            "INVALID_WORKFLOW_MATERIALIZATION",
+            "Workflow image materialization plan has an unsupported schema.",
+        )
+    if value.get("kind") != "image_scale_to_total_pixels_x":
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Workflow image materialization kind is unsupported.")
+    if value.get("version") != WORKFLOW_SCALE_X_PLAN_VERSION:
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Workflow image materialization version is unsupported.")
+    if value.get("node_class") != WORKFLOW_SCALE_X_NODE_CLASS:
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Workflow image materialization node class is unsupported.")
+    if value.get("contract_sha") != WORKFLOW_SCALE_X_CONTRACT_SHA:
+        raise MediaError(
+            "WORKFLOW_MATERIALIZATION_CONTRACT_DRIFT",
+            "The Scale Image to Total Pixels Adv contract differs from the reviewed implementation.",
+        )
+
+    megapixels_raw = value.get("megapixels")
+    if isinstance(megapixels_raw, bool):
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Megapixels must be a finite number.")
+    try:
+        megapixels = float(megapixels_raw)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Megapixels must be a finite number.") from error
+    if not math.isfinite(megapixels) or megapixels < 0.0 or megapixels > 16.0:
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Megapixels must be between 0 and 16.")
+
+    multiple_of = value.get("multiple_of")
+    if isinstance(multiple_of, bool) or not isinstance(multiple_of, int) or not 1 <= multiple_of <= 128:
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "multiple_of must be an integer between 1 and 128.")
+
+    resize_mode = str(value.get("resize_mode", "")).strip().lower()
+    if resize_mode not in WORKFLOW_SCALE_X_RESIZE_MODES:
+        raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Resize mode is unsupported.")
+
+    upscale_method = str(value.get("upscale_method", "")).strip().lower()
+    if upscale_method not in WORKFLOW_SCALE_X_UPSCALE_METHODS:
+        raise MediaError(
+            "WORKFLOW_MATERIALIZATION_UNSUPPORTED",
+            "Only Lanczos Scale Image to Total Pixels Adv chains can currently be materialized exactly.",
+        )
+    return {
+        "kind": "image_scale_to_total_pixels_x",
+        "version": WORKFLOW_SCALE_X_PLAN_VERSION,
+        "node_class": WORKFLOW_SCALE_X_NODE_CLASS,
+        "contract_sha": WORKFLOW_SCALE_X_CONTRACT_SHA,
+        "megapixels": megapixels,
+        "multiple_of": multiple_of,
+        "resize_mode": resize_mode,
+        "upscale_method": upscale_method,
+    }
+
+
+def _scale_x_geometry(width: int, height: int, plan: dict[str, Any]) -> dict[str, int]:
+    megapixels = float(plan["megapixels"])
+    multiple_of = int(plan["multiple_of"])
+    resize_mode = str(plan["resize_mode"])
+
+    if megapixels == 0:
+        target_width = width
+        target_height = height
+    else:
+        total = int(megapixels * 1_000_000)
+        scale_by = math.sqrt(total / (width * height))
+        target_width = round(width * scale_by)
+        target_height = round(height * scale_by)
+
+    if multiple_of > 1:
+        target_width = target_width - (target_width % multiple_of)
+        target_height = target_height - (target_height % multiple_of)
+
+    target_width = max(multiple_of, target_width)
+    target_height = max(multiple_of, target_height)
+    resize_width = target_width
+    resize_height = target_height
+    x = y = x2 = y2 = 0
+    pad_left = pad_right = pad_top = pad_bottom = 0
+
+    if resize_mode == "pad":
+        ratio = min(target_width / width, target_height / height)
+        new_width = round(width * ratio)
+        new_height = round(height * ratio)
+        pad_left = (target_width - new_width) // 2
+        pad_right = target_width - new_width - pad_left
+        pad_top = (target_height - new_height) // 2
+        pad_bottom = target_height - new_height - pad_top
+        resize_width = new_width
+        resize_height = new_height
+    elif resize_mode == "crop":
+        ratio = max(target_width / width, target_height / height)
+        new_width = round(width * ratio)
+        new_height = round(height * ratio)
+        x = (new_width - target_width) // 2
+        y = (new_height - target_height) // 2
+        x2 = x + target_width
+        y2 = y + target_height
+        if x2 > new_width:
+            x -= x2 - new_width
+        if x < 0:
+            x = 0
+        if y2 > new_height:
+            y -= y2 - new_height
+        if y < 0:
+            y = 0
+        resize_width = new_width
+        resize_height = new_height
+
+    return {
+        "target_width": target_width,
+        "target_height": target_height,
+        "resize_width": resize_width,
+        "resize_height": resize_height,
+        "x": x,
+        "y": y,
+        "x2": x2,
+        "y2": y2,
+        "pad_left": pad_left,
+        "pad_right": pad_right,
+        "pad_top": pad_top,
+        "pad_bottom": pad_bottom,
+    }
+
+
+def materialize_workflow_image(source: Path, target: Path, raw_plan: Any) -> dict[str, Any]:
+    plan = normalize_workflow_materialization_plan(raw_plan)
+    with Image.open(source) as opened:
+        if int(getattr(opened, "n_frames", 1) or 1) != 1:
+            raise MediaError(
+                "WORKFLOW_MATERIALIZATION_UNSUPPORTED",
+                "Animated workflow image sources cannot be materialized as one exact H3 reference image.",
+            )
+        image = ImageOps.exif_transpose(opened).convert("RGB")
+
+    geometry = _scale_x_geometry(image.width, image.height, plan)
+    # BigStationW's reviewed Lanczos branch calls comfy.utils.lanczos. ComfyUI's
+    # implementation converts the RGB tensor back to uint8 and calls Pillow
+    # Image.Resampling.LANCZOS, so this operation is pixel-equivalent for a
+    # static LoadImage/Image Conveyor source.
+    output = image.resize(
+        (geometry["resize_width"], geometry["resize_height"]),
+        Image.Resampling.LANCZOS,
+    )
+
+    if plan["resize_mode"] == "pad":
+        if any(geometry[name] > 0 for name in ("pad_left", "pad_right", "pad_top", "pad_bottom")):
+            padded = Image.new("RGB", (geometry["target_width"], geometry["target_height"]), (0, 0, 0))
+            padded.paste(output, (geometry["pad_left"], geometry["pad_top"]))
+            output = padded
+    elif plan["resize_mode"] == "crop":
+        if any(geometry[name] > 0 for name in ("x", "y", "x2", "y2")):
+            output = output.crop((geometry["x"], geometry["y"], geometry["x2"], geometry["y2"]))
+
+    multiple_of = int(plan["multiple_of"])
+    if multiple_of > 1 and (output.width % multiple_of != 0 or output.height % multiple_of != 0):
+        final_width = output.width
+        final_height = output.height
+        x = (final_width % multiple_of) // 2
+        y = (final_height % multiple_of) // 2
+        x2 = final_width - ((final_width % multiple_of) - x)
+        y2 = final_height - ((final_height % multiple_of) - y)
+        output = output.crop((x, y, x2, y2))
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    output.save(target, "PNG")
+    return {
+        "width": output.width,
+        "height": output.height,
+        "plan": plan,
+    }
+
+
 class MediaStore:
     def __init__(self) -> None:
         self.sessions: dict[str, list[dict[str, Any]]] = {}

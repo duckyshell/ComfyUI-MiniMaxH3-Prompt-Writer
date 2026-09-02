@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import threading
 import time
@@ -14,9 +15,36 @@ from server import PromptServer
 from .assembly import AssemblyError, assemble_lyrics_request, assemble_refinement, assemble_request
 from .catalog import discover_models_with_diagnostics, find_model, model_setup_catalog
 from .comfy_state import comfyui_runtime_snapshot
+from .continuum import (
+    GENERATION_TARGET_CONTINUUM,
+    ContinuumError,
+    apply_continuum_refinement,
+    assemble_continuum_chunk_request,
+    assemble_continuum_plan_repair_request,
+    assemble_continuum_plan_request,
+    assemble_continuum_refinement,
+    generation_target,
+    parse_sequence_plan,
+    recover_sequence_plan_contract,
+    persistent_reference_tags,
+    sequence_reference_scopes,
+    sequence_result,
+    stable_reference_tags,
+    validate_continuum_settings,
+    validate_generated_chunk,
+)
 from .devlog import DEVELOPER_MODE, LOG_PATH, PeakVRAMMonitor, gpu_memory_snapshot, write_event
 from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
-from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, parse_session_id
+from .media import (
+    CACHE_ROOT,
+    MAX_FILE_BYTES,
+    MODE_LIMITS,
+    STORE,
+    MediaError,
+    materialize_workflow_image,
+    normalize_workflow_materialization_plan,
+    parse_session_id,
+)
 from .memory import assess_free_vram
 from .models.gguf_backend import BACKEND as GGUF_BACKEND
 from .models.external_server_backend import BACKEND as EXTERNAL_SERVER_BACKEND
@@ -41,6 +69,8 @@ STATE: dict[str, Any] = {
     "pending_unload_model_id": None,
     "pending_unload_endpoint": None,
     "media_mutation_active": False,
+    "sequence_chunk_index": None,
+    "sequence_chunk_total": None,
 }
 STATE_LOCK = threading.RLock()
 
@@ -172,6 +202,8 @@ def _claim_generation_request() -> str | None:
             "pending_unload_family": None,
             "pending_unload_model_id": None,
             "pending_unload_endpoint": None,
+            "sequence_chunk_index": None,
+            "sequence_chunk_total": None,
         })
     return request_id
 
@@ -205,6 +237,13 @@ def _set_request_phase(request_id: str, phase: str) -> None:
             STATE["phase"] = phase
 
 
+def _set_sequence_progress(request_id: str, index: int | None, total: int | None) -> None:
+    with STATE_LOCK:
+        if STATE["active_request_id"] == request_id:
+            STATE["sequence_chunk_index"] = index
+            STATE["sequence_chunk_total"] = total
+
+
 def _release_generation_request(request_id: str) -> None:
     with STATE_LOCK:
         if STATE["active_request_id"] != request_id:
@@ -216,6 +255,8 @@ def _release_generation_request(request_id: str) -> None:
             "pending_unload_family": None,
             "pending_unload_model_id": None,
             "pending_unload_endpoint": None,
+            "sequence_chunk_index": None,
+            "sequence_chunk_total": None,
         })
 
 
@@ -380,17 +421,7 @@ async def _prepare_generation_runtime(
         backend.cancel()
         raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
 
-    runtime_options = {
-        "context_profile": body.get("context_profile", "auto"),
-        "kv_cache": body.get("kv_cache", "auto"),
-        "thinking": body.get("thinking", False),
-    }
-    if model["family"] == "gguf":
-        runtime_options.update({
-            "context_tokens": body.get("context_tokens"),
-            "generation_budget": body.get("generation_budget"),
-            "reasoning_effort": body.get("reasoning_effort", "auto"),
-        })
+    runtime_options = _runtime_options(body, model)
     runtime_plan, cancellation = await _run_thread_worker(
         backend.preflight,
         model,
@@ -410,6 +441,41 @@ async def _prepare_generation_runtime(
                 pass
         raise
     return model, backend, runtime_plan
+
+
+def _runtime_options(body: dict[str, Any], model: dict[str, Any]) -> dict[str, Any]:
+    runtime_options = {
+        "context_profile": body.get("context_profile", "auto"),
+        "kv_cache": body.get("kv_cache", "auto"),
+        "thinking": body.get("thinking", False),
+    }
+    if model["family"] == "gguf":
+        runtime_options.update({
+            "context_tokens": body.get("context_tokens"),
+            "generation_budget": body.get("generation_budget"),
+            "reasoning_effort": body.get("reasoning_effort", "auto"),
+        })
+    return runtime_options
+
+
+async def _preflight_sequence_stage(
+    body: dict[str, Any],
+    model: dict[str, Any],
+    backend: Any,
+    assembled: dict[str, Any],
+    request_id: str,
+) -> dict[str, Any]:
+    runtime_plan, cancellation = await _run_thread_worker(
+        backend.preflight,
+        model,
+        assembled,
+        **_runtime_options(body, model),
+    )
+    _propagate_worker_cancellation(cancellation)
+    await _memory_preflight(backend, model, runtime_plan)
+    if _request_cancelled(request_id):
+        raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
+    return runtime_plan
 
 
 def _model_error_status(error: ModelError) -> int:
@@ -445,6 +511,16 @@ def _model_error_status(error: ModelError) -> int:
         "API_REQUEST_TIMEOUT",
         "API_RESPONSE_INVALID",
         "API_GENERATION_FAILED",
+        "INVALID_CONTINUUM_PLAN",
+        "INVALID_CONTINUUM_PLAN_CHUNKS",
+        "INVALID_CONTINUUM_PLAN_CONTINUITY",
+        "INVALID_CONTINUUM_PLAN_REFERENCES",
+        "INVALID_CONTINUUM_CHUNK_FORMAT",
+        "EMPTY_CONTINUUM_CHUNK",
+        "INVALID_CONTINUUM_SEQUENCE",
+        "CONTINUUM_REFERENCE_IDENTITY_DRIFT",
+        "CONTINUUM_REFERENCE_SCOPE_DRIFT",
+        "CONTINUUM_SUBJECT_IDENTITY_DRIFT",
     }:
         return 502
     return 400
@@ -467,6 +543,381 @@ async def _json_body(request: web.Request) -> dict[str, Any] | None:
     except (ValueError, TypeError):
         return None
     return body if isinstance(body, dict) else None
+
+
+async def _run_generation_stage(
+    *,
+    body: dict[str, Any],
+    model: dict[str, Any],
+    backend: Any,
+    assembled: dict[str, Any],
+    runtime_plan: dict[str, Any],
+    seed: int | None,
+    unload_after: bool,
+    on_phase: Callable[[str], None],
+) -> dict[str, Any]:
+    result, cancellation = await _run_thread_worker(
+        backend.generate,
+        model,
+        assembled,
+        body["session_id"],
+        on_cancel=backend.cancel,
+        thinking=body.get("thinking", False),
+        seed=seed,
+        unload_after=unload_after,
+        context_profile=body.get("context_profile", "auto"),
+        kv_cache=body.get("kv_cache", "auto"),
+        runtime_plan=runtime_plan,
+        on_phase=on_phase,
+    )
+    _propagate_worker_cancellation(cancellation)
+    return result
+
+
+def _sequence_seed(seed: int | None, stage: int) -> int | None:
+    if seed is None:
+        return None
+    return (int(seed) + 0x9E3779B1 * int(stage)) & 0x7FFFFFFF
+
+
+def _aggregate_sequence_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
+    if not results:
+        return {}
+    final = results[-1]
+    generation_seconds = sum(float(item.get("generation_seconds") or 0) for item in results)
+    output_tokens = sum(int(item.get("output_tokens") or 0) for item in results)
+    aggregated: dict[str, Any] = {
+        "input_tokens": sum(int(item.get("input_tokens") or 0) for item in results),
+        "output_tokens": output_tokens,
+        "generation_seconds": round(generation_seconds, 3),
+        "media_processing_seconds": round(
+            sum(float(item.get("media_processing_seconds") or 0) for item in results), 3
+        ),
+        "visual_input_count": sum(int(item.get("visual_input_count") or 0) for item in results),
+        "video_frame_count": sum(int(item.get("video_frame_count") or 0) for item in results),
+        "video_sheet_count": sum(int(item.get("video_sheet_count") or 0) for item in results),
+        "thinking_fallback": any(bool(item.get("thinking_fallback")) for item in results),
+        "thinking_attempt_tokens": sum(int(item.get("thinking_attempt_tokens") or 0) for item in results),
+        "reasoning_tokens": sum(int(item.get("reasoning_tokens") or 0) for item in results),
+        "cold_start": any(bool(item.get("cold_start")) for item in results),
+        "model_load_seconds": round(sum(float(item.get("model_load_seconds") or 0) for item in results), 3),
+        "context_tokens": max(int(item.get("context_tokens") or 0) for item in results),
+        "max_output_tokens": max(int(item.get("max_output_tokens") or 0) for item in results),
+        "thinking_budget_reduced": any(bool(item.get("thinking_budget_reduced")) for item in results),
+        "tokens_per_second": round(output_tokens / generation_seconds, 2) if generation_seconds > 0 else 0,
+        "sequence_request_count": len(results),
+    }
+    for key in (
+        "context_profile",
+        "kv_cache",
+        "text_token_source",
+        "api_provider",
+        "external_server",
+        "provider_request_count",
+        "usage_source",
+        "provider_request_ids",
+        "provider_cost_usd",
+        "upstream_providers",
+    ):
+        if key in final:
+            aggregated[key] = final[key]
+    return aggregated
+
+
+async def _unload_failed_sequence(
+    backend: Any,
+    model: dict[str, Any],
+    body: dict[str, Any],
+) -> None:
+    if not body.get("unload_after", True) or getattr(backend, "externally_managed", False):
+        return
+    try:
+        if model.get("family") == "ollama":
+            await _run_thread_worker(
+                backend.unload,
+                model.get("remote_model"),
+                model.get("endpoint") or body.get("ollama_host"),
+            )
+        else:
+            await _run_thread_worker(backend.unload)
+    except BaseException:
+        pass
+
+
+async def _generate_continuum(
+    body: dict[str, Any],
+    planner_assembled: dict[str, Any],
+    settings: dict[str, Any],
+) -> web.Response:
+    request_id = _claim_generation_request()
+    if request_id is None:
+        return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
+    model: dict[str, Any] | None = None
+    backend: Any = None
+    request_started = time.perf_counter()
+    vram_monitor = PeakVRAMMonitor()
+    vram_monitor.start()
+    stage = {"kind": "plan", "chunk": None}
+
+    def on_phase(phase: str) -> None:
+        if phase == "generating":
+            visible_phase = "planning_sequence" if stage["kind"] in {"plan", "plan_repair"} else "generating_chunk"
+        elif phase == "processing_media" and stage["kind"] in {"plan", "plan_repair"}:
+            visible_phase = "planning_sequence"
+        else:
+            visible_phase = phase
+        _set_request_phase(request_id, visible_phase)
+        write_event(
+            "phase",
+            request_id=request_id,
+            operation="generate_continuum",
+            phase=visible_phase,
+            stage=stage["kind"],
+            chunk_index=stage["chunk"],
+            elapsed_seconds=round(time.perf_counter() - request_started, 3),
+        )
+
+    try:
+        model, backend, planner_runtime = await _prepare_generation_runtime(body, planner_assembled, request_id)
+        write_event(
+            "request_started",
+            request_id=request_id,
+            operation="generate_continuum",
+            model={"id": model["id"], "name": model["name"], "family": model["family"], "format": model.get("format")},
+            thinking=body.get("thinking", False),
+            seed=body.get("seed"),
+            unload_after=body.get("unload_after", True),
+            context_profile=planner_runtime["context_profile"],
+            kv_cache=planner_runtime["kv_cache"],
+            input=planner_assembled["input"],
+        )
+        stage_results: list[dict[str, Any]] = []
+        planner_result = await _run_generation_stage(
+            body=body,
+            model=model,
+            backend=backend,
+            assembled=planner_assembled,
+            runtime_plan=planner_runtime,
+            seed=_sequence_seed(body.get("seed"), 0),
+            unload_after=False,
+            on_phase=on_phase,
+        )
+        stage_results.append(planner_result)
+        expected_references = stable_reference_tags(planner_assembled["input"])
+        persistent_references = persistent_reference_tags(
+            planner_assembled["input"],
+            chunks=settings["chunks"],
+        )
+        chunk_reference_scopes = sequence_reference_scopes(
+            planner_assembled["input"],
+            chunks=settings["chunks"],
+        )
+        planner_repair_attempted = False
+        planner_contract_recovery_actions: list[str] = []
+        try:
+            plan = parse_sequence_plan(
+                planner_result["prompt"],
+                settings,
+                expected_references=expected_references,
+                persistent_references=persistent_references,
+                chunk_reference_scopes=chunk_reference_scopes,
+            )
+        except ContinuumError as first_error:
+            try:
+                plan, planner_contract_recovery_actions = recover_sequence_plan_contract(
+                    planner_result["prompt"],
+                    settings,
+                    expected_references=expected_references,
+                    persistent_references=persistent_references,
+                    chunk_reference_scopes=chunk_reference_scopes,
+                )
+            except ContinuumError:
+                planner_repair_attempted = True
+                stage.update({"kind": "plan_repair", "chunk": None})
+                repair_assembled = assemble_continuum_plan_repair_request(
+                    body,
+                    planner_result["prompt"],
+                    first_error,
+                )
+                repair_runtime = await _preflight_sequence_stage(
+                    body, model, backend, repair_assembled, request_id
+                )
+                repair_result = await _run_generation_stage(
+                    body=body,
+                    model=model,
+                    backend=backend,
+                    assembled=repair_assembled,
+                    runtime_plan=repair_runtime,
+                    seed=_sequence_seed(body.get("seed"), 1),
+                    unload_after=False,
+                    on_phase=on_phase,
+                )
+                stage_results.append(repair_result)
+                try:
+                    plan = parse_sequence_plan(
+                        repair_result["prompt"],
+                        settings,
+                        expected_references=expected_references,
+                        persistent_references=persistent_references,
+                        chunk_reference_scopes=chunk_reference_scopes,
+                    )
+                except ContinuumError as second_error:
+                    try:
+                        plan, planner_contract_recovery_actions = recover_sequence_plan_contract(
+                            repair_result["prompt"],
+                            settings,
+                            expected_references=expected_references,
+                            persistent_references=persistent_references,
+                            chunk_reference_scopes=chunk_reference_scopes,
+                        )
+                    except ContinuumError as recovery_error:
+                        raise ModelError(
+                            second_error.code,
+                            "The sequence planner remained invalid after one bounded complete-contract repair "
+                            "and deterministic contract recovery.",
+                            {
+                                "initial_error": {
+                                    "code": first_error.code,
+                                    "message": first_error.message,
+                                    "details": first_error.details,
+                                },
+                                "repair_error": {
+                                    "code": second_error.code,
+                                    "message": second_error.message,
+                                    "details": second_error.details,
+                                },
+                                "recovery_error": {
+                                    "code": recovery_error.code,
+                                    "message": recovery_error.message,
+                                    "details": recovery_error.details,
+                                },
+                            },
+                        ) from recovery_error
+
+        prompts: list[str] = []
+        chunk_results: list[dict[str, Any]] = []
+        seed_stage_offset = 2 if planner_repair_attempted else 1
+        for index in range(1, settings["chunks"] + 1):
+            stage.update({"kind": "chunk", "chunk": index})
+            _set_sequence_progress(request_id, index, settings["chunks"])
+            if _request_cancelled(request_id):
+                raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
+            try:
+                assembled = assemble_continuum_chunk_request(
+                    body,
+                    plan,
+                    index,
+                    previous_prompt=prompts[-1] if prompts else None,
+                )
+                runtime_plan = await _preflight_sequence_stage(
+                    body, model, backend, assembled, request_id
+                )
+                result = await _run_generation_stage(
+                    body=body,
+                    model=model,
+                    backend=backend,
+                    assembled=assembled,
+                    runtime_plan=runtime_plan,
+                    seed=_sequence_seed(body.get("seed"), seed_stage_offset + index - 1),
+                    unload_after=bool(body.get("unload_after", True) and index == settings["chunks"]),
+                    on_phase=on_phase,
+                )
+                prompt = validate_generated_chunk(result["prompt"], assembled)
+            except ContinuumError as error:
+                raise ModelError(
+                    error.code,
+                    f"Continuum generation failed at Chunk {index}: {error.message}",
+                    {"chunk_index": index, "continuum_error": error.details},
+                ) from error
+            except ModelError as error:
+                if error.code == "GENERATION_CANCELLED":
+                    raise
+                raise ModelError(
+                    error.code,
+                    f"Continuum generation failed at Chunk {index}: {error.message}",
+                    {"chunk_index": index, "cause": error.details},
+                ) from error
+            prompts.append(prompt)
+            stage_results.append(result)
+            chunk_results.append({
+                "index": index,
+                "prompt_audit": result.get("prompt_audit"),
+                "format_repair_attempted": bool(result.get("format_repair_attempted")),
+                "format_repair_applied": bool(result.get("format_repair_applied")),
+                "format_repair_failure": result.get("format_repair_failure"),
+            })
+
+        sequence = sequence_result(
+            settings,
+            plan,
+            prompts,
+            downstream_reference_inventory=planner_assembled["input"]["downstream_reference_inventory"],
+        )
+        total_seconds = round(time.perf_counter() - request_started, 3)
+        peak_vram_mb = vram_monitor.stop()
+        metrics = _aggregate_sequence_metrics(stage_results)
+        response = {
+            "request_id": request_id,
+            "model_id": model["id"],
+            "thinking": body.get("thinking", False),
+            "generation_target": GENERATION_TARGET_CONTINUUM,
+            "total_seconds": total_seconds,
+            "peak_vram_mb": peak_vram_mb,
+            "prompt": sequence["prompt"],
+            "sequence": sequence,
+            "planner_repair_attempted": planner_repair_attempted,
+            "planner_contract_recovery_applied": bool(planner_contract_recovery_actions),
+            "planner_contract_recovery_actions": planner_contract_recovery_actions,
+            "chunk_results": chunk_results,
+            **metrics,
+        }
+        write_event(
+            "request_succeeded",
+            request_id=request_id,
+            operation="generate_continuum",
+            total_seconds=total_seconds,
+            peak_vram_mb=peak_vram_mb,
+            metrics=metrics,
+            chunks=settings["chunks"],
+            chunk_seconds=settings["chunk_seconds"],
+            output=sequence["prompt"],
+        )
+        return web.json_response(response)
+    except (ContinuumError, AssemblyError) as error:
+        wrapped = ModelError(error.code, error.message, error.details)
+        if backend is not None and model is not None:
+            await _unload_failed_sequence(backend, model, body)
+        peak_vram_mb = vram_monitor.stop()
+        write_event(
+            "request_failed",
+            request_id=request_id,
+            operation="generate_continuum",
+            total_seconds=round(time.perf_counter() - request_started, 3),
+            peak_vram_mb=peak_vram_mb,
+            error={"code": wrapped.code, "message": wrapped.message, "details": wrapped.details},
+        )
+        return _error(wrapped.code, wrapped.message, status=_model_error_status(wrapped), details=wrapped.details)
+    except ModelError as error:
+        if backend is not None and model is not None:
+            await _unload_failed_sequence(backend, model, body)
+        peak_vram_mb = vram_monitor.stop()
+        write_event(
+            "request_failed",
+            request_id=request_id,
+            operation="generate_continuum",
+            total_seconds=round(time.perf_counter() - request_started, 3),
+            peak_vram_mb=peak_vram_mb,
+            error={"code": error.code, "message": error.message, "details": error.details},
+        )
+        status = 499 if error.code == "GENERATION_CANCELLED" else _model_error_status(error)
+        return _error(error.code, error.message, status=status, details=error.details)
+    except BaseException:
+        if backend is not None and model is not None:
+            await _unload_failed_sequence(backend, model, body)
+        raise
+    finally:
+        vram_monitor.stop()
+        _release_generation_request(request_id)
 
 
 routes = PromptServer.instance.routes
@@ -496,7 +947,14 @@ async def get_status(request: web.Request) -> web.Response:
     else:
         backend_status = await asyncio.to_thread(backend.status)
     return web.json_response({
-        **{key: state[key] for key in ("phase", "active_request_id", "selected_model_id", "selected_model_family")},
+        **{key: state[key] for key in (
+            "phase",
+            "active_request_id",
+            "selected_model_id",
+            "selected_model_family",
+            "sequence_chunk_index",
+            "sequence_chunk_total",
+        )},
         **backend_status,
         "backend_ready": True,
         "model_backend_ready": True,
@@ -658,10 +1116,25 @@ async def generate(request: web.Request) -> web.Response:
     if body["mode"] not in MODES:
         return _error("INVALID_MODE", "The selected MiniMax mode is not supported.", status=400)
 
+    try:
+        target = generation_target(body)
+    except ContinuumError as error:
+        return _error(error.code, error.message, status=400, details=error.details)
+
     if not isinstance(body.get("thinking", False), bool) or not isinstance(body.get("unload_after", True), bool):
         return _error("INVALID_REQUEST", "Thinking and unload_after must be booleans.", status=400)
     if body.get("seed") is not None and (not isinstance(body["seed"], int) or isinstance(body["seed"], bool) or body["seed"] < 0):
         return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
+    if target == GENERATION_TARGET_CONTINUUM:
+        try:
+            settings = validate_continuum_settings(body)
+            planner_assembled = assemble_continuum_plan_request(body)
+        except (ContinuumError, AssemblyError) as error:
+            return _error(error.code, error.message, status=400, details=error.details)
+        except (MediaError, RuntimeError) as error:
+            code = error.code if isinstance(error, MediaError) else "GUIDE_LOAD_FAILED"
+            return _error(code, str(error), status=500)
+        return await _generate_continuum(body, planner_assembled, settings)
     try:
         assembled = assemble_request(body)
     except AssemblyError as error:
@@ -841,6 +1314,10 @@ async def refine(request: web.Request) -> web.Response:
     body = await _json_body(request)
     if body is None:
         return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
+    try:
+        target = generation_target(body)
+    except ContinuumError as error:
+        return _error(error.code, error.message, status=400, details=error.details)
     lyrics_request = body.get("mode") == "Music3" and body.get("target") == "lyrics"
     required = ("model_id", "session_id", "mode") if lyrics_request else ("current_prompt", "instruction", "model_id", "session_id", "mode")
     missing = [key for key in required if not body.get(key)]
@@ -850,12 +1327,17 @@ async def refine(request: web.Request) -> web.Response:
         return _error("INVALID_REQUEST", "Thinking and unload_after must be booleans.", status=400)
     if body.get("seed") is not None and (not isinstance(body["seed"], int) or isinstance(body["seed"], bool) or body["seed"] < 0):
         return _error("INVALID_REQUEST", "Seed must be a non-negative integer.", status=400)
+    continuum_refinement: tuple[dict[str, Any], int, dict[str, Any]] | None = None
     try:
-        assembled = assemble_lyrics_request(body) if lyrics_request else assemble_refinement(
-            body,
-            _get_generation_cache(body["session_id"], body["mode"]),
-        )
-    except AssemblyError as error:
+        if target == GENERATION_TARGET_CONTINUUM:
+            assembled, sequence_state, chunk_index, sequence_plan = assemble_continuum_refinement(body)
+            continuum_refinement = (sequence_state, chunk_index, sequence_plan)
+        else:
+            assembled = assemble_lyrics_request(body) if lyrics_request else assemble_refinement(
+                body,
+                _get_generation_cache(body["session_id"], body["mode"]),
+            )
+    except (AssemblyError, ContinuumError) as error:
         return _error(error.code, error.message, status=400, details=error.details)
     except (MediaError, RuntimeError) as error:
         code = error.code if isinstance(error, MediaError) else "GUIDE_LOAD_FAILED"
@@ -914,6 +1396,23 @@ async def refine(request: web.Request) -> web.Response:
         _propagate_worker_cancellation(cancellation)
         if lyrics_request and len(result["prompt"]) > 4000:
             raise ModelError("LYRICS_TOO_LONG", "The generated Lyrics exceed 4,000 characters. Shorten the request and try again.")
+        if continuum_refinement is not None:
+            sequence_state, chunk_index, sequence_plan = continuum_refinement
+            try:
+                sequence = apply_continuum_refinement(
+                    result["prompt"],
+                    assembled,
+                    sequence_state,
+                    chunk_index,
+                    sequence_plan,
+                )
+            except ContinuumError as error:
+                raise ModelError(error.code, error.message, error.details) from error
+            result["chunk_prompt"] = sequence["chunks"][chunk_index - 1]["prompt"]
+            result["chunk_index"] = chunk_index
+            result["prompt"] = sequence["prompt"]
+            result["sequence"] = sequence
+            result["generation_target"] = GENERATION_TARGET_CONTINUUM
         total_seconds = round(time.perf_counter() - request_started, 3)
         peak_vram_mb = vram_monitor.stop()
         debug_input_sequence = result.pop("debug_input_sequence", None)
@@ -936,6 +1435,13 @@ async def refine(request: web.Request) -> web.Response:
             **result,
         })
     except ModelError as error:
+        if continuum_refinement is not None and error.code != "GENERATION_CANCELLED":
+            chunk_index = continuum_refinement[1]
+            error = ModelError(
+                error.code,
+                f"Continuum refinement failed at Chunk {chunk_index}: {error.message}",
+                {"chunk_index": chunk_index, "cause": error.details},
+            )
         peak_vram_mb = vram_monitor.stop()
         write_event(
             "request_failed",
@@ -950,6 +1456,142 @@ async def refine(request: web.Request) -> web.Response:
     finally:
         vram_monitor.stop()
         _release_generation_request(request_id)
+
+
+@routes.post(f"{ROUTE_PREFIX}/media/materialize-workflow-image")
+async def materialize_workflow_reference_media(request: web.Request) -> web.Response:
+    busy = _generation_busy_error()
+    if busy is not None:
+        return busy
+    try:
+        reader = await request.multipart()
+    except Exception:
+        return _error("INVALID_REQUEST", "Expected multipart form data.", status=400)
+
+    session_id: str | None = None
+    mode: str | None = None
+    plan: dict[str, Any] | None = None
+    source_path: Path | None = None
+    asset_dir: Path | None = None
+    media_claimed = False
+    replace_asset_id: str | None = request.query.get("replace_asset_id") or None
+    source_filename = "workflow-reference.png"
+
+    def rollback() -> None:
+        if asset_dir is not None:
+            shutil.rmtree(asset_dir, ignore_errors=True)
+
+    try:
+        while field := await reader.next():
+            if field.name == "session_id":
+                session_id = parse_session_id((await field.text()).strip() or None)
+                continue
+            if field.name == "mode":
+                mode = (await field.text()).strip()
+                continue
+            if field.name == "replace_asset_id":
+                replace_asset_id = (await field.text()).strip() or None
+                continue
+            if field.name == "materialization_plan":
+                try:
+                    plan = normalize_workflow_materialization_plan(json.loads(await field.text()))
+                except json.JSONDecodeError as error:
+                    raise MediaError(
+                        "INVALID_WORKFLOW_MATERIALIZATION",
+                        "Workflow image materialization plan is not valid JSON.",
+                    ) from error
+                continue
+            if field.name != "file" or not field.filename:
+                continue
+            if source_path is not None:
+                raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Workflow materialization accepts exactly one source image.")
+            if session_id is None:
+                session_id = parse_session_id(None)
+            if mode != "Reference":
+                raise MediaError(
+                    "INVALID_MODE",
+                    "Workflow image materialization is only available in Reference mode.",
+                )
+            asset_dir = CACHE_ROOT / session_id / str(uuid4())
+            asset_dir.mkdir(parents=True, exist_ok=False)
+            extension = Path(field.filename).suffix.lower() or ".img"
+            source_path = asset_dir / f"workflow_source{extension}"
+            source_filename = Path(field.filename).name or "workflow-reference.png"
+            size = 0
+            with source_path.open("wb") as output:
+                while chunk := await field.read_chunk(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_FILE_BYTES:
+                        raise MediaError("MEDIA_TOO_LARGE", "A media file cannot exceed 1 GB.")
+                    output.write(chunk)
+
+        if session_id is None or source_path is None or asset_dir is None:
+            raise MediaError("INVALID_REQUEST", "Workflow materialization requires one source image.")
+        if mode != "Reference":
+            raise MediaError("INVALID_MODE", "Workflow image materialization is only available in Reference mode.")
+        if plan is None:
+            raise MediaError("INVALID_WORKFLOW_MATERIALIZATION", "Workflow image materialization plan is missing.")
+        if not _claim_media_mutation():
+            raise MediaError("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.")
+        media_claimed = True
+
+        target_path = asset_dir / "original.png"
+        _materialized, cancellation = await _run_thread_worker(
+            materialize_workflow_image,
+            source_path,
+            target_path,
+            plan,
+        )
+        _propagate_worker_cancellation(cancellation)
+        source_path.unlink(missing_ok=True)
+        materialized_filename = f"{Path(source_filename).stem or 'workflow-reference'}-materialized.png"
+
+        if replace_asset_id:
+            old_asset = STORE.get(session_id, replace_asset_id)
+            if old_asset["mode"] != "Reference":
+                raise MediaError("INVALID_REPLACEMENT", "The replacement must stay in Reference mode.")
+            prepared, cancellation = await _run_thread_worker(
+                STORE.prepare_replace,
+                session_id,
+                replace_asset_id,
+                materialized_filename,
+                "image/png",
+                target_path,
+            )
+            _propagate_worker_cancellation(cancellation)
+            asset = STORE.commit_replace(session_id, replace_asset_id, prepared)
+            asset_dir = None
+            _invalidate_generation_cache(session_id, "Reference")
+            return web.json_response(
+                {"session_id": session_id, "asset": asset, "assets": STORE.list(session_id)},
+                status=201,
+            )
+
+        prepared, cancellation = await _run_thread_worker(
+            STORE.prepare_add,
+            session_id,
+            "Reference",
+            materialized_filename,
+            "image/png",
+            target_path,
+        )
+        _propagate_worker_cancellation(cancellation)
+        asset = STORE.commit_add(session_id, "Reference", prepared)
+        asset_dir = None
+        _invalidate_generation_cache(session_id, "Reference")
+        return web.json_response({"session_id": session_id, "assets": [asset]}, status=201)
+    except (MediaError, ValueError) as error:
+        rollback()
+        if isinstance(error, MediaError):
+            status = 409 if error.code == "GENERATION_BUSY" else 400
+            return _media_error(error, status=status)
+        return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
+    except BaseException:
+        rollback()
+        raise
+    finally:
+        if media_claimed:
+            _release_media_mutation()
 
 
 @routes.post(f"{ROUTE_PREFIX}/media/upload")

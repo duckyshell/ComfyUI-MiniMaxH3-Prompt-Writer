@@ -17,6 +17,65 @@ Use the fullscreen button in the Writer header when you want the workspace to fi
 
 ![Reference mode with a generated prompt](assets/v0.3/reference-workspace.png)
 
+## H3 Continuum sequences
+
+**H3 Continuum** is an output target for the five H3 Video modes. It is not a sixth mode. Choose the underlying T2VA, I2VA, FL2VA, L2VA, or Reference mode first, then select **H3 Continuum** under **Output target**.
+
+Set **Chunks** from 1 to 16 and **Seconds per chunk** from 4 to 30; 5 to 15 seconds remains the upstream recommended and validated range. Writer shows their total duration but sends the native per-chunk duration to H3. For example, 8 chunks at 6 seconds is a 48-second sequence.
+
+Sequence generation is staged:
+
+1. Writer creates and validates one semantic continuity plan for the complete sequence. The model writes sequence-wide H3 prose in `global.sequence_preamble`, while Writer owns chunk count, exact time boundaries, and public downstream reference identities.
+2. Writer generates each chunk-local H3 prompt in order. Continuous chunks receive the previous terminal state and previous chunk prompt; an intentional cut or reset is allowed only when the plan marks an explicit `intentional_break`. Chunk bodies use Continuum-native prose rather than standalone I2VA/FL2VA/L2VA/Reference wrappers. The dedicated authoring contract keeps the format-safe H3 rules: grounded visible/audible progression, natural camera motion, stable speaker IDs, exact `<d>[Language] ...</d>` dialogue, verbatim visible text, requested-only music, and exclusive reference-role transfer. Absolute sequence timing belongs to the outer Timeline headers.
+3. Writer serializes one canonical Continuum Timeline. Persistent H3 prose appears before the first section header, then every chunk body appears below its exact `[start-end]` header.
+
+For three 5-second chunks, the shape is:
+
+```text
+Persistent sequence-wide H3 identity, reference, wardrobe, environment, style, camera, lighting, audio, and exclusion rules.
+
+[0-5s]
+Chunk-local H3 prompt for the first span.
+
+[5-10s]
+Chunk-local H3 prompt continuing from the first span.
+
+[10-15s]
+Chunk-local H3 prompt continuing from the second span.
+```
+
+The header must be on its own line. Writer computes integer and fractional boundaries deterministically from **Seconds per chunk**; a 6.5-second sequence therefore uses `[0-6.5s]`, `[6.5-13s]`, `[13-19.5s]`, and so on. Writer does not depend on Continuum's parser fallback to reinterpret malformed text.
+
+The plan keeps subject identity, wardrobe, environment, camera axis, lighting, sound, dialogue, visible text, constraints, and reference roles stable. Prompt models are probabilistic, so review the sequence; Writer validates structure and stable identifiers but cannot guarantee perfect visual continuity from the video model.
+
+Install [ComfyUI H3 Continuum](https://github.com/ukr8b3g-cmyk/ComfyUI-H3-Continuum) and use a supported **H3 Continuum Sampler V3.4–V3.7** (V3.7 is the current upstream release). Connect a **Text (Multiline)** node to the sampler's **Sequence Prompt** input. **Apply to Continuum** requires **Prompt Format = Timeline** and writes the canonical sequence into that connected text widget. If more than one compatible sampler exists, select exactly one on the canvas first. If Prompt Format, chunk count, or chunk duration differs, Writer shows every mismatch and offers an explicit **Sync settings & apply** action. That action changes only those sampler settings and the connected text value; it does not add or rewire nodes.
+
+### Continuum references and keyframes
+
+Before a Continuum generation or refinement request, Writer requires a compatible H3 Continuum V3.4–V3.7 sampler in the current workflow, inspects its active conditioning inputs, and derives the same public identities that H3 Continuum presents to MiniMax. If no compatible sampler exists, Writer stops before contacting the prompt model; it does not invent an empty reference topology. The backend enforces the same contract, so direct Continuum API requests must include the downstream inventory explicitly; an empty inventory means the inspected sampler genuinely has no active conditioning inputs.
+
+When one or more **Reference Image** sockets are active, those Reference Images own the public Picture namespace in active connection order, compacted to `<Picture 1>` through `<Picture N>`. Gaps in physical socket numbers do not create gaps in public numbering. In these hybrid runs, connected **First Frame** and **Last Frame** remain temporal keyframes and do not receive separate public Picture tags.
+
+Writer also checks the selected mode against the sampler's conditioning topology before generation, refinement, and graph handoff. T2VA requires no First/Last keyframe and no active Reference Image input; Reference Images without temporal keyframes are H3 Continuum Reference conditioning, not T2VA. I2VA requires First Frame only, FL2VA requires both First and Last Frame, and L2VA requires Last Frame only. Reference mode remains hybrid-capable: Reference Images can coexist with either or both keyframes. Reference Images augment I2VA/FL2VA/L2VA rather than changing those keyframe modes.
+
+When no Reference Image socket is active, connected temporal keyframes own the compact Picture namespace instead: **First Frame** is `<Picture 1>`; **Last Frame** is the next active Picture identity, so FL2VA uses `<Picture 1>` for the opening and `<Picture 2>` for the ending, while L2VA uses `<Picture 1>` for its sole final keyframe. In a multi-chunk sequence, an opening-keyframe tag is valid only in Chunk 1 and a final-keyframe tag is valid only in the final chunk; neither belongs in the shared preamble. Persistent Reference Image tags remain valid across chunks.
+
+**Video Reference** owns the persistent public tag `<Video 1>`. On V3.5 and newer, **Reference Audio** owns persistent `<Audio 1>` and can be used in the shared preamble and every chunk. **Driving Audio** is a different contract: it is persistent downstream conditioning and owns no `<Audio N>` prompt tag. V3.7's optional **Still Image Guide** also owns no public prompt tag. Writer validates these scopes in the semantic plan, generated chunk, and chunk-refinement paths.
+
+The downstream workflow inventory and the prompt model's visible media are separate contracts. A connected Reference Image can be declared as `<Picture 1>` even when its pixels were never uploaded to Prompt Writer or Qwen. In that case Writer tells the planner that the reference exists and is not model-visible, and the model must not invent its appearance. State the intended role in the Creative Brief, for example `Use <Picture 1> for the subject identity`.
+
+Prompt Writer media is never assumed to be the same downstream reference merely because both would otherwise be called `<Picture 1>`. Unverified uploaded media is labeled as analysis media for the prompt model instead of silently taking a downstream public identity.
+
+When [Image Conveyor](https://github.com/xmarre/ComfyUI-Image-Conveyor) feeds the selected Continuum sampler, Writer resolves Conveyor's effective output contract rather than treating every saved wire as active. In **Reference + H3 Continuum**, the Media panel contains an **Active workflow images** section. **Add active workflow refs** copies each stable, active Conveyor Reference Shelf image (and direct Load Image source) into the temporary Prompt Writer media session, marks that downstream item `visible_to_model`, and binds the copied asset to the same public `<Picture N>`/conditioning role. This is the control to use when the prompt model must actually inspect the reference pixels instead of merely knowing that the downstream slot exists. In **Persistent references** mode, only populated Reference Shelf slots whose matching output switch is enabled can become Reference Images; disabled or empty shelf outputs are excluded even if their wires remain visible. The independent Main and Last Frame switches likewise determine whether Conveyor-backed temporal keyframes are active, including through a single-image transform chain or bypass node. Persistent shelf Reference Images receive an opaque local source fingerprint in the saved inventory, so replacing a shelf image is detected as source drift even when the graph wire does not change; filenames are not stored in that fingerprint. Sequences saved before this fingerprint existed are accepted as legacy-unknown on their first compatible use and adopt the current fingerprint after a successful refinement, avoiding an upgrade-only false drift. In **Queue execution group** mode, Writer follows **Images per execution** exactly: `image` is group image 1, `ref_image_1` through `ref_image_8` expose subsequent group members, and `last_frame` aliases group image 2. Queue members remain intentionally dynamic and are not content-fingerprinted. Because their concrete file is selected at queue time, queue-group and other queue-driven outputs are shown as dynamic and are not falsely imported as stable Prompt Writer media. For the reviewed `ImageScaleToTotalPixelsX` implementation from **Scale Image to Total Pixels Adv**, Writer can materialize a stable Conveyor Reference Shelf or direct Load Image source through static `megapixels`, `multiple_of`, `stretch/crop/pad`, and **Lanczos** settings. The transform parameters are part of the saved source fingerprint, so changing 0.70→0.80 MP, the multiple, resize mode, or source image produces **Update needed**. Any connected runtime override for width, height, megapixels, multiple-of, resize mode, or interpolation, plus non-Lanczos interpolation, animated files, further arbitrary processing chains, and other transforms stay unavailable rather than pretending a stale widget or pre-transform source matches H3. After a transformed reference is added, its workflow row previews the post-transform Writer asset that the prompt model actually sees. **Don't consume** changes queue reuse, not the public conditioning topology.
+
+A text-only Direct GGUF can therefore write I2VA, FL2VA, L2VA, or Reference **Continuum** prompts when all visual conditioning is workflow-only. If you attach Prompt Writer images or video for the model to inspect during initial generation, a matching vision projector is still required. Chunk refinement does not re-upload those media, so a saved Continuum sequence can remain in its original mode and be refined with a text-only Direct model even when the earlier analysis media is still attached.
+
+For a local change, open **Refine**, select one Timeline section, and describe the revision. Writer regenerates only that chunk body and preserves the shared preamble and every other body byte-for-byte. H3 Continuum Run Storage hashes each **resolved prompt** after the Timeline preamble has been prepended. A local Chunk 3 edit therefore preserves earlier resolved hashes; changing the shared preamble changes every resolved hash. Writer treats shared-preamble changes as sequence-wide changes and requires regeneration rather than disguising them as a chunk-local edit.
+
+Legacy Prompt Writer drafts using strict, contiguous `[Chunk N]` sections can be migrated into Timeline form. New production output and graph handoff use Timeline only.
+
+The target, settings, validated plan, shared preamble, chunk bodies, resolved hashes, manual draft, and normalized downstream H3 Continuum conditioning inventory are saved with the current mode. On later refinement or graph handoff, Writer compares that snapshot with the active sampler and stops if an observable reference/keyframe source changed while keeping the same public tag. Legacy drafts without a snapshot remain readable and adopt the active inventory after a successful chunk refinement. API credentials are not part of that saved state.
+
 ## Modes
 
 | Mode | Input | How the media is used |
@@ -159,6 +218,8 @@ Writer saves stable preferences in the browser used to open ComfyUI:
 It never saves API keys. If a saved model no longer exists, discovery falls back without treating the missing model as a fatal error.
 
 Every H3 mode keeps its own Creative Brief and editable prompt draft across a page reload. Music 3 separately keeps its Music Brief, Lyrics, and edited caption. Uploaded media is session content and is not restored after reload.
+
+Continuum drafts additionally keep their generation target, chunk settings, validated continuity plan, and individual prompts. This structural state is used for chunk-local refinement; it contains no provider secret or API key.
 
 In **Settings > Prompt behavior**, select **Restore default drafts**. The button changes to **Click again to confirm** for five seconds. Select it again to delete every saved mode draft. The current mode immediately returns to its current built-in Creative Brief and prompt; the other modes use their current built-in defaults when opened. This includes Reference. Media, provider settings, custom system prompts, and API credentials are not changed.
 

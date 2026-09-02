@@ -116,6 +116,11 @@
 .h3ps-section-hint { color: #686871; }
 
 /* Media */
+.h3ps-workflow-references { border-color: #27272c; background: #111113; }
+.h3ps-workflow-reference-row { background: #0f0f11; }
+.h3ps-workflow-reference-thumb { border-color: #28282d; background: #0a0a0c; }
+.h3ps-workflow-reference-row > button { border-color: #2b2b31; background: #17171b; color: #bdbdc3; }
+.h3ps-workflow-reference-row > button:hover:not(:disabled) { border-color: #3b3b43; background: #1c1c20; color: var(--h3ps-text); }
 .h3ps-media-filters button { color: #72727b; }
 .h3ps-media-filters button:hover { background: #131315; color: #bdbdc3; }
 .h3ps-media-filters button.is-active {

@@ -3,6 +3,7 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 
 from backend.models.api_provider_backend import (
     ApiConnection,
@@ -264,6 +265,25 @@ class ApiProviderBackendTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "API_MODEL_NOT_FOUND")
         self.assertEqual(raised.exception.details["status"], 404)
 
+    def test_private_lan_custom_endpoint_can_be_detected_as_lm_studio(self):
+        connection = self._connection()
+        connection.base_url = "http://192.168.178.20:1234/v1"
+        response = {
+            "models": [
+                {
+                    "type": "llm",
+                    "key": "lan-lm-studio-model",
+                    "max_context_length": 262144,
+                    "capabilities": {"vision": True},
+                }
+            ]
+        }
+        with patch.object(self.backend, "_request_json", return_value=(response, {})) as request_json:
+            metadata = self.backend._local_custom_model_metadata(connection)
+        request_json.assert_called_once_with(connection, "GET", "/api/v1/models")
+        self.assertEqual(connection.compatibility_profile, "lm_studio")
+        self.assertIn("lan-lm-studio-model", metadata)
+
     def test_loopback_custom_enriches_lm_studio_vision_metadata(self):
         result = self.backend.probe({
             "preset": "custom",
@@ -499,6 +519,14 @@ class ApiProviderBackendTests(unittest.TestCase):
         self.assertEqual(plan["kv_cache"], "provider")
         self.assertEqual(plan["context_profile"], "provider")
         self.assertEqual(plan["max_output_tokens"], 2_048)
+        continuum_plan = self.backend.preflight(
+            model,
+            {**assembled, "input": {"mode": "T2VA", "continuum_stage": "plan"}},
+            context_profile="auto",
+            kv_cache="auto",
+            thinking=False,
+        )
+        self.assertEqual(continuum_plan["max_output_tokens"], 8_192)
         music_plan = self.backend.preflight(
             model,
             {**assembled, "input": {"mode": "Music3"}},

@@ -5,7 +5,12 @@ from typing import Any
 
 from .guides import MODE_GUIDES, guide_for_mode, load_guide, reference_base_excerpt
 from .media import STORE, MediaError, parse_session_id
-from .references import canonical_reference_tags
+from .references import (
+    bind_downstream_reference_inventory,
+    canonical_reference_tags,
+    missing_reference_declarations,
+    model_media_labels,
+)
 from .system_prompts import SystemPromptError, resolve_system_prompt
 from .text_normalization import normalize_unicode_text
 
@@ -30,7 +35,7 @@ def _required_text(body: dict[str, Any], key: str, label: str) -> str:
     return normalize_unicode_text(value).strip()
 
 
-def _media_line(asset: dict[str, Any]) -> str:
+def _media_line(asset: dict[str, Any], label: str | None = None) -> str:
     detail = asset["type"]
     if asset.get("duration") is not None:
         detail += f", {asset['duration']:g}s"
@@ -40,7 +45,7 @@ def _media_line(asset: dict[str, Any]) -> str:
             detail += f", sampled frames at {times}"
     elif asset["type"] == "audio":
         detail += ", not analyzed by the local model; role must come only from the user's brief"
-    return f"{asset.get('reference', asset['filename'])}: {asset['filename']} ({detail})"
+    return f"{label or asset.get('reference', asset['filename'])}: {asset['filename']} ({detail})"
 
 
 def _effective_system_prompt(body: dict[str, Any], mode: str) -> tuple[str, bool]:
@@ -50,12 +55,37 @@ def _effective_system_prompt(body: dict[str, Any], mode: str) -> tuple[str, bool
         raise AssemblyError(error.code, error.message) from error
 
 
-def _validate_reference_tags(text: str, manifest: dict[str, Any], mode: str, field_label: str) -> None:
-    if mode != "Reference":
+def _validate_reference_tags(
+    text: str,
+    manifest: dict[str, Any],
+    mode: str,
+    field_label: str,
+    *,
+    downstream_reference_inventory: dict[str, Any] | None = None,
+    continuum: bool = False,
+) -> None:
+    if mode != "Reference" and not continuum:
         return
-    available = {asset["reference"] for asset in manifest["assets"]}
-    canonical_tags = canonical_reference_tags(text)
-    missing = sorted(canonical_tags - available)
+    request_input: dict[str, Any] = {"mode": mode, "media_manifest": manifest}
+    if downstream_reference_inventory is not None:
+        request_input["downstream_reference_inventory"] = downstream_reference_inventory
+    if continuum:
+        missing = missing_reference_declarations(request_input, [text], continuum=True)
+        if missing:
+            tag = missing[0]
+            raise AssemblyError(
+                "REFERENCE_NOT_DECLARED",
+                f"{tag} is referenced in the {field_label} but is not declared by the selected H3 Continuum V3.4 sampler inventory.",
+                {"reference": tag, "missing": missing},
+            )
+        return
+
+    available = {
+        str(asset["reference"])
+        for asset in manifest.get("assets", [])
+        if asset.get("reference")
+    }
+    missing = sorted(canonical_reference_tags(text) - available)
     if missing:
         tag = missing[0]
         raise AssemblyError(
@@ -202,14 +232,31 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     manifest = STORE.manifest(session_id, mode)
     if not manifest["valid"]:
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
+    downstream_inventory = None
+    if "downstream_reference_inventory" in body:
+        try:
+            downstream_inventory = bind_downstream_reference_inventory(
+                body.get("downstream_reference_inventory"),
+                manifest,
+            )
+        except ValueError as error:
+            raise AssemblyError("INVALID_DOWNSTREAM_REFERENCE_INVENTORY", str(error)) from error
 
-    _validate_reference_tags(brief, manifest, mode, "Creative Brief")
+    _validate_reference_tags(
+        brief,
+        manifest,
+        mode,
+        "Creative Brief",
+        downstream_reference_inventory=downstream_inventory,
+        continuum=body.get("generation_target") == "continuum",
+    )
     declared_references = manifest["assets"]
+    media_labels = model_media_labels(manifest, downstream_inventory, mode=mode)
     eligible = [asset for asset in declared_references if asset["type"] != "audio"]
     media_inputs = [
         {
             "asset_id": asset["id"],
-            "reference": asset.get("reference"),
+            "reference": media_labels.get(str(asset["id"]), asset.get("reference")),
             "type": asset["type"],
             "requires_capability": CAPABILITY_BY_TYPE[asset["type"]],
             "frames": [
@@ -230,13 +277,27 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
         }
         for asset in eligible
     ]
-    references = "\n".join(_media_line(asset) for asset in declared_references) or "None"
+    references = "\n".join(
+        _media_line(asset, media_labels.get(str(asset.get("id"))))
+        for asset in declared_references
+    ) or "None"
+    downstream_lines = "None"
+    if downstream_inventory is not None:
+        downstream_lines = "\n".join(
+            f"- {item.get('tag') or item['role']}: {item['kind']} via {item['role']} "
+            f"(visible to prompt model: {'yes' if item['visible_to_model'] else 'no'})"
+            for item in downstream_inventory["items"]
+        ) or "None"
     user_content = (
         f"Mode: {mode}\n"
         f"Duration: {duration:g} seconds\n"
         f"Aspect ratio: {aspect_ratio}\n\n"
-        "Reference manifest (audio is not analyzed by the local model; derive its copy/reference role only from the user's words and do not invent its content):\n"
+        "Model-visible media manifest (audio is not analyzed by the local model; derive its copy/reference role only from the user's words and do not invent its content):\n"
         f"{references}\n\n"
+        "Declared downstream H3 conditioning inventory (these inputs exist in the generation workflow. "
+        "An item marked not visible to the prompt model has not been visually or audibly inspected here; preserve its "
+        "public tag when relevant and never invent its appearance or contents unless the Creative Brief states them):\n"
+        f"{downstream_lines}\n\n"
         f"Creative brief:\n{brief}\n\n"
         f"{_final_contract(mode, brief)}"
     )
@@ -250,6 +311,7 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
             "aspect_ratio": aspect_ratio,
             "creative_brief": brief,
             "media_manifest": manifest,
+            **({"downstream_reference_inventory": downstream_inventory} if downstream_inventory is not None else {}),
         },
         "media_inputs": media_inputs,
         "supporting_guides": ([{
@@ -320,11 +382,42 @@ def assemble_refinement(
     manifest = STORE.manifest(session_id, mode)
     if not manifest["valid"]:
         raise AssemblyError("INVALID_MEDIA_MANIFEST", "The media manifest is not valid.", manifest["violations"])
+    downstream_inventory = None
+    if "downstream_reference_inventory" in body:
+        try:
+            downstream_inventory = bind_downstream_reference_inventory(
+                body.get("downstream_reference_inventory"),
+                manifest,
+            )
+        except ValueError as error:
+            raise AssemblyError("INVALID_DOWNSTREAM_REFERENCE_INVENTORY", str(error)) from error
     context_source = cached_generation if cached_generation and cached_generation.get("mode") == mode else body
     duration, aspect_ratio, creative_brief = _validated_generation_context(context_source)
-    _validate_reference_tags(creative_brief, manifest, mode, "Creative Brief")
-    _validate_reference_tags(instruction, manifest, mode, "Revision instruction")
-    references = "\n".join(_media_line(asset) for asset in manifest["assets"]) or "None"
+    continuum = body.get("generation_target") == "continuum"
+    _validate_reference_tags(
+        creative_brief, manifest, mode, "Creative Brief",
+        downstream_reference_inventory=downstream_inventory, continuum=continuum,
+    )
+    _validate_reference_tags(
+        current_prompt, manifest, mode, "Current prompt",
+        downstream_reference_inventory=downstream_inventory, continuum=continuum,
+    )
+    _validate_reference_tags(
+        instruction, manifest, mode, "Revision instruction",
+        downstream_reference_inventory=downstream_inventory, continuum=continuum,
+    )
+    media_labels = model_media_labels(manifest, downstream_inventory, mode=mode)
+    references = "\n".join(
+        _media_line(asset, media_labels.get(str(asset.get("id"))))
+        for asset in manifest["assets"]
+    ) or "None"
+    downstream_lines = "None"
+    if downstream_inventory is not None:
+        downstream_lines = "\n".join(
+            f"- {item.get('tag') or item['role']}: {item['kind']} via {item['role']} "
+            f"(visible to prompt model: {'yes' if item['visible_to_model'] else 'no'})"
+            for item in downstream_inventory["items"]
+        ) or "None"
     guide = guide_for_mode(mode)
     user_content = (
         "Rewrite the current H3 prompt according to the revision instruction. "
@@ -333,7 +426,10 @@ def assemble_refinement(
         f"Original duration: {duration:g} seconds\n"
         f"Original aspect ratio: {aspect_ratio}\n"
         f"Original Creative Brief:\n{creative_brief}\n\n"
-        f"Reference manifest (text only; media is intentionally not attached):\n{references}\n\n"
+        f"Model-visible media manifest (text only; media is intentionally not attached):\n{references}\n\n"
+        "Declared downstream H3 conditioning inventory (not re-uploaded during refinement; items marked not visible were "
+        "never inspected by the prompt model, so do not invent their appearance or contents):\n"
+        f"{downstream_lines}\n\n"
         f"Current prompt:\n{current_prompt}\n\n"
         f"Revision instruction:\n{instruction}\n\n"
         "Reference revision rule: preserve each existing <Audio N> that is absent from the Revision instruction. "
@@ -353,6 +449,7 @@ def assemble_refinement(
             "current_prompt": current_prompt,
             "instruction": instruction,
             "media_manifest": manifest,
+            **({"downstream_reference_inventory": downstream_inventory} if downstream_inventory is not None else {}),
         },
         "media_inputs": [],
         "supporting_guides": ([{

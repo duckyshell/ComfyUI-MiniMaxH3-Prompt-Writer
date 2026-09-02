@@ -44,6 +44,8 @@ Use <Picture 1> for character appearance, <Picture 2> for clothes, and only the 
 
 Writer sends your brief, selected mode, prepared references, and the official MiniMax prompt-writing guide to the chosen prompt model. The result is an editable H3 prompt. You can change it directly, use **Refine** for a revision, or select **Copy prompt** and paste it into your H3 workflow.
 
+For longer shots, choose **H3 Continuum** as the output target. Writer creates one sequence-wide H3 preamble plus canonical Timeline sections such as `[0-5s]`, `[5-10s]`, and later spans for the [H3 Continuum](https://github.com/ukr8b3g-cmyk/ComfyUI-H3-Continuum) V3.4–V3.7 sampler family. Continuum prepends the shared preamble to every resolved chunk, so persistent identity, reference roles, wardrobe, environment, style, camera, lighting, audio rules, and exclusions can remain truly sequence-wide. This is a separate target, not another H3 mode; T2VA, I2VA, FL2VA, L2VA, and Reference keep their existing media semantics.
+
 ## Key features
 
 - T2VA, I2VA, FL2VA, L2VA, and Reference modes.
@@ -53,6 +55,9 @@ Writer sends your brief, selected mode, prepared references, and the official Mi
 - Ordered video contact sheets with visible frame-sampling controls, so you can inspect what the prompt model sees.
 - Official MiniMax base and Reference guides included for all five modes.
 - Editable prompts, **Refine**, **Copy prompt**, and a separate saved draft for every mode.
+- Native H3 Continuum sequences from 1 to 16 chunks at 4 to 30 seconds per chunk (5–15 seconds recommended), with a shared sequence preamble, canonical Timeline output, chunk-local refinement, and an explicit **Apply to Continuum** handoff.
+- Continuum derives public reference identities from the selected supported sampler topology: active **Reference Image** inputs own compact `<Picture 1..N>` numbering in hybrid runs; without Reference Images, **First Frame** and **Last Frame** own compact temporal `<Picture N>` identities; **Video Reference** is `<Video 1>`; **Reference Audio** on V3.5+ is persistent `<Audio 1>`; **Driving Audio** is persistent conditioning with no `<Audio N>` prompt tag. V3.7's optional Still Image Guide remains workflow-owned and untagged.
+- Native [Image Conveyor](https://github.com/xmarre/ComfyUI-Image-Conveyor) compatibility resolves its effective runtime outputs instead of trusting saved wires: disabled or empty persistent Reference Shelf slots stay out of the Continuum Picture inventory, Main/Last Frame switches are honored, and Queue execution groups follow **Images per execution**. In **Reference + H3 Continuum**, the Media section also shows the currently active workflow image slots and provides **Add active workflow refs** so stable Conveyor Reference Shelf / Load Image pixels can be inspected by the prompt model and bound to the same downstream identities. A stable reference passed through the reviewed `ImageScaleToTotalPixelsX` **Scale Image to Total Pixels Adv** node is materialized before import when it uses static megapixel/multiple/crop-pad-stretch settings and **Lanczos**, so Writer sees the resized/cropped image that actually reaches H3 instead of the pre-transform source.
 - Automatic context planning and clear controls for releasing local prompt models and ComfyUI VRAM.
 
 See [Writing a useful Creative Brief](docs/USAGE.md#writing-a-useful-creative-brief) for practical examples.
@@ -81,6 +86,8 @@ Not sure? Start with [Ollama](docs/OLLAMA.md). The [provider guide](docs/PROVIDE
 4. Choose a mode, add its media, and write a Creative Brief.
 5. Select **Generate prompt**, review the editable result, then copy it into your H3 workflow.
 
+To write a longer sequence, select **H3 Continuum**, choose the chunk count and seconds per chunk, then select **Generate sequence**. See [H3 Continuum sequences](docs/USAGE.md#h3-continuum-sequences).
+
 For Git, ZIP, Windows Portable, update, and provider-specific steps, see [Installation](docs/INSTALLATION.md).
 
 ## Privacy and limitations
@@ -89,11 +96,12 @@ For Git, ZIP, Windows Portable, update, and provider-specific steps, see [Instal
 - With a remote API provider, the required brief, instructions, prepared images, and video contact sheets are sent to the selected provider. Original video and audio bytes are not uploaded by Writer. Read [What leaves this computer](docs/API_PROVIDERS.md#what-leaves-this-computer) before using private media.
 - Video understanding uses the ordered contact sheet shown in the preview, not every frame of the encoded video.
 - Prompt models do not listen to uploaded audio. Describe the soundtrack, voice, rhythm, or other audio role in the Creative Brief.
+- Continuum can declare downstream workflow references without copying their pixels into the prompt-model request. A workflow-only Reference Image can therefore keep its `<Picture N>` identity while remaining unseen by the prompt model; describe its intended role in the Creative Brief instead of expecting visual inference.
 - The interface and documentation are in English. Briefs can use other languages, and Writer preserves supplied dialogue and visible text.
 - Gemma 4 remains the simplest tested local choice. Direct GGUF also supports Qwen 3.8, compatible Qwen 3.8 fine-tunes, and Qwen3-VL. Untested compatible models may behave differently from the verified pairs.
 - Ollama, External llama.cpp, and compatible API endpoints let you try other multimodal models that accept images. Compatibility does not guarantee a good H3 prompt.
-- External llama.cpp also accepts text-only models for Music 3, T2VA, and Refine. Image and video requests still need a vision model.
-- Direct GGUF supports Gemma 4, Qwen 3.8, compatible Qwen 3.8 fine-tunes, and Qwen3-VL. The tested Qwen 3.8 and Qwen3-VL model and projector pairs are marked as verified. Other compatible combinations are marked as unverified. A missing projector leaves text-only T2VA available.
+- External llama.cpp also accepts text-only models for Music 3, T2VA, ordinary text-only Refine, and H3 Continuum modes whose visual conditioning stays workflow-only. Prompt Writer image/video analysis still needs a vision model.
+- Direct GGUF supports Gemma 4, Qwen 3.8, compatible Qwen 3.8 fine-tunes, and Qwen3-VL. The tested Qwen 3.8 and Qwen3-VL model and projector pairs are marked as verified. Other compatible combinations are marked as unverified. A missing projector leaves text-only T2VA plus workflow-only H3 Continuum available.
 - Gemini and a Custom OpenAI-compatible endpoint were tested live. OpenAI and OpenRouter have automated contract coverage but were not tested live with commercial credentials. Comfy Cloud has not been validated for v0.3.
 
 ## Documentation

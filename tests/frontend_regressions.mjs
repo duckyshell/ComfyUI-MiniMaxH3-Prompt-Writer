@@ -20,6 +20,23 @@ const {
   unloadWriterModels,
   writerResidencyTargets,
 } = await import(`data:text/javascript;base64,${vramHandoffEncoded}`);
+const continuumSource = await readFile(new URL("../web/continuum.js", import.meta.url), "utf8");
+const continuumEncoded = Buffer.from(continuumSource).toString("base64");
+const {
+  applySequenceToContinuum,
+  chooseContinuumSampler,
+  connectedSequenceTextSource,
+  discoverContinuumReferenceInventory,
+  normalizeContinuumSettings,
+  parseContinuumTimeline,
+  sequenceStateFromResult,
+  sameContinuumReferenceInventory,
+  serializeContinuumPrompts,
+  timelineBoundary,
+  updateContinuumDraftFromEditor,
+  validateContinuumModeTopology,
+  validateContinuumReferenceScope,
+} = await import(`data:text/javascript;base64,${continuumEncoded}`);
 const stateSource = await readFile(new URL("../web/studio_state.js", import.meta.url), "utf8");
 const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
@@ -79,6 +96,739 @@ function memoryStorage(initial = {}) {
     entries: () => Object.fromEntries(values),
   };
 }
+
+function continuumGraph({ samplerCount = 1, samplerType = "H3ContinuumSamplerV34", connected = true, referenceInputs = [] } = {}) {
+  const links = {};
+  const nodes = [];
+  for (let offset = 0; offset < samplerCount; offset += 1) {
+    const samplerInputs = [
+      { name: "sequence_prompt", type: "STRING", link: connected && offset === 0 ? 10 : null },
+      { name: "first_frame", type: "IMAGE", link: null },
+      { name: "last_frame", type: "IMAGE", link: null },
+      ...Array.from({ length: 8 }, (_, index) => ({ name: `reference_image_${index + 1}`, type: "IMAGE", link: null })),
+      { name: "reference_video_1", type: "IMAGE", link: null },
+      { name: "reference_audio_1", type: "AUDIO", link: null },
+      { name: "driving_audio", type: "AUDIO", link: null },
+    ];
+    const sampler = {
+      id: 100 + offset,
+      type: samplerType,
+      title: `Sampler ${offset + 1}`,
+      inputs: samplerInputs,
+      widgets: [
+        { name: "prompt_mode", value: "Timeline" },
+        { name: "chunks", value: 3 },
+        { name: "chunk_seconds", value: 5 },
+      ],
+    };
+    nodes.push(sampler);
+  }
+  const textWidget = { name: "value", value: "old", callbackCalls: 0 };
+  textWidget.callback = () => { textWidget.callbackCalls += 1; };
+  const text = {
+    id: 1,
+    type: "PrimitiveStringMultiline",
+    inputs: [],
+    outputs: [{ name: "STRING", type: "STRING", links: [10] }],
+    widgets: [textWidget],
+    widgetChanges: [],
+    onWidgetChanged(...args) { this.widgetChanges.push(args); },
+  };
+  if (connected) {
+    nodes.push(text);
+    links[10] = { origin_id: 1, origin_slot: 0, target_id: 100, target_slot: 0 };
+  }
+
+  for (const spec of referenceInputs) {
+    const sampler = nodes.find((node) => node.id === (spec.samplerId ?? 100));
+    const inputIndex = sampler.inputs.findIndex((input) => input.name === spec.input);
+    if (inputIndex < 0) throw new Error(`Unknown test sampler input ${spec.input}`);
+    const linkId = 1000 + Object.keys(links).length;
+    const source = {
+      id: spec.sourceId,
+      type: spec.sourceType ?? "LoadImage",
+      mode: spec.mode ?? 0,
+      inputs: [],
+      outputs: [{ name: spec.outputName ?? "IMAGE", type: spec.outputType ?? "IMAGE", links: [linkId] }],
+      widgets: [],
+    };
+    sampler.inputs[inputIndex].link = linkId;
+    nodes.push(source);
+    links[linkId] = { origin_id: source.id, origin_slot: 0, target_id: sampler.id, target_slot: inputIndex };
+  }
+
+  const graph = {
+    _nodes: nodes,
+    links,
+    dirtyCalls: 0,
+    changeCalls: 0,
+    getNodeById(id) { return this._nodes.find((node) => node.id === id); },
+    setDirtyCanvas() { this.dirtyCalls += 1; },
+    change() { this.changeCalls += 1; },
+  };
+  nodes.forEach((node) => { node.graph = graph; });
+  const canvas = { selected_nodes: {}, dirtyCalls: 0, setDirty() { this.dirtyCalls += 1; } };
+  return { app: { graph, canvas }, graph, samplers: nodes.filter((node) => node.type === samplerType), text, textWidget };
+}
+
+test("Continuum Timeline serialization is canonical for integer and fractional durations", () => {
+  const prompts = ["First prompt.\nLine two.", "Second prompt.", "Third prompt."];
+  const serialized = serializeContinuumPrompts(prompts, {
+    preamble: "Persistent identity and film treatment.",
+    chunkSeconds: 5,
+  });
+  assert.equal(
+    serialized,
+    "Persistent identity and film treatment.\n\n[0-5s]\nFirst prompt.\nLine two.\n\n[5-10s]\nSecond prompt.\n\n[10-15s]\nThird prompt.",
+  );
+  assert.deepEqual(parseContinuumTimeline(serialized, { expectedChunks: 3, chunkSeconds: 5 }), {
+    preamble: "Persistent identity and film treatment.",
+    prompts,
+  });
+  assert.equal(timelineBoundary(6.5, 0), "0");
+  assert.equal(timelineBoundary(6.5, 1), "6.5");
+  assert.equal(timelineBoundary(6.5, 2), "13");
+  assert.equal(timelineBoundary(6.5, 3), "19.5");
+  assert.throws(
+    () => parseContinuumTimeline("[0-5s] inline", { expectedChunks: 1, chunkSeconds: 5 }),
+    /No canonical/,
+  );
+  assert.deepEqual(normalizeContinuumSettings({ chunks: 16, chunk_seconds: 30 }), {
+    schema_version: 2,
+    chunks: 16,
+    chunk_seconds: 30,
+    total_seconds: 480,
+  });
+});
+
+test("Continuum accepts the current H3 Continuum V3.4 through V3.7 sampler family", () => {
+  for (const samplerType of [
+    "H3ContinuumSamplerV34",
+    "H3ContinuumSamplerV35",
+    "H3ContinuumSamplerV36",
+    "H3ContinuumSamplerV37",
+  ]) {
+    const { app, samplers } = continuumGraph({ samplerType });
+    const choice = chooseContinuumSampler(app);
+    assert.equal(choice.status, "selected");
+    assert.equal(choice.sampler, samplers[0]);
+  }
+});
+
+test("Continuum structural drafts migrate strict legacy chunks and preserve malformed manual text", () => {
+  const legacy = {
+    schema_version: 1,
+    settings: { chunks: 2, chunk_seconds: 5 },
+    plan: { schema_version: 1 },
+    prompts: ["One", "Two"],
+  };
+  const migrated = updateContinuumDraftFromEditor(legacy, "[Chunk 1]\nChanged one\n\n[Chunk 2]\nTwo");
+  assert.equal(migrated.schema_version, 2);
+  assert.deepEqual(migrated.prompts, ["Changed one", "Two"]);
+  assert.equal(migrated.preamble, "");
+  assert.equal(migrated.raw_prompt, null);
+
+  const valid = updateContinuumDraftFromEditor(
+    { ...migrated, plan: { schema_version: 2 } },
+    "Global.\n\n[0-5s]\nChanged one\n\n[5-10s]\nTwo",
+  );
+  assert.equal(valid.preamble, "Global.");
+  const invalid = updateContinuumDraftFromEditor(valid, "[0-5s]\nChanged one");
+  assert.equal(invalid.raw_prompt, "[0-5s]\nChanged one");
+  assert.deepEqual(invalid.prompts, ["Changed one", "Two"]);
+
+  const v2LegacyText = updateContinuumDraftFromEditor(
+    {
+      ...valid,
+      schema_version: 2,
+      migrated_from_schema_version: undefined,
+      preamble: "Global.",
+      prompts: ["Changed one", "Two"],
+    },
+    "[Chunk 1]\nChanged again\n\n[Chunk 2]\nTwo",
+  );
+  assert.equal(v2LegacyText.preamble, "Global.");
+  assert.deepEqual(v2LegacyText.prompts, ["Changed one", "Two"]);
+  assert.match(v2LegacyText.raw_prompt, /^\[Chunk 1\]/);
+});
+
+test("Continuum result state verifies canonical Timeline text against structural chunks", () => {
+  const result = {
+    prompt: "Global.\n\n[0-5s]\nOne\n\n[5-10s]\nTwo",
+    sequence: {
+      schema_version: 2,
+      settings: { schema_version: 2, chunks: 2, chunk_seconds: 5, total_seconds: 10 },
+      plan: { schema_version: 2 },
+      preamble: "Global.",
+      chunks: [{ index: 1, body: "One" }, { index: 2, body: "Two" }],
+    },
+  };
+  assert.deepEqual(sequenceStateFromResult(result).prompts, ["One", "Two"]);
+  result.prompt = "Global.\n\n[0-5s]\nOne\n\n[5-10s]\nChanged";
+  assert.throws(() => sequenceStateFromResult(result), /canonical Timeline text does not match/);
+});
+
+test("Continuum sequence state preserves downstream conditioning inventory snapshots", () => {
+  const inventory = {
+    schema_version: 1,
+    items: [{
+      role: "reference_image",
+      kind: "image",
+      source: "workflow",
+      visible_to_model: false,
+      tag: "<Picture 1>",
+      input_name: "reference_image_1",
+      source_node_id: 41,
+      source_node_class: "LoadImage",
+      source_output_name: "IMAGE",
+      source_slot: 0,
+    }],
+  };
+  const result = {
+    prompt: "Global.\n\n[0-5s]\nOne\n\n[5-10s]\nTwo",
+    sequence: {
+      schema_version: 2,
+      settings: { chunks: 2, chunk_seconds: 5 },
+      plan: { schema_version: 2 },
+      preamble: "Global.",
+      downstream_reference_inventory: inventory,
+      chunks: [{ index: 1, body: "One" }, { index: 2, body: "Two" }],
+    },
+  };
+  assert.deepEqual(
+    sequenceStateFromResult(result).downstream_reference_inventory,
+    inventory,
+  );
+});
+
+test("Continuum inventory identity compares semantic fields independently of object key order", () => {
+  const left = {
+    schema_version: 1,
+    items: [{
+      role: "reference_image",
+      kind: "image",
+      source: "workflow",
+      visible_to_model: false,
+      tag: "<Picture 1>",
+      source_node_id: 41,
+      source_node_class: "LoadImage",
+      source_output_name: "IMAGE",
+      source_slot: 0,
+    }],
+  };
+  const right = {
+    items: [{
+      source_slot: 0,
+      source_output_name: "IMAGE",
+      source_node_class: "LoadImage",
+      source_node_id: 41,
+      tag: "<Picture 1>",
+      visible_to_model: false,
+      source: "workflow",
+      kind: "image",
+      role: "reference_image",
+    }],
+    schema_version: 1,
+  };
+  assert.equal(sameContinuumReferenceInventory(left, right), true);
+  right.items[0].source_node_id = 99;
+  assert.equal(sameContinuumReferenceInventory(left, right), false);
+});
+
+test("Continuum inventory identity treats a missing saved source fingerprint as legacy unknown but enforces it once saved", () => {
+  const legacy = {
+    schema_version: 1,
+    items: [{
+      role: "reference_image",
+      kind: "image",
+      source: "workflow",
+      visible_to_model: false,
+      tag: "<Picture 1>",
+      source_node_id: 41,
+      source_node_class: "ImageConveyor",
+      source_output_name: "ref_image_1",
+      source_slot: 6,
+    }],
+  };
+  const active = structuredClone(legacy);
+  active.items[0].source_identity = "image-conveyor-ref-v1:1111111111111111";
+
+  assert.equal(sameContinuumReferenceInventory(legacy, active), true);
+
+  const saved = structuredClone(active);
+  active.items[0].source_identity = "image-conveyor-ref-v1:2222222222222222";
+  assert.equal(sameContinuumReferenceInventory(saved, active), false);
+
+  const activeWithoutFingerprint = structuredClone(legacy);
+  assert.equal(sameContinuumReferenceInventory(saved, activeWithoutFingerprint), false);
+});
+
+test("Continuum workflow discovery failures are surfaced before generate, refine, and apply", () => {
+  const message = 'showToast("Continuum conditioning could not be read", error.message);';
+  assert.equal(mainSource.split(message).length - 1, 3);
+  assert.match(
+    mainSource,
+    /async function startGenerationPreview\(\)[\s\S]*?try \{[\s\S]*?discoverContinuumReferenceInventory\(app, target\.sampler\)[\s\S]*?catch \(error\) \{[\s\S]*?Continuum conditioning could not be read/,
+  );
+  assert.match(
+    mainSource,
+    /async function submitRefinement\(\)[\s\S]*?try \{[\s\S]*?discoverContinuumReferenceInventory\(app, target\.sampler\)[\s\S]*?catch \(error\) \{[\s\S]*?Continuum conditioning could not be read/,
+  );
+  assert.match(
+    mainSource,
+    /async function applyCurrentSequence\(syncSettings = false\)[\s\S]*?try \{[\s\S]*?applySequenceToContinuum\(app, choice\.sampler[\s\S]*?catch \(error\) \{[\s\S]*?Continuum conditioning could not be read/,
+  );
+});
+
+test("Continuum graph handoff writes Timeline and treats Prompt Format as an explicit setting", () => {
+  const { app, samplers, textWidget, graph } = continuumGraph();
+  const choice = chooseContinuumSampler(app);
+  assert.equal(choice.status, "selected");
+  assert.equal(choice.sampler, samplers[0]);
+  assert.equal(connectedSequenceTextSource(graph, samplers[0]).status, "connected");
+  const state = {
+    settings: { chunks: 3, chunk_seconds: 5 },
+    preamble: "Global.",
+    prompts: ["One", "Two", "Three"],
+  };
+  let result = applySequenceToContinuum(app, samplers[0], state);
+  assert.equal(result.status, "applied");
+  assert.equal(textWidget.value, "Global.\n\n[0-5s]\nOne\n\n[5-10s]\nTwo\n\n[10-15s]\nThree");
+  assert.equal(textWidget.callbackCalls, 1);
+  assert.equal(graph.changeCalls, 1);
+
+  samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value = "Auto";
+  result = applySequenceToContinuum(app, samplers[0], state);
+  assert.equal(result.status, "mismatch");
+  assert.deepEqual(result.mismatches.map((item) => item.field), ["prompt_mode"]);
+  result = applySequenceToContinuum(app, samplers[0], state, { syncSettings: true });
+  assert.equal(result.status, "applied");
+  assert.equal(samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value, "Timeline");
+});
+
+test("Continuum graph discovery compacts Reference Image gaps without counting keyframes", () => {
+  const { app, samplers } = continuumGraph({
+    referenceInputs: [
+      { input: "first_frame", sourceId: 20 },
+      { input: "last_frame", sourceId: 21 },
+      { input: "reference_image_2", sourceId: 22 },
+      { input: "reference_image_5", sourceId: 23 },
+      { input: "reference_video_1", sourceId: 24, outputType: "IMAGE", outputName: "IMAGE" },
+      { input: "driving_audio", sourceId: 25, outputType: "AUDIO", outputName: "AUDIO" },
+    ],
+  });
+  const inventory = discoverContinuumReferenceInventory(app, samplers[0]);
+  assert.deepEqual(
+    inventory.items.filter((item) => item.tag).map((item) => [item.input_name, item.tag]),
+    [
+      ["reference_image_2", "<Picture 1>"],
+      ["reference_image_5", "<Picture 2>"],
+      ["reference_video_1", "<Video 1>"],
+    ],
+  );
+  assert.deepEqual(
+    inventory.items.filter((item) => !item.tag).map((item) => item.role),
+    ["first_frame", "last_frame", "driving_audio"],
+  );
+  assert.ok(inventory.items.every((item) => item.visible_to_model === false));
+});
+
+test("Continuum graph discovery gives keyframes Picture identities when no Reference Images exist", () => {
+  const { app, samplers } = continuumGraph({
+    referenceInputs: [
+      { input: "first_frame", sourceId: 26 },
+      { input: "last_frame", sourceId: 27 },
+      { input: "reference_video_1", sourceId: 28, outputType: "IMAGE", outputName: "IMAGE" },
+      { input: "driving_audio", sourceId: 29, outputType: "AUDIO", outputName: "AUDIO" },
+    ],
+  });
+  const inventory = discoverContinuumReferenceInventory(app, samplers[0]);
+  assert.deepEqual(
+    inventory.items.map((item) => [item.role, item.tag ?? null]),
+    [
+      ["first_frame", "<Picture 1>"],
+      ["last_frame", "<Picture 2>"],
+      ["video_reference", "<Video 1>"],
+      ["driving_audio", null],
+    ],
+  );
+});
+
+test("Continuum discovery exposes Reference Audio as persistent <Audio 1> and leaves Driving Audio untagged", () => {
+  const { app, samplers } = continuumGraph({
+    samplerType: "H3ContinuumSamplerV37",
+    referenceInputs: [
+      { input: "reference_audio_1", sourceId: 71, sourceType: "LoadAudio", outputName: "AUDIO", outputType: "AUDIO" },
+      { input: "driving_audio", sourceId: 72, sourceType: "LoadAudio", outputName: "AUDIO", outputType: "AUDIO" },
+    ],
+  });
+  const inventory = discoverContinuumReferenceInventory(app, samplers[0]);
+  assert.deepEqual(
+    inventory.items.map((item) => [item.role, item.tag ?? null]),
+    [["reference_audio", "<Audio 1>"], ["driving_audio", null]],
+  );
+  const scope = validateContinuumReferenceScope(
+    inventory,
+    "Keep <Audio 1> persistent.",
+    ["Use <Audio 1>.", "Continue <Audio 1>.", "Finish <Audio 1>."],
+  );
+  assert.equal(scope.valid, true);
+  assert.deepEqual(scope.violations, []);
+  assert.deepEqual(scope.expected, ["<Audio 1>"]);
+  assert.deepEqual(scope.persistent, ["<Audio 1>"]);
+  assert.deepEqual(scope.chunk_scopes, [["<Audio 1>"], ["<Audio 1>"], ["<Audio 1>"]]);
+});
+
+test("Continuum temporal mode validation follows supported First/Last wiring while allowing reference augmentation", () => {
+  const inventory = (...items) => ({ schema_version: 1, items });
+  const first = { role: "first_frame" };
+  const last = { role: "last_frame" };
+  const reference = { role: "reference_image", tag: "<Picture 1>" };
+
+  assert.equal(validateContinuumModeTopology("T2VA", inventory()).valid, true);
+  assert.equal(validateContinuumModeTopology("T2VA", inventory(reference)).valid, false);
+  assert.equal(
+    validateContinuumModeTopology("T2VA", inventory(reference)).reason,
+    "reference_images_require_reference_mode",
+  );
+  assert.equal(validateContinuumModeTopology("T2VA", inventory(first)).valid, false);
+
+  assert.equal(validateContinuumModeTopology("I2VA", inventory(first)).valid, true);
+  assert.equal(validateContinuumModeTopology("I2VA", inventory(reference, first)).valid, true);
+  assert.equal(validateContinuumModeTopology("I2VA", inventory(first, last)).valid, false);
+
+  assert.equal(validateContinuumModeTopology("FL2VA", inventory(first, last)).valid, true);
+  assert.equal(validateContinuumModeTopology("FL2VA", inventory(reference, first, last)).valid, true);
+  assert.equal(validateContinuumModeTopology("FL2VA", inventory(first)).valid, false);
+
+  assert.equal(validateContinuumModeTopology("L2VA", inventory(last)).valid, true);
+  assert.equal(validateContinuumModeTopology("L2VA", inventory(reference, last)).valid, true);
+  assert.equal(validateContinuumModeTopology("L2VA", inventory(first, last)).valid, false);
+
+  assert.equal(validateContinuumModeTopology("Reference", inventory(reference)).valid, true);
+  assert.equal(validateContinuumModeTopology("Reference", inventory(reference, first, last)).valid, true);
+});
+
+test("Continuum reference scope validator enforces keyframe endpoints and persistent references", () => {
+  const keyframes = {
+    schema_version: 1,
+    items: [
+      { tag: "<Picture 1>", role: "first_frame" },
+      { tag: "<Picture 2>", role: "last_frame" },
+      { tag: "<Video 1>", role: "video_reference" },
+      { role: "driving_audio" },
+    ],
+  };
+  let result = validateContinuumReferenceScope(
+    keyframes,
+    "Persistent camera language.",
+    [
+      "Open from <Picture 1> with <Video 1> motion.",
+      "Continue with <Video 1> motion.",
+      "Land on <Picture 2> while retaining <Video 1> motion.",
+    ],
+  );
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.chunk_scopes, [
+    ["<Picture 1>", "<Video 1>"],
+    ["<Video 1>"],
+    ["<Picture 2>", "<Video 1>"],
+  ]);
+
+  result = validateContinuumReferenceScope(
+    keyframes,
+    "Persistent camera language.",
+    ["Open from <Picture 1>.", "Reset to <Picture 1>.", "Land on <Picture 2>."],
+  );
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.violations[0], {
+    kind: "scope",
+    scope: "chunk",
+    chunk_index: 2,
+    tags: ["<Picture 1>"],
+    allowed: ["<Video 1>"],
+  });
+
+  result = validateContinuumReferenceScope(
+    keyframes,
+    "Keep <Picture 2> fixed.",
+    ["Open.", "Continue.", "Finish."],
+  );
+  assert.equal(result.valid, false);
+  assert.equal(result.violations[0].scope, "global");
+  assert.deepEqual(result.violations[0].tags, ["<Picture 2>"]);
+
+  const hybrid = {
+    schema_version: 1,
+    items: [
+      { tag: "<Picture 1>", role: "reference_image" },
+      { role: "first_frame" },
+      { role: "last_frame" },
+      { tag: "<Video 1>", role: "video_reference" },
+    ],
+  };
+  result = validateContinuumReferenceScope(
+    hybrid,
+    "Keep <Picture 1> identity and <Video 1> motion stable.",
+    ["One.", "Use <Picture 1> and <Video 1>.", "Three."],
+  );
+  assert.equal(result.valid, true);
+});
+
+test("Continuum sync does not mutate sampler settings when Sequence Prompt has no editable source", () => {
+  const { app, samplers } = continuumGraph({ connected: false });
+  const sampler = samplers[0];
+  sampler.widgets.find((entry) => entry.name === "prompt_mode").value = "List";
+  sampler.widgets.find((entry) => entry.name === "chunks").value = 2;
+  sampler.widgets.find((entry) => entry.name === "chunk_seconds").value = 6;
+
+  const result = applySequenceToContinuum(app, sampler, {
+    settings: { chunks: 3, chunk_seconds: 5 },
+    preamble: "Global.",
+    prompts: ["One.", "Two.", "Three."],
+  }, { syncSettings: true });
+
+  assert.equal(result.status, "unconnected");
+  assert.equal(sampler.widgets.find((entry) => entry.name === "prompt_mode").value, "List");
+  assert.equal(sampler.widgets.find((entry) => entry.name === "chunks").value, 2);
+  assert.equal(sampler.widgets.find((entry) => entry.name === "chunk_seconds").value, 6);
+});
+
+test("Continuum apply rolls back sampler and text values when a widget callback throws", () => {
+  const { app, samplers, textWidget } = continuumGraph();
+  const sampler = samplers[0];
+  sampler.widgets.find((entry) => entry.name === "prompt_mode").value = "List";
+  sampler.widgets.find((entry) => entry.name === "chunks").value = 2;
+  const originalText = textWidget.value;
+  textWidget.callback = () => {
+    throw new Error("test callback failure");
+  };
+
+  const result = applySequenceToContinuum(app, sampler, {
+    settings: { chunks: 3, chunk_seconds: 5 },
+    preamble: "Global.",
+    prompts: ["One.", "Two.", "Three."],
+  }, { syncSettings: true });
+
+  assert.equal(result.status, "apply_failed");
+  assert.match(result.message, /test callback failure/);
+  assert.equal(sampler.widgets.find((entry) => entry.name === "prompt_mode").value, "List");
+  assert.equal(sampler.widgets.find((entry) => entry.name === "chunks").value, 2);
+  assert.equal(textWidget.value, originalText);
+});
+
+test("Continuum handoff rejects stale conditioning source inventory before mutation", () => {
+  const { app, samplers, textWidget } = continuumGraph({
+    referenceInputs: [{ input: "reference_image_1", sourceId: 41 }],
+  });
+  const active = discoverContinuumReferenceInventory(app, samplers[0]);
+  const saved = structuredClone(active);
+  saved.items[0].source_node_id = 99;
+  samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value = "List";
+  samplers[0].widgets.find((entry) => entry.name === "chunks").value = 2;
+  const originalText = textWidget.value;
+
+  const result = applySequenceToContinuum(app, samplers[0], {
+    settings: { chunks: 3, chunk_seconds: 5 },
+    preamble: "Global.",
+    prompts: ["One.", "Two.", "Three."],
+    downstream_reference_inventory: saved,
+  }, { syncSettings: true, mode: "Reference" });
+
+  assert.equal(result.status, "source_inventory_mismatch");
+  assert.equal(samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value, "List");
+  assert.equal(samplers[0].widgets.find((entry) => entry.name === "chunks").value, 2);
+  assert.equal(textWidget.value, originalText);
+});
+
+test("Continuum handoff rejects temporal mode mismatch before mutating sampler or text", () => {
+  const { app, samplers, textWidget } = continuumGraph({
+    referenceInputs: [
+      { input: "first_frame", sourceId: 26 },
+    ],
+  });
+  samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value = "List";
+  samplers[0].widgets.find((entry) => entry.name === "chunks").value = 2;
+  const originalText = textWidget.value;
+  const result = applySequenceToContinuum(app, samplers[0], {
+    settings: { chunks: 3, chunk_seconds: 5 },
+    preamble: "Stable scene.",
+    prompts: ["One.", "Two.", "Three."],
+  }, { syncSettings: true, mode: "FL2VA" });
+  assert.equal(result.status, "mode_topology_mismatch");
+  assert.equal(result.mode_topology.actual.first_frame, true);
+  assert.equal(result.mode_topology.actual.last_frame, false);
+  assert.equal(samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value, "List");
+  assert.equal(samplers[0].widgets.find((entry) => entry.name === "chunks").value, 2);
+  assert.equal(textWidget.value, originalText);
+});
+
+test("Continuum handoff rejects invalid manual reference scope before mutating sampler or text", () => {
+  const { app, samplers, textWidget } = continuumGraph({
+    referenceInputs: [
+      { input: "first_frame", sourceId: 26 },
+      { input: "last_frame", sourceId: 27 },
+    ],
+  });
+  samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value = "List";
+  samplers[0].widgets.find((entry) => entry.name === "chunks").value = 2;
+  const originalText = textWidget.value;
+  const result = applySequenceToContinuum(app, samplers[0], {
+    settings: { chunks: 3, chunk_seconds: 5 },
+    preamble: "Stable scene.",
+    prompts: [
+      "Open from <Picture 1>.",
+      "Incorrectly reset to <Picture 1>.",
+      "Land on <Picture 2>.",
+    ],
+  }, { syncSettings: true });
+  assert.equal(result.status, "reference_mismatch");
+  assert.equal(result.violations[0].chunk_index, 2);
+  assert.equal(samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value, "List");
+  assert.equal(samplers[0].widgets.find((entry) => entry.name === "chunks").value, 2);
+  assert.equal(textWidget.value, originalText);
+});
+
+test("Continuum graph discovery ignores Never-muted reference branches", () => {
+  const { app, samplers } = continuumGraph({
+    referenceInputs: [
+      { input: "reference_image_1", sourceId: 30, mode: 2 },
+      { input: "reference_image_4", sourceId: 31 },
+    ],
+  });
+  const inventory = discoverContinuumReferenceInventory(app, samplers[0]);
+  assert.deepEqual(inventory.items.map((item) => item.tag), ["<Picture 1>"]);
+  assert.equal(inventory.items[0].input_name, "reference_image_4");
+});
+
+test("Continuum graph discovery resolves a bypass node to its executable upstream image", () => {
+  const { app, graph, samplers } = continuumGraph({ connected: false });
+  const upstream = {
+    id: 40,
+    type: "LoadImage",
+    mode: 0,
+    inputs: [],
+    outputs: [{ name: "IMAGE", type: "IMAGE", links: [401] }],
+    widgets: [],
+  };
+  const bypass = {
+    id: 41,
+    type: "ImagePassThrough",
+    mode: 4,
+    inputs: [{ name: "image", type: "IMAGE", link: 401 }],
+    outputs: [{ name: "IMAGE", type: "IMAGE", links: [402] }],
+    widgets: [],
+  };
+  const refInput = samplers[0].inputs.find((input) => input.name === "reference_image_3");
+  refInput.link = 402;
+  graph._nodes.push(upstream, bypass);
+  upstream.graph = graph;
+  bypass.graph = graph;
+  graph.links[401] = { origin_id: 40, origin_slot: 0, target_id: 41, target_slot: 0 };
+  graph.links[402] = {
+    origin_id: 41,
+    origin_slot: 0,
+    target_id: samplers[0].id,
+    target_slot: samplers[0].inputs.indexOf(refInput),
+  };
+
+  const inventory = discoverContinuumReferenceInventory(app, samplers[0]);
+  assert.equal(inventory.items.length, 1);
+  assert.equal(inventory.items[0].tag, "<Picture 1>");
+  assert.equal(inventory.items[0].input_name, "reference_image_3");
+  assert.equal(inventory.items[0].source_node_id, 40);
+  assert.equal(inventory.items[0].source_node_class, "LoadImage");
+});
+
+test("Continuum graph discovery drops a bypass branch whose compatible upstream input is muted", () => {
+  const { app, graph, samplers } = continuumGraph({ connected: false });
+  const muted = {
+    id: 50,
+    type: "LoadImage",
+    mode: 2,
+    inputs: [],
+    outputs: [{ name: "IMAGE", type: "IMAGE", links: [501] }],
+    widgets: [],
+  };
+  const bypass = {
+    id: 51,
+    type: "ImagePassThrough",
+    mode: 4,
+    inputs: [{ name: "image", type: "IMAGE", link: 501 }],
+    outputs: [{ name: "IMAGE", type: "IMAGE", links: [502] }],
+    widgets: [],
+  };
+  const refInput = samplers[0].inputs.find((input) => input.name === "reference_image_1");
+  refInput.link = 502;
+  graph._nodes.push(muted, bypass);
+  muted.graph = graph;
+  bypass.graph = graph;
+  graph.links[501] = { origin_id: 50, origin_slot: 0, target_id: 51, target_slot: 0 };
+  graph.links[502] = {
+    origin_id: 51,
+    origin_slot: 0,
+    target_id: samplers[0].id,
+    target_slot: samplers[0].inputs.indexOf(refInput),
+  };
+
+  assert.deepEqual(discoverContinuumReferenceInventory(app, samplers[0]).items, []);
+});
+
+test("Continuum sequence text handoff follows a bypassed STRING pass-through to the editable source", () => {
+  const { app, graph, samplers, text, textWidget } = continuumGraph({ connected: false });
+  const passThrough = {
+    id: 61,
+    type: "StringPassThrough",
+    mode: 4,
+    inputs: [{ name: "text", type: "STRING", link: 610 }],
+    outputs: [{ name: "STRING", type: "STRING", links: [611] }],
+    widgets: [],
+  };
+  text.outputs[0].links = [610];
+  graph._nodes.push(text, passThrough);
+  text.graph = graph;
+  passThrough.graph = graph;
+  const sequenceInput = samplers[0].inputs.find((input) => input.name === "sequence_prompt");
+  sequenceInput.link = 611;
+  graph.links[610] = { origin_id: text.id, origin_slot: 0, target_id: passThrough.id, target_slot: 0 };
+  graph.links[611] = {
+    origin_id: passThrough.id,
+    origin_slot: 0,
+    target_id: samplers[0].id,
+    target_slot: samplers[0].inputs.indexOf(sequenceInput),
+  };
+
+  const source = connectedSequenceTextSource(graph, samplers[0]);
+  assert.equal(source.status, "connected");
+  assert.equal(source.node, text);
+  const result = applySequenceToContinuum(app, samplers[0], {
+    settings: { chunks: 3, chunk_seconds: 5 },
+    preamble: "Global.",
+    prompts: ["One", "Two", "Three"],
+  });
+  assert.equal(result.status, "applied");
+  assert.match(textWidget.value, /^Global\.\n\n\[0-5s\]/);
+});
+
+test("Continuum graph handoff never silently selects among multiple samplers", () => {
+  const { app, samplers } = continuumGraph({ samplerCount: 2, connected: false });
+  assert.equal(chooseContinuumSampler(app).status, "multiple");
+  app.canvas.selected_nodes = { [samplers[1].id]: samplers[1] };
+  assert.equal(chooseContinuumSampler(app).sampler, samplers[1]);
+});
+
+test("Continuum graph handoff reports all setting mismatches when Sequence Prompt is writable", () => {
+  assert.equal(chooseContinuumSampler({ graph: { _nodes: [] } }).status, "missing");
+  const { app, samplers } = continuumGraph();
+  samplers[0].widgets.find((entry) => entry.name === "prompt_mode").value = "List";
+  const result = applySequenceToContinuum(app, samplers[0], {
+    settings: { chunks: 4, chunk_seconds: 6 },
+    preamble: "Global.",
+    prompts: ["One", "Two", "Three", "Four"],
+  });
+  assert.equal(result.status, "mismatch");
+  assert.deepEqual(result.mismatches.map((item) => item.field), ["prompt_mode", "chunks", "chunk_seconds"]);
+});
 
 test("API responses preserve structured server errors", async () => {
   const response = {
@@ -426,6 +1176,9 @@ test("user preferences persist only stable non-secret settings", () => {
     musicLyricsUseBrief: false,
     fullscreen: true,
     vramHandoff: true,
+    generationTarget: "continuum",
+    continuumChunks: 8,
+    continuumChunkSeconds: 6.5,
     selectedModel: { id: "api::secret-connection::model", api_connection_id: "secret-connection" },
     apiProviderConfig: { api_key: "must-not-be-stored" },
     creativeBrief: "must-not-be-stored",
@@ -436,7 +1189,7 @@ test("user preferences persist only stable non-secret settings", () => {
   const serialized = storage.entries()[USER_PREFERENCES_STORAGE_KEY];
   assert.doesNotMatch(serialized, /secret|creativeBrief|keepModelLoaded|thinking|connection/);
   assert.deepEqual(loadUserPreferences(storage), {
-    version: 1,
+    version: 2,
     mode: "Reference",
     duration_seconds: 14,
     aspect_ratio: "9:16",
@@ -451,12 +1204,15 @@ test("user preferences persist only stable non-secret settings", () => {
     music_lyrics_use_brief: false,
     fullscreen: true,
     vram_handoff: true,
+    generation_target: "continuum",
+    continuum_chunks: 8,
+    continuum_chunk_seconds: 6.5,
   });
 });
 
 test("user preferences ignore corrupt or unknown versions and sanitize fields", () => {
   assert.equal(loadUserPreferences(memoryStorage({ [USER_PREFERENCES_STORAGE_KEY]: "{" })), null);
-  assert.equal(loadUserPreferences(memoryStorage({ [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({ version: 2 }) })), null);
+  assert.equal(loadUserPreferences(memoryStorage({ [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({ version: 3 }) })), null);
 
   const storage = memoryStorage({
     [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({
@@ -471,7 +1227,7 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     }),
   });
   assert.deepEqual(loadUserPreferences(storage), {
-    version: 1,
+    version: 2,
     mode: "Reference",
     duration_seconds: 10,
     aspect_ratio: "16:9",
@@ -486,6 +1242,9 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     music_lyrics_use_brief: true,
     fullscreen: false,
     vram_handoff: false,
+    generation_target: "single",
+    continuum_chunks: 3,
+    continuum_chunk_seconds: 5,
   });
 });
 
@@ -620,23 +1379,29 @@ test("all mode drafts persist independently across reloads", () => {
     Reference: { brief: "Reference brief", prompt: "Reference prompt" },
   });
   assert.deepEqual(loadModeDrafts(storage), {
-    T2VA: { brief: "Text brief", prompt: "Text prompt" },
-    I2VA: { brief: "Image brief", prompt: "Image prompt" },
-    Reference: { brief: "Reference brief", prompt: "Reference prompt" },
+    T2VA: { brief: "Text brief", prompt: "Text prompt", single_prompt: "Text prompt", generation_target: "single", continuum: null },
+    I2VA: { brief: "Image brief", prompt: "Image prompt", single_prompt: "Image prompt", generation_target: "single", continuum: null },
+    Reference: { brief: "Reference brief", prompt: "Reference prompt", single_prompt: "Reference prompt", generation_target: "single", continuum: null },
   });
   assert.match(storage.entries()[MODE_DRAFTS_STORAGE_KEY], /Reference brief|Reference prompt/);
-  assert.deepEqual(createStudioState({ sessionId: "drafts", storage }).modeDrafts.T2VA, { brief: "Text brief", prompt: "Text prompt" });
+  assert.deepEqual(createStudioState({ sessionId: "drafts", storage }).modeDrafts.T2VA, { brief: "Text brief", prompt: "Text prompt", single_prompt: "Text prompt", generation_target: "single", continuum: null });
 });
 
 test("clear prompts removes brief and generated output while preserving lyrics and extra draft state", () => {
   assert.deepEqual(clearPromptDraft({
     brief: "Keep the camera static.",
     prompt: "Generated prompt",
+    single_prompt: "Saved single prompt",
+    generation_target: "continuum",
+    continuum: { schema_version: 2 },
     lyrics: "[Verse]\nKeep these lyrics",
     marker: "preserved",
   }), {
     brief: "",
     prompt: "",
+    single_prompt: "",
+    generation_target: "continuum",
+    continuum: null,
     lyrics: "[Verse]\nKeep these lyrics",
     marker: "preserved",
   });
@@ -644,6 +1409,8 @@ test("clear prompts removes brief and generated output while preserving lyrics a
   assert.match(mainSource, /data-clear-prompts><strong>Clear prompts<\/strong><small>Keep media<\/small>/);
   assert.match(mainSource, /data-clear-all><strong>Clear all<\/strong><small>Media and prompts<\/small>/);
   assert.match(mainSource, /if \(!await clearCurrentMedia\(\{ notify: false \}\)\) return;/);
+  assert.match(mainSource, /async function clearCurrentMedia\(\{ notify = true \} = \{\}\)[\s\S]{0,320}studio\.workflowReferenceBindings = \{\};/);
+  assert.match(mainSource, /function clearCurrentPrompts[\s\S]{0,420}studio\.continuumSequence = draft\.continuum \|\| null;[\s\S]{0,700}studio\.modeDrafts\[studio\.mode\] = draft;/);
   assert.match(stylesSource, /\.h3ps-clear-control \{[^}]*display: inline-flex;[^}]*border-radius: 7px;/);
   assert.match(stylesSource, /\.h3ps-clear-menu \{[^}]*right: -20px;[^}]*width: max-content;[^}]*max-width: calc\(100vw - 24px\);/);
   assert.match(stylesSource, /\.h3ps-clear-menu button \{[^}]*display: grid;[^}]*min-height: 42px;/);
@@ -659,6 +1426,86 @@ test("custom contact sheet counts accept only whole values from 2 through 16", (
   assert.match(mainSource, /data-frame-custom-toggle>Custom<\/button><input[^>]+min="2" max="16"[^>]+data-frame-custom-count hidden/);
   assert.match(mainSource, /resampleCurrentVideo\(\{ frame_count: selected \}\)/);
   assert.match(stylesSource, /\.h3ps-frame-custom-count \{[^}]*width:42px;[^}]*text-align:center;/);
+});
+
+test("legacy Continuum draft state migrates to schema v2 without losing plan or bodies", () => {
+  const storage = memoryStorage();
+  saveModeDrafts(storage, {
+    T2VA: {
+      brief: "Legacy sequence.",
+      prompt: "",
+      single_prompt: "Single prompt.",
+      generation_target: "continuum",
+      continuum: {
+        schema_version: 1,
+        settings: { schema_version: 1, chunks: 2, chunk_seconds: 5, total_seconds: 10 },
+        plan: {
+          schema_version: 1,
+          global: { sequence_preamble: "Legacy global." },
+          chunks: [],
+        },
+        prompts: ["Legacy one.", "Legacy two."],
+      },
+    },
+  });
+  const loaded = loadModeDrafts(storage).T2VA.continuum;
+  assert.equal(loaded.schema_version, 2);
+  assert.equal(loaded.settings.schema_version, 2);
+  assert.equal(loaded.migrated_from_schema_version, 1);
+  assert.equal(loaded.preamble, "Legacy global.");
+  assert.deepEqual(loaded.prompts, ["Legacy one.", "Legacy two."]);
+});
+
+test("Continuum draft sanitizer never silently truncates semantic state", () => {
+  const storage = memoryStorage();
+  saveModeDrafts(storage, {
+    T2VA: {
+      brief: "Oversize sequence.",
+      prompt: "",
+      single_prompt: "Single prompt.",
+      generation_target: "continuum",
+      continuum: {
+        schema_version: 2,
+        settings: { schema_version: 2, chunks: 1, chunk_seconds: 5, total_seconds: 5 },
+        plan: {
+          schema_version: 2,
+          global: { sequence_preamble: "Global." },
+          chunks: [],
+        },
+        preamble: "p".repeat(20001),
+        prompts: ["One."],
+      },
+    },
+  });
+  assert.equal(loadModeDrafts(storage).T2VA.continuum, null);
+});
+
+test("invalid saved Continuum inventory invalidates the draft instead of dropping the source-drift guard", () => {
+  const storage = memoryStorage();
+  saveModeDrafts(storage, {
+    Reference: {
+      brief: "Reference sequence.",
+      prompt: "",
+      single_prompt: "Single prompt.",
+      generation_target: "continuum",
+      continuum: {
+        schema_version: 2,
+        settings: { schema_version: 2, chunks: 2, chunk_seconds: 5, total_seconds: 10 },
+        plan: {
+          schema_version: 2,
+          global: { sequence_preamble: "Global." },
+          chunks: [],
+        },
+        preamble: "Global.",
+        prompts: ["One.", "Two."],
+        downstream_reference_inventory: {
+          schema_version: 1,
+          items: [{ role: "not_a_real_role" }],
+        },
+      },
+    },
+  });
+  assert.equal(loadModeDrafts(storage).Reference.continuum, null);
 });
 
 test("video drafts preserve the 8000 character brief while Music keeps 2000", () => {
@@ -852,6 +1699,25 @@ test("text-only Direct models expose only T2VA", () => {
   for (const mode of ["I2VA", "FL2VA", "L2VA", "Reference", "Music3"]) {
     assert.equal(isGenerationModeAvailable(textOnly, mode), false);
   }
+  for (const mode of ["I2VA", "FL2VA", "L2VA", "Reference"]) {
+    assert.equal(isGenerationModeAvailable(textOnly, mode, {
+      generationTarget: "continuum",
+      hasVisualMedia: false,
+    }), true);
+    assert.equal(isGenerationModeAvailable(textOnly, mode, {
+      generationTarget: "continuum",
+      hasVisualMedia: true,
+    }), false);
+    assert.equal(isGenerationModeAvailable(textOnly, mode, {
+      generationTarget: "continuum",
+      hasVisualMedia: true,
+      continuumRefinement: true,
+    }), true);
+  }
+  assert.equal(isGenerationModeAvailable(textOnly, "Music3", {
+    generationTarget: "continuum",
+    hasVisualMedia: false,
+  }), false);
   assert.equal(isTextOnlyDirectModel(vision), false);
   assert.equal(isGenerationModeAvailable(vision, "Reference"), true);
   assert.equal(isGenerationModeAvailable({ family: "external", capabilities: { images: false } }, "Reference"), true);
@@ -873,6 +1739,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   assert.deepEqual(buildGeneratePayload(state, { creativeBrief: "A quiet shot.", seed: 3407 }), {
     session_id: state.sessionId,
     mode: "Reference",
+    generation_target: "single",
     duration_seconds: 8,
     aspect_ratio: "3:2",
     creative_brief: "A quiet shot.",
@@ -891,6 +1758,7 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   assert.deepEqual(buildRefinePayload(state, { currentPrompt: "Current", instruction: "Slower", creativeBrief: "Original brief", seed: 99 }), {
     session_id: state.sessionId,
     mode: "Reference",
+    generation_target: "single",
     duration_seconds: 8,
     aspect_ratio: "3:2",
     creative_brief: "Original brief",
@@ -952,6 +1820,107 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   assert.equal(Object.hasOwn(buildGeneratePayload(state, { creativeBrief: "Direct brief", seed: 2 }), "reasoning_effort"), false);
 });
 
+test("Continuum generation and refinement require a real supported H3 Continuum sampler topology", () => {
+  assert.match(
+    mainSource,
+    /target\.status === "missing"[\s\S]{0,320}Add H3 Continuum Sampler V3\.4[\s\S]{0,320}before generating/,
+  );
+  assert.match(
+    mainSource,
+    /target\.status === "missing"[\s\S]{0,320}Add H3 Continuum Sampler V3\.4[\s\S]{0,320}before refining/,
+  );
+  assert.doesNotMatch(
+    mainSource,
+    /target\.status === "selected"[\s\S]{0,120}\{ schema_version: 1, items: \[\] \}/,
+  );
+});
+
+test("Continuum payloads and drafts preserve Timeline state and downstream inventory", () => {
+  const state = createStudioState({ sessionId: "continuum-session", storage: memoryStorage() });
+  state.mode = "T2VA";
+  state.generationTarget = "continuum";
+  state.continuumChunks = 2;
+  state.continuumChunkSeconds = 6.5;
+  state.continuumSequence = {
+    schema_version: 2,
+    settings: { schema_version: 2, chunks: 2, chunk_seconds: 6.5, total_seconds: 13 },
+    plan: { schema_version: 2, global: { sequence_preamble: "Global." }, chunks: [] },
+    preamble: "Global.",
+    prompts: ["Prompt one.", "Prompt two."],
+  };
+  selectModelState(state, { id: "direct.gguf", family: "gguf", capabilities: { audio: false } });
+  const inventory = {
+    schema_version: 1,
+    items: [{
+      tag: "<Picture 1>",
+      kind: "image",
+      source: "workflow",
+      visible_to_model: false,
+      role: "reference_image",
+    }],
+  };
+  const generated = buildGeneratePayload(state, {
+    creativeBrief: "Continue one shot.",
+    seed: 11,
+    downstreamReferenceInventory: inventory,
+  });
+  assert.equal(generated.generation_target, "continuum");
+  assert.equal(generated.duration_seconds, 6.5);
+  assert.deepEqual(generated.continuum, { schema_version: 2, chunks: 2, chunk_seconds: 6.5 });
+  assert.equal(generated.downstream_reference_inventory, inventory);
+
+  const current = "Global.\n\n[0-6.5s]\nPrompt one.\n\n[6.5-13s]\nPrompt two.";
+  const refined = buildRefinePayload(state, {
+    currentPrompt: current,
+    instruction: "Slow the second chunk.",
+    creativeBrief: "Continue one shot.",
+    chunkIndex: 2,
+    seed: 12,
+    downstreamReferenceInventory: inventory,
+  });
+  assert.equal(refined.continuum.chunk_index, 2);
+  assert.equal(refined.continuum.plan, state.continuumSequence.plan);
+  assert.equal(refined.downstream_reference_inventory, inventory);
+  state.continuumSequence.downstream_reference_inventory = inventory;
+  const refinedWithSnapshot = buildRefinePayload(state, {
+    currentPrompt: current,
+    instruction: "Slow the second chunk.",
+    creativeBrief: "Continue one shot.",
+    chunkIndex: 2,
+    seed: 13,
+    downstreamReferenceInventory: inventory,
+  });
+  assert.equal(
+    refinedWithSnapshot.continuum.downstream_reference_inventory,
+    inventory,
+  );
+
+  const storage = memoryStorage();
+  saveModeDrafts(storage, {
+    T2VA: {
+      brief: "Continue one shot.",
+      prompt: current,
+      single_prompt: "A prior single prompt.",
+      generation_target: "continuum",
+      continuum: state.continuumSequence,
+    },
+  });
+  const loadedContinuum = loadModeDrafts(storage).T2VA.continuum;
+  assert.deepEqual(loadedContinuum.prompts, ["Prompt one.", "Prompt two."]);
+  assert.equal(loadedContinuum.schema_version, 2);
+  assert.equal(loadedContinuum.settings.schema_version, 2);
+  assert.equal(loadedContinuum.preamble, "Global.");
+  assert.deepEqual(
+    loadedContinuum.downstream_reference_inventory,
+    inventory,
+  );
+  assert.equal(loadModeDrafts(storage).T2VA.generation_target, "continuum");
+  assert.doesNotMatch(storage.entries()[MODE_DRAFTS_STORAGE_KEY], /api_key|connection_id/);
+  assert.match(mainSource, /data-generation-target="continuum"/);
+  assert.match(mainSource, /data-apply-continuum/);
+  assert.match(mainSource, /Only the selected chunk changes/);
+});
+
 test("Ollama remote host controls stay collapsed and disclosure state survives refresh renders", () => {
   assert.match(mainSource, /data-ollama-host-settings[^>]*\$\{studio\.ollamaHostSettingsOpen \? "open" : ""\}/);
   assert.match(mainSource, /data-ollama-host-form/);
@@ -961,6 +1930,10 @@ test("Ollama remote host controls stay collapsed and disclosure state survives r
   assert.match(mainSource, /data-ollama-storage-help \$\{studio\.ollamaStorageHelpOpen \? "open" : ""\}/);
   assert.match(mainSource, /studio\.ollamaStorageHelpOpen = !ollamaStorageSummary\.closest\("details"\)\.open/);
   assert.match(skinSource, /\.h3ps-ollama-host-settings/);
+});
+
+test("generation target obeys the hidden attribute in Music 3", () => {
+  assert.match(stylesSource, /\.h3ps-generation-target\[hidden\]\s*\{\s*display\s*:\s*none\s*;?\s*\}/);
 });
 
 test("automatic Ollama refresh renders preserve the unsaved host field value", () => {
@@ -1208,6 +2181,9 @@ test("Music 3 drafts and payload keep lyrics separate from H3 state", () => {
     brief: "Oboe chamber pop",
     lyrics: "[Verse]\nWindows glow",
     prompt: "### Global Metadata\n...",
+    single_prompt: "### Global Metadata\n...",
+    generation_target: "single",
+    continuum: null,
   });
   const state = createStudioState({ sessionId: "music-session", storage });
   state.mode = "Music3";
@@ -1281,15 +2257,18 @@ test("active requests block add, reorder, and mode switching", () => {
   assert.match(mainSource, /drop[\s\S]{0,180}if \(studio\.requestBusy\) return/);
   assert.match(mainSource, /if \(!files\.length \|\| studio\.requestBusy\) return/);
   assert.match(mainSource, /studio\.requestBusy = busy;[\s\S]{0,120}syncModeAvailability\(\)/);
-  assert.match(mainSource, /const unavailable = !isGenerationModeAvailable[\s\S]{0,180}control\.disabled = studio\.requestBusy \|\| unavailable/);
+  assert.match(mainSource, /const unavailable = !isGenerationModeAvailable[\s\S]{0,320}control\.disabled = studio\.requestBusy \|\| unavailable/);
 });
 
-test("text-only Direct UI disables visual and Music modes and explains the fallback", () => {
+test("text-only Direct UI distinguishes single visual analysis from workflow-only Continuum", () => {
   assert.match(mainSource, /function syncModeAvailability\(\)/);
   assert.match(mainSource, /data-workspace[\s\S]{0,220}control\.dataset\.workspace === "music"/);
-  assert.match(mainSource, /Text-only model · T2VA available/);
+  assert.match(mainSource, /Text-only model · T2VA \+ workflow-only Continuum/);
+  assert.match(mainSource, /savedContinuumRefinement[\s\S]{0,420}continuumRefinement: savedContinuumRefinement/);
   assert.match(mainSource, /Switched to T2VA/);
   assert.match(mainSource, /if \(!generationModeIsAvailable\(\)\) return/);
+  assert.match(mainSource, /generationModeIsAvailable\(\{ continuumRefinement \}\)/);
+  assert.match(mainSource, /workflow-only Continuum conditioning does not require vision/);
   assert.match(stylesSource, /\.h3ps-modes button:disabled/);
   assert.match(skinSource, /\.h3ps-workspaces button:disabled/);
 });
@@ -1317,4 +2296,82 @@ test("prompt refinement keeps actions above a vertically resizable editor", () =
   assert.match(mainSource, /data-refine-helper[\s\S]{0,160}data-refine-media-note/);
   assert.doesNotMatch(mainSource, /refine_height|refineHeight/);
   assert.match(stylesSource, /\.h3ps-refine\[data-refine-panel\] textarea \{[^}]*min-height: 72px;[^}]*resize: vertical;/);
+});
+
+
+test("Continuum Reference UI exposes active workflow image import controls", () => {
+  assert.match(mainSource, /Active workflow images/);
+  assert.match(mainSource, /data-workflow-ref-add-all/);
+  assert.match(mainSource, /Add active workflow refs/);
+  assert.match(mainSource, /fetchComfyImageFile/);
+  assert.match(mainSource, /bindActiveWorkflowReferenceMedia/);
+  assert.match(stylesSource, /\.h3ps-workflow-references/);
+  assert.match(skinSource, /\.h3ps-workflow-references/);
+});
+
+test("Studio state owns transient workflow-reference media bindings", () => {
+  const state = createStudioState({ sessionId: "workflow-bindings", storage: memoryStorage() });
+  assert.deepEqual(state.workflowReferenceBindings, {});
+  assert.equal(state.workflowReferenceImportBusy, false);
+});
+
+
+test("Continuum saved inventory accepts a new temporary Writer asset ID only when model visibility and workflow source stay the same", () => {
+  const saved = {
+    schema_version: 1,
+    items: [{
+      role: "reference_image",
+      kind: "image",
+      source: "workflow",
+      visible_to_model: true,
+      tag: "<Picture 1>",
+      source_node_id: 41,
+      source_node_class: "ImageConveyor",
+      source_output_name: "ref_image_1",
+      source_slot: 6,
+      source_identity: "image-conveyor-ref-v1:1111111111111111",
+      model_asset_id: "old-session-asset",
+    }],
+  };
+  const rematerialized = structuredClone(saved);
+  rematerialized.items[0].model_asset_id = "new-session-asset";
+  assert.equal(sameContinuumReferenceInventory(saved, rematerialized), true);
+
+  const missing = structuredClone(rematerialized);
+  missing.items[0].visible_to_model = false;
+  delete missing.items[0].model_asset_id;
+  assert.equal(sameContinuumReferenceInventory(saved, missing), false);
+
+  const changedSource = structuredClone(rematerialized);
+  changedSource.items[0].source_identity = "image-conveyor-ref-v1:2222222222222222";
+  assert.equal(sameContinuumReferenceInventory(saved, changedSource), false);
+
+  const unfingerprintedSaved = structuredClone(saved);
+  delete unfingerprintedSaved.items[0].source_identity;
+  const unfingerprintedActive = structuredClone(unfingerprintedSaved);
+  unfingerprintedActive.items[0].model_asset_id = "another-session-asset";
+  assert.equal(sameContinuumReferenceInventory(unfingerprintedSaved, unfingerprintedActive), false);
+});
+
+test("manual replacement of an imported workflow copy drops its binding after a successful upload", () => {
+  assert.match(
+    mainSource,
+    /if \(replaceAssetId\) forgetWorkflowReferenceAsset\(replaceAssetId\);/,
+  );
+});
+
+
+test("workflow reference import routes reviewed transforms through backend materialization", () => {
+  assert.match(mainSource, /candidate\.materialization_plan/);
+  assert.match(mainSource, /materializeWorkflowImage/);
+  assert.match(mainSource, /Unsupported resize method/);
+  assert.match(mainSource, /Dynamic resize inputs/);
+});
+
+
+test("bound transformed workflow references preview the exact Writer-visible asset", () => {
+  assert.match(
+    mainSource,
+    /binding\.state === "current" && binding\.asset\?\.preview_url/,
+  );
 });

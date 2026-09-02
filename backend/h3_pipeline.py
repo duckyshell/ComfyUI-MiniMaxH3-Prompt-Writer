@@ -4,6 +4,7 @@ import base64
 import time
 from typing import Any, Callable
 
+from .continuum import continuum_chunk_format_violations
 from .context import (
     CHAT_TEMPLATE_OVERHEAD_TOKENS,
     CONTEXT_SAFETY_TOKENS,
@@ -15,6 +16,7 @@ from .models.contract import ModelError, final_message_text
 from .prompt_audit import audit_prompt, camera_structure_requested
 from .prompt_repair import (
     audit_failures,
+    continuum_chunk_repair_messages,
     dialogue_lines,
     explicit_constraint_violations,
     multimodal_repair_messages,
@@ -137,30 +139,97 @@ def _messages(
     }
 
 
+def _prompt_for_audit(prompt: str, assembled: dict[str, Any]) -> str:
+    request_input = assembled.get("input", {})
+    if (
+        request_input.get("generation_target") == "continuum"
+        and request_input.get("continuum_stage") in {"chunk", "refine_chunk"}
+    ):
+        preamble = str(
+            request_input.get("continuum_plan", {})
+            .get("global", {})
+            .get("sequence_preamble", "")
+        ).strip()
+        if preamble:
+            return preamble + "\n\n" + prompt.strip()
+    return prompt
+
+
+def _is_continuum_chunk_stage(assembled: dict[str, Any]) -> bool:
+    request_input = assembled.get("input", {})
+    return (
+        request_input.get("generation_target") == "continuum"
+        and request_input.get("continuum_stage") in {"chunk", "refine_chunk"}
+    )
+
+
 def _audit(
     prompt: str,
     assembled: dict[str, Any],
 ) -> tuple[dict[str, Any], ReferencePolicy, str, float | None, bool]:
-    duration_seconds = assembled["input"].get("duration_seconds")
+    request_input = assembled["input"]
+    duration_seconds = request_input.get("duration_seconds")
     intent_text = "\n".join(
-        str(assembled["input"].get(key, ""))
+        str(request_input.get(key, ""))
         for key in ("creative_brief", "current_prompt", "instruction")
-        if assembled["input"].get(key)
+        if request_input.get(key)
     )
     camera_structure_allowed = camera_structure_requested(intent_text)
+    audited_prompt = _prompt_for_audit(prompt, assembled)
+
+    if _is_continuum_chunk_stage(assembled):
+        allowed = set(request_input.get("continuum_chunk_allowed_references") or [])
+        actual_reference_tags = reference_tags(audited_prompt)
+        unexpected_reference_tags = sorted(actual_reference_tags - allowed)
+        constraint_violations = explicit_constraint_violations(intent_text, audited_prompt)
+        preamble = str(
+            request_input.get("continuum_plan", {})
+            .get("global", {})
+            .get("sequence_preamble", "")
+        )
+        format_violations = continuum_chunk_format_violations(
+            prompt,
+            preamble=preamble,
+        )
+        result = {
+            "mode": request_input.get("mode"),
+            "continuum_stage": request_input.get("continuum_stage"),
+            "official_format_pass": None,
+            "reference_understanding": "continuum_timeline_chunk",
+            "required_reference_tags": [],
+            "mutable_reference_tags": [],
+            "allowed_reference_tags": sorted(allowed),
+            "missing_reference_tags": [],
+            "unexpected_reference_tags": unexpected_reference_tags,
+            "explicit_constraint_violations": constraint_violations,
+            "format_violations": format_violations,
+            "repair_required": bool(
+                unexpected_reference_tags
+                or constraint_violations
+                or format_violations
+            ),
+        }
+        return (
+            result,
+            ReferencePolicy(set(), set(), allowed),
+            intent_text,
+            duration_seconds,
+            camera_structure_allowed,
+        )
+
     result = audit_prompt(
-        prompt,
-        assembled["input"]["mode"],
+        audited_prompt,
+        request_input["mode"],
         duration_seconds,
         camera_structure_allowed,
     )
-    policy = reference_policy(assembled["input"])
-    actual_reference_tags = reference_tags(prompt)
+    policy = reference_policy(request_input)
+    actual_reference_tags = reference_tags(audited_prompt)
     missing_reference_tags = sorted(policy.required - actual_reference_tags)
     unexpected_reference_tags = sorted(actual_reference_tags - policy.allowed)
     has_unexpected_audio_task = unexpected_audio_task(result.get("task_label"), actual_reference_tags)
-    constraint_violations = explicit_constraint_violations(intent_text, prompt)
-    if assembled["input"]["mode"] == "Reference":
+    constraint_violations = explicit_constraint_violations(intent_text, audited_prompt)
+    if request_input["mode"] == "Reference":
         result["missing_reference_tags"] = missing_reference_tags
         result["unexpected_reference_tags"] = unexpected_reference_tags
         result["required_reference_tags"] = sorted(policy.required)
@@ -179,19 +248,39 @@ def _audit(
 
 
 def validate_media_capabilities(model_info: dict[str, Any], assembled: dict[str, Any]) -> None:
-    mode = assembled.get("input", {}).get("mode")
+    request_input = assembled.get("input", {})
+    mode = request_input.get("mode")
+    visual_media_attached = any(
+        item.get("type") in {"image", "video"}
+        for item in assembled.get("media_inputs", [])
+    )
+    continuum_declared_only = (
+        request_input.get("generation_target") == "continuum"
+        and not visual_media_attached
+    )
+    direct_vision_required = (
+        visual_media_attached
+        or (mode != "T2VA" and not continuum_declared_only)
+    )
     if (
         model_info.get("family") == "gguf"
         and model_info.get("capabilities", {}).get("images") is False
-        and mode != "T2VA"
+        and direct_vision_required
     ):
+        display_mode = request_input.get("underlying_mode") or mode
         raise ModelError(
             "DIRECT_VISION_REQUIRED",
-            "This Direct GGUF model is running without a compatible vision projector. Only T2VA is available.",
+            "This request needs visual analysis, but the selected Direct GGUF model has no compatible vision projector.",
             {
-                "mode": mode,
-                "supported_modes": ["T2VA"],
-                "suggestion": "Switch to T2VA or add the matching mmproj GGUF beside the model.",
+                "mode": display_mode,
+                "supported_without_vision": [
+                    "T2VA",
+                    "H3 Continuum modes using only workflow-declared conditioning",
+                ],
+                "suggestion": (
+                    "Add the matching mmproj GGUF, or for H3 Continuum remove Prompt Writer image/video "
+                    "analysis media and rely on the declared H3 Continuum workflow conditioning."
+                ),
             },
         )
     required = {item["requires_capability"] for item in assembled["media_inputs"]}
@@ -315,14 +404,20 @@ def run_h3_pipeline(
     expected_reference_tags = reference_policy_value.required
     allowed_reference_tags = reference_policy_value.allowed
     initial_reference_tags = reference_tags(prompt)
-    repair_reference_tags = (initial_reference_tags & allowed_reference_tags) | expected_reference_tags
+    repair_reference_tags = (
+        (initial_reference_tags & allowed_reference_tags)
+        | set(initial_audit.get("missing_reference_tags", []))
+    )
     format_repair_attempted = False
     format_repair_applied = False
     format_repair_tokens = 0
     format_repair_reason = None
     format_repair_failure = None
     format_repair_method = None
-    repair_needed = assembled["input"]["mode"] == "Reference" and initial_audit.get("repair_required") is True
+    continuum_chunk_stage = _is_continuum_chunk_stage(assembled)
+    repair_needed = initial_audit.get("repair_required") is True and (
+        continuum_chunk_stage or assembled["input"]["mode"] == "Reference"
+    )
     if repair_needed:
         format_repair_attempted = True
         failed_checks = audit_failures(initial_audit)
@@ -331,7 +426,16 @@ def run_h3_pipeline(
         has_prepared_visual_media = any(
             item.get("type") in {"image", "video"} for item in assembled.get("media_inputs", [])
         )
-        if missing_active_references and has_prepared_visual_media:
+        if continuum_chunk_stage:
+            format_repair_method = "continuum narrow text correction"
+            repair_messages = continuum_chunk_repair_messages(
+                assembled,
+                prompt,
+                failed_checks,
+                repair_reference_tags,
+                allowed_reference_tags,
+            )
+        elif missing_active_references and has_prepared_visual_media:
             format_repair_method = "multimodal reference correction"
             repair_messages = multimodal_repair_messages(
                 messages,
@@ -376,30 +480,38 @@ def run_h3_pipeline(
             thinking=False,
             qwen_reasoning_contract=qwen_reasoning_contract,
         )
-        repaired_audit = audit_prompt(
-            repaired,
-            assembled["input"]["mode"],
-            duration_seconds,
-            camera_structure_allowed,
-        )
-        repaired_tags = reference_tags(repaired)
-        repaired_audit["missing_reference_tags"] = sorted(expected_reference_tags - repaired_tags)
-        repaired_audit["unexpected_reference_tags"] = sorted(repaired_tags - allowed_reference_tags)
-        repaired_audit["required_reference_tags"] = sorted(reference_policy_value.required)
-        repaired_audit["mutable_reference_tags"] = sorted(reference_policy_value.mutable)
-        repaired_audit["allowed_reference_tags"] = sorted(reference_policy_value.allowed)
-        repaired_audit["unexpected_audio_task"] = unexpected_audio_task(
-            repaired_audit.get("task_label"), repaired_tags
-        )
-        repaired_audit["explicit_constraint_violations"] = explicit_constraint_violations(intent_text, repaired)
-        repaired_audit["repair_required"] = bool(
-            repaired_audit.get("repair_required")
-            or repaired_audit["missing_reference_tags"]
-            or repaired_audit["unexpected_reference_tags"]
-            or repaired_audit["unexpected_audio_task"]
-            or repaired_audit["explicit_constraint_violations"]
-        )
-        repair_tags_match = repaired_tags == repair_reference_tags
+        repaired_audit_prompt = _prompt_for_audit(repaired, assembled)
+        repaired_raw_tags = reference_tags(repaired)
+        if continuum_chunk_stage:
+            repaired_audit, _, _, _, _ = _audit(repaired, assembled)
+        else:
+            repaired_audit = audit_prompt(
+                repaired_audit_prompt,
+                assembled["input"]["mode"],
+                duration_seconds,
+                camera_structure_allowed,
+            )
+            repaired_tags = reference_tags(repaired_audit_prompt)
+            repaired_audit["missing_reference_tags"] = sorted(expected_reference_tags - repaired_tags)
+            repaired_audit["unexpected_reference_tags"] = sorted(repaired_tags - allowed_reference_tags)
+            repaired_audit["required_reference_tags"] = sorted(reference_policy_value.required)
+            repaired_audit["mutable_reference_tags"] = sorted(reference_policy_value.mutable)
+            repaired_audit["allowed_reference_tags"] = sorted(reference_policy_value.allowed)
+            repaired_audit["unexpected_audio_task"] = unexpected_audio_task(
+                repaired_audit.get("task_label"), repaired_tags
+            )
+            repaired_audit["explicit_constraint_violations"] = explicit_constraint_violations(
+                intent_text,
+                repaired_audit_prompt,
+            )
+            repaired_audit["repair_required"] = bool(
+                repaired_audit.get("repair_required")
+                or repaired_audit["missing_reference_tags"]
+                or repaired_audit["unexpected_reference_tags"]
+                or repaired_audit["unexpected_audio_task"]
+                or repaired_audit["explicit_constraint_violations"]
+            )
+        repair_tags_match = repaired_raw_tags == repair_reference_tags
         dialogue_preserved = dialogue_lines(repaired) == dialogue_lines(prompt)
         if (
             repaired

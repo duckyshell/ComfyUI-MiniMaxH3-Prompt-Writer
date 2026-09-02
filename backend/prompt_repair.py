@@ -74,6 +74,7 @@ def audit_failures(audit: dict[str, Any]) -> list[str]:
         failures.append("unexpected reference tags: " + ", ".join(audit["unexpected_reference_tags"]))
     if audit.get("unexpected_audio_task"):
         failures.append("audio reference/reuse declared without a canonically requested uploaded audio reference")
+    failures.extend(audit.get("format_violations") or [])
     failures.extend(audit.get("explicit_constraint_violations") or [])
     return failures
 
@@ -106,6 +107,44 @@ def narrow_repair_messages(
         {
             "role": "user",
             "content": f"ORIGINAL REQUEST:\n{original_request}\n\nDRAFT TO CORRECT:\n{draft}",
+        },
+    ]
+
+
+def continuum_chunk_repair_messages(
+    assembled: dict[str, Any],
+    draft: str,
+    violations: list[str],
+    expected_tags: set[str],
+    allowed_tags: set[str],
+) -> list[dict[str, str]]:
+    original_request = next(
+        message["content"]
+        for message in assembled["messages"]
+        if message["role"] == "user"
+    )
+    required = ", ".join(sorted(expected_tags)) or "none"
+    allowed = ", ".join(sorted(allowed_tags)) or "none"
+    return [
+        {
+            "role": "system",
+            "content": (
+                "This is a narrow correction of one MiniMax H3 Continuum Timeline chunk body. "
+                "Correct only the objective failures listed below and preserve every other supported action, state, "
+                "camera choice, dialogue line, sound cue, and creative choice unchanged. Return only the corrected "
+                "chunk body. Do not add a shared preamble, Timeline header, standalone I2VA/FL2VA/L2VA alignment line, "
+                "Reference-mode section wrapper, JSON, Markdown, or commentary. The exact public reference tags that "
+                f"must remain in this chunk body are: {required}. The exact public reference tags permitted in this "
+                f"chunk are: {allowed}. Do not add any other numbered media tag. Violations: "
+                + "; ".join(violations)
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"ORIGINAL CONTINUUM CHUNK REQUEST:\n{original_request}\n\n"
+                f"DRAFT CHUNK BODY TO CORRECT:\n{draft}"
+            ),
         },
     ]
 

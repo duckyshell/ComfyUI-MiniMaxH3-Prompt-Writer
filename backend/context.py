@@ -29,6 +29,7 @@ CHAT_TEMPLATE_OVERHEAD_TOKENS = 384
 MINIMUM_OUTPUT_TOKENS = 1_536
 MUSIC_OUTPUT_TOKENS = 1_536
 STANDARD_OUTPUT_TOKENS = 2_048
+CONTINUUM_PLAN_OUTPUT_TOKENS = 8_192
 THINKING_OUTPUT_TOKENS = 6_144
 LOCAL_THINKING_OUTPUT_TOKENS = 8_192
 
@@ -146,7 +147,10 @@ def estimate_visual_tokens(
 
 
 def non_thinking_output_tokens(assembled: dict[str, Any]) -> int:
-    mode = assembled.get("input", {}).get("mode")
+    request_input = assembled.get("input", {})
+    if request_input.get("continuum_stage") in {"plan", "plan_repair"}:
+        return CONTINUUM_PLAN_OUTPUT_TOKENS
+    mode = request_input.get("mode")
     return MUSIC_OUTPUT_TOKENS if mode == "Music3" else STANDARD_OUTPUT_TOKENS
 
 

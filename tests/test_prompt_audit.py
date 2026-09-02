@@ -1,6 +1,9 @@
 import unittest
 
+from backend.h3_pipeline import _audit, validate_media_capabilities
 from backend.prompt_audit import audit_prompt
+from backend.models.contract import ModelError
+from backend.prompt_repair import continuum_chunk_repair_messages
 
 
 def reference_prompt(word_count: int, *, include_soundscape: bool = True) -> str:
@@ -102,6 +105,158 @@ class PromptAuditTests(unittest.TestCase):
         self.assertTrue(result["missing_shot_marker"])
         self.assertTrue(result["repair_required"])
 
+
+    def test_text_only_direct_allows_workflow_only_continuum_conditioning(self):
+        model = {
+            "family": "gguf",
+            "capabilities": {"images": False, "video_frames": False},
+        }
+        assembled = {
+            "input": {
+                "mode": "FL2VA",
+                "generation_target": "continuum",
+            },
+            "media_inputs": [],
+        }
+        validate_media_capabilities(model, assembled)
+
+    def test_text_only_direct_rejects_prompt_writer_visual_analysis_for_continuum(self):
+        model = {
+            "family": "gguf",
+            "capabilities": {"images": False, "video_frames": False},
+        }
+        assembled = {
+            "input": {
+                "mode": "FL2VA",
+                "generation_target": "continuum",
+            },
+            "media_inputs": [
+                {"type": "image", "requires_capability": "images"},
+            ],
+        }
+        with self.assertRaises(ModelError) as raised:
+            validate_media_capabilities(model, assembled)
+        self.assertEqual(raised.exception.code, "DIRECT_VISION_REQUIRED")
+
+    def test_continuum_planner_internal_t2va_marker_does_not_bypass_visual_requirement(self):
+        model = {
+            "family": "gguf",
+            "capabilities": {"images": False, "video_frames": False},
+        }
+        assembled = {
+            "input": {
+                "mode": "T2VA",
+                "underlying_mode": "FL2VA",
+                "generation_target": "continuum",
+            },
+            "media_inputs": [
+                {"type": "image", "requires_capability": "images"},
+            ],
+        }
+        with self.assertRaises(ModelError) as raised:
+            validate_media_capabilities(model, assembled)
+        self.assertEqual(raised.exception.code, "DIRECT_VISION_REQUIRED")
+        self.assertEqual(raised.exception.details["mode"], "FL2VA")
+
+    def test_continuum_reference_chunk_skips_standalone_reference_structure_audit(self):
+        assembled = {
+            "input": {
+                "mode": "Reference",
+                "generation_target": "continuum",
+                "continuum_stage": "chunk",
+                "continuum_chunk_allowed_references": ["<Picture 1>"],
+                "continuum_plan": {
+                    "global": {"sequence_preamble": "Keep <Picture 1> identity consistent."}
+                },
+                "creative_brief": "Keep <Picture 1> consistent.",
+                "duration_seconds": 5,
+            }
+        }
+        result, policy, _intent, _duration, _camera = _audit(
+            "The subject continues walking while the camera tracks beside them.",
+            assembled,
+        )
+        self.assertIsNone(result["official_format_pass"])
+        self.assertEqual(result["reference_understanding"], "continuum_timeline_chunk")
+        self.assertNotIn("missing_sections", result)
+        self.assertEqual(policy.allowed, {"<Picture 1>"})
+
+    def test_continuum_chunk_repair_contract_preserves_chunk_shape_and_exact_tag_scope(self):
+        assembled = {
+            "messages": [
+                {"role": "system", "content": "Continuum chunk system."},
+                {"role": "user", "content": "Write Chunk 2 only."},
+            ]
+        }
+        messages = continuum_chunk_repair_messages(
+            assembled,
+            "Reset to <Picture 1>.",
+            ["unexpected reference tags: <Picture 1>"],
+            set(),
+            set(),
+        )
+        system = messages[0]["content"]
+        self.assertIn("Continuum Timeline chunk body", system)
+        self.assertIn("Do not add a shared preamble, Timeline header", system)
+        self.assertIn("standalone I2VA/FL2VA/L2VA alignment line", system)
+        self.assertIn("must remain in this chunk body are: none", system)
+        self.assertIn("permitted in this chunk are: none", system)
+        self.assertIn("Reset to <Picture 1>.", messages[1]["content"])
+
+    def test_continuum_chunk_audit_repairs_standalone_wrapper_or_repeated_preamble(self):
+        assembled = {
+            "input": {
+                "mode": "FL2VA",
+                "generation_target": "continuum",
+                "continuum_stage": "chunk",
+                "continuum_chunk_allowed_references": [],
+                "continuum_plan": {
+                    "global": {
+                        "sequence_preamble": "Stable identity and camera language."
+                    }
+                },
+                "creative_brief": "Continue the same scene.",
+                "duration_seconds": 5,
+            }
+        }
+        result, _policy, _intent, _duration, _camera = _audit(
+            "Stable identity and camera language.\n\nintegrated_multimodal_description: [Shot 1] Continue.",
+            assembled,
+        )
+        self.assertTrue(result["repair_required"])
+        self.assertIn(
+            "repeated shared sequence preamble",
+            result["format_violations"],
+        )
+        self.assertTrue(
+            any(
+                item.startswith("standalone H3 field labels:")
+                for item in result["format_violations"]
+            )
+        )
+        self.assertIn(
+            "standalone [Shot N] wrapper",
+            result["format_violations"],
+        )
+
+    def test_continuum_chunk_audit_still_reports_out_of_scope_reference_tags(self):
+        assembled = {
+            "input": {
+                "mode": "Reference",
+                "generation_target": "continuum",
+                "continuum_stage": "chunk",
+                "continuum_chunk_allowed_references": [],
+                "continuum_plan": {"global": {"sequence_preamble": "Stable scene."}},
+                "creative_brief": "Continue the scene.",
+                "duration_seconds": 5,
+            }
+        }
+        result, _policy, _intent, _duration, _camera = _audit(
+            "Reset to <Picture 1>.",
+            assembled,
+        )
+        self.assertEqual(result["unexpected_reference_tags"], ["<Picture 1>"])
+        self.assertTrue(result["repair_required"])
 
 if __name__ == "__main__":
     unittest.main()

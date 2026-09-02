@@ -189,7 +189,11 @@ def _model_candidate(
     else:
         projector, vision_status, pairing_message = None, "incompatible", "Vision is disabled because the model metadata could not be read."
     pairing_issue = f"{model_path}: {pairing_message}" if pairing_message else None
-    text_fallback = " T2VA remains available." if not missing_dependencies else ""
+    text_fallback = (
+        " T2VA and workflow-only H3 Continuum remain available."
+        if not missing_dependencies
+        else ""
+    )
     capability_message = None if vision_status == "compatible" else f"Vision unavailable: {pairing_message}{text_fallback}"
 
     configured = _configured_models().get(model_path.name, {}) if metadata and architecture_recognized else {}

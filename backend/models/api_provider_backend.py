@@ -493,7 +493,8 @@ class ApiProviderBackend:
         }
 
     def _local_custom_model_metadata(self, connection: ApiConnection) -> dict[str, dict[str, Any]]:
-        if connection.preset != "custom" or not _is_loopback(urlsplit(connection.base_url).hostname or ""):
+        hostname = urlsplit(connection.base_url).hostname or ""
+        if connection.preset != "custom" or not (_is_loopback(hostname) or _is_private_lan(hostname)):
             return {}
         try:
             data, _headers = self._request_json(connection, "GET", "/api/v1/models")

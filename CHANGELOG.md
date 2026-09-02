@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### Features
+
+- Added H3 Continuum as a separate video output target with native 1–16 chunk and 4–30 second controls (5–15 seconds recommended).
+- Added validated continuity planning followed by sequential chunk-local H3 prompt generation and canonical Continuum Timeline serialization with one shared sequence-wide H3 preamble.
+- Added deterministic integer and fractional Timeline boundaries and strict Writer-side validation instead of relying on Continuum's Fixed fallback.
+- Added chunk-local refinement that preserves the shared preamble and every unchanged chunk body byte-for-byte, with hashes computed from the exact resolved prompts Continuum receives.
+- Added an explicit graph handoff for H3 Continuum Sampler V3.4–V3.7 with unambiguous sampler selection, **Prompt Format = Timeline** compatibility, settings mismatch review, connected Text (Multiline) updates, and clipboard fallback.
+- Added downstream H3 Continuum conditioning discovery with exact public identity rules: Reference Images own compact `<Picture N>` numbering in hybrid runs; keyframe-only First/Last inputs own temporal Picture identities; Video Reference is persistent `<Video 1>`; V3.5+ Reference Audio is persistent `<Audio 1>`; Driving Audio remains untagged.
+
+### Reliability
+
+- Aligned Continuum compatibility with current upstream V3.4–V3.7 samplers, including the V3.5+ Reference Audio `<Audio 1>` contract and native 4–30-second chunk range while retaining 5–15 seconds as the recommended range.
+
+- Hardened H3 Continuum sequence-plan recovery after schema drift: the one bounded repair pass now retains the complete original planner contract instead of replacing it with a weaker repair-only system prompt, explicitly rechecks non-empty shared preamble and numeric stable-subject IDs, and canonicalizes reserved model aliases such as `<Subject A>` → `<Subject 1>` consistently across the plan before validation.
+- Added bounded deterministic planner-contract recovery before/after the single LLM repair: one identifiable plan JSON object may be extracted from harmless wrapper prose; optional internal text fields may default to their allowed empty form; application-owned indexes/assignments are removed; and an empty shared preamble is replaced with one synthesized only from existing global subject/continuity/constraint semantics plus authoritative persistent reference identities, with a content-neutral continuity fallback. Missing chunk semantics, wrong chunk count, subject/reference drift, and scope violations remain strict errors.
+- Added exact pre-execution materialization for stable workflow references passed through the reviewed `ImageScaleToTotalPixelsX` / **Scale Image to Total Pixels Adv** node (contract pinned to `79e831097bb7a76ade3a28359300e62332086c42`). Static megapixel/multiple and stretch/crop/pad chains using Lanczos now import the transformed H3 reference instead of being rejected as a generic processed image chain.
+- Transform settings are included in downstream source identity, so changing scaler parameters produces **Update needed**. Any connected runtime override for width, height, megapixels, multiple-of, resize mode, or interpolation fails closed rather than using a stale widget value; non-Lanczos methods, animated sources, unsupported upstreams, and arbitrary processing chains remain unavailable.
+- After materialization, the Active workflow images row previews the actual post-transform Prompt Writer asset seen by the prompt model rather than the upstream source thumbnail.
+- Added a dedicated backend materialization endpoint, exact Lanczos/crop geometry regression tests, route coverage, frontend chain tests, and a pinned cross-repository scaler contract CI lane.
+- Added the missing **Active workflow images** UI for Reference + H3 Continuum, including **Add active workflow refs**, per-slot Add/Update state, ComfyUI image materialization for stable Image Conveyor Reference Shelf and direct Load Image sources, and exact downstream `model_asset_id` binding so the prompt model can inspect the same references that will condition H3.
+- Dynamic queue-group/queue-driven sources and processed image chains remain visible as active workflow conditioning but are deliberately not imported as fake stable media when their exact execution pixels are not available yet.
+- Apply-to-Continuum now compares downstream workflow source identity separately from Prompt Writer media visibility/binding, so a correctly bound model-visible copy does not look like graph source drift.
+- Re-materializing the same stable workflow reference after a Prompt Writer session reload may use a new temporary media asset ID without falsely triggering source drift only when the saved stable workflow fingerprint still matches; unfingerprinted bindings stay strict. Model visibility remains part of the contract. Manually replacing an imported copy drops its workflow binding so unrelated pixels cannot continue masquerading as that downstream Picture.
+- Added first-class Image Conveyor compatibility for Continuum conditioning discovery, honoring persistent Reference Shelf population/output switches, Main/Last Frame switches, Queue execution-group size, the legacy node alias, and single-image transform/bypass chains instead of trusting visible wires alone.
+- Added opaque saved source fingerprints for persistent Image Conveyor Reference Shelf images so shelf replacements trigger Continuum source-drift protection without storing filenames; queue-group members remain intentionally dynamic. Legacy saved inventories without fingerprints are accepted once against otherwise identical topology and upgraded to the active fingerprint on successful refinement.
+- Added a pinned Image Conveyor 1.7.2 cross-repository CI contract alongside Prompt Writer's frontend coverage.
+- Relaxed Continuum's internal `continuity_anchors` and `persistent_constraints` to allow intentionally empty text while still requiring the fields and their types; they no longer abort otherwise valid plans with no extra sequence-wide metadata.
+- Changed the single bounded Continuum planner repair to audit and repair the complete schema contract rather than fixing only the first validation failure and exposing the next one.
+- Added deterministic structural sequence persistence without storing provider secrets.
+- Separated model-visible Prompt Writer media from downstream H3 conditioning identities. Workflow-only references can be declared without sending their pixels to the prompt model, and uploaded analysis media cannot silently impersonate a downstream `<Picture N>`.
+- Added explicit model-asset binding validation for future verified media reuse, rejecting missing, wrong-type, and duplicate bindings.
+- Added cross-repository CI that checks Writer Timeline output against the current H3 Continuum `v2/prompts.py` parser and verifies exact resolved prompts and SHA-256 hashes.
+- Added sequence progress, cancellation, exact chunk-failure reporting, bounded one-shot plan repair, chunk-scoped reference validation with a narrow Continuum-only correction pass, final-stage unload behavior, and cumulative provider accounting.
+- Added temporal-mode validation against the selected H3 Continuum First/Last Frame wiring and blocked generation, refinement, or handoff when the selected mode does not match the active keyframe topology.
+- Added saved downstream-conditioning snapshots so later refinement and graph handoff reject observable source rewiring that would silently reuse the same public reference tags for different workflow inputs.
+- Added native Continuum chunk-body validation for repeated shared preambles, standalone H3 field/shot wrappers, nested Timeline headers, keyframe-alignment boilerplate, and undeclared subject identities.
+- Made **Sync settings & apply** transactional: Writer now resolves the editable Sequence Prompt target before mutation and restores sampler/text widget values if a graph callback fails.
+- Fixed Continuum draft persistence after the schema-v2 contract rework: saved sequences now retain their shared preamble and downstream-conditioning snapshot, while legacy schema-v1 drafts migrate to v2 on save/load.
+- Restricted legacy `[Chunk N]` migration to genuinely legacy saved sequences so schema-v2 Timeline drafts cannot silently discard their shared preamble.
+
+### Fixes
+
+- Extended LM Studio metadata and capability discovery to Custom endpoints on private LAN addresses, matching the existing Custom-provider HTTP security policy.
+
 ## 0.4.4 - 2026-09-02
 
 ### Features

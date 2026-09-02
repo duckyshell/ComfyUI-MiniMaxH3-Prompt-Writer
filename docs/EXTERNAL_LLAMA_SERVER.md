@@ -16,7 +16,7 @@ External llama.cpp is the advanced local provider for users who want to control 
 
 On Linux or macOS, use `./llama-server` and the appropriate file paths.
 
-For Music 3, T2VA, and Refine, you can run the same model without `--mmproj`:
+For Music 3, T2VA, ordinary text-only Refine, and workflow-only H3 Continuum, you can run the same model without `--mmproj`:
 
 ```powershell
 .\llama-server.exe -m "C:\models\model.gguf" --host 127.0.0.1 --port 8080 --ctx-size 24576 --alias prompt-writer
@@ -57,9 +57,9 @@ http://127.0.0.1:8080
 
 Entering `http://127.0.0.1:8080/v1` is also accepted and normalized to the server root. Arbitrary additional paths are rejected.
 
-During connection, Writer checks `/health`, `/props`, and `/v1/models`. A text-only model can connect and handle Music 3, T2VA, and Refine.
+During connection, Writer checks `/health`, `/props`, and `/v1/models`. A text-only model can connect and handle Music 3, T2VA, ordinary text-only Refine, and H3 Continuum requests whose visual conditioning remains workflow-only.
 
-I2VA, FL2VA, L2VA, and Reference requests with images or video need vision support from a matching model and projector. If a text-only model receives visual media, Writer stops before generation and explains how to enable vision.
+Prompt Writer requests that actually attach images or video for model analysis need vision support from a matching model and projector, including visual I2VA, FL2VA, L2VA, and Reference. Workflow-only H3 Continuum conditioning is metadata and does not itself require `--mmproj`. If a text-only model receives visual analysis media, Writer stops before generation and explains how to enable vision.
 
 ## Advanced use
 

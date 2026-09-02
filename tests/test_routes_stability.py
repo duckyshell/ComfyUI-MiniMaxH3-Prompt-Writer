@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import sys
 import tempfile
@@ -7,6 +8,8 @@ import types
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from PIL import Image
 
 
 class _FakeRoutes:
@@ -21,6 +24,7 @@ sys.modules["server"] = types.SimpleNamespace(
     PromptServer=types.SimpleNamespace(instance=types.SimpleNamespace(routes=_FakeRoutes()))
 )
 
+from backend import media as media_module  # noqa: E402
 from backend import routes  # noqa: E402
 
 
@@ -159,6 +163,40 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "loaded_models": None,
         })
         self.assertEqual(payload["prompt_residency"]["ollama"]["targets"], targets)
+
+    async def test_workflow_materialization_route_commits_exact_scaled_reference_media(self):
+        image = Image.new("RGB", (640, 480), (96, 128, 160))
+        payload = io.BytesIO()
+        image.save(payload, "PNG")
+        plan = {
+            "kind": "image_scale_to_total_pixels_x",
+            "version": 1,
+            "node_class": "ImageScaleToTotalPixelsX",
+            "contract_sha": "79e831097bb7a76ade3a28359300e62332086c42",
+            "megapixels": 0.70,
+            "multiple_of": 32,
+            "resize_mode": "crop",
+            "upscale_method": "lanczos",
+        }
+        fields = [
+            _MultipartField("session_id", text=self.session_id),
+            _MultipartField("mode", text="Reference"),
+            _MultipartField("materialization_plan", text=json.dumps(plan)),
+            _MultipartField("file", filename="source.png", content=payload.getvalue(), content_type="image/png"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            store = media_module.MediaStore()
+            with (
+                patch.object(routes, "CACHE_ROOT", Path(directory)),
+                patch.object(routes, "STORE", store),
+            ):
+                response = await routes.materialize_workflow_reference_media(_MultipartRequest(fields))
+                body = self.payload(response)
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(len(body["assets"]), 1)
+        self.assertEqual((body["assets"][0]["width"], body["assets"][0]["height"]), (960, 704))
+        self.assertEqual(body["assets"][0]["type"], "image")
 
     async def test_ollama_resolution_passes_the_selected_host_to_detection_and_inference(self):
         host = "http://192.168.1.20:11434"

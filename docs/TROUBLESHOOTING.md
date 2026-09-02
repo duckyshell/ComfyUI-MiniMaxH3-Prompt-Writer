@@ -149,7 +149,7 @@ Without an unambiguous compatible projector, the model remains available for T2V
 
 **Verify**
 
-The model appears under **Installed models**. A text-only setup completes a T2VA request; a paired vision setup also completes a real image request.
+The model appears under **Installed models**. A text-only setup completes T2VA and workflow-only H3 Continuum requests; a paired vision setup also completes a real Prompt Writer image-analysis request.
 
 ## Ollama is not running
 
@@ -215,7 +215,7 @@ An input ending in `/v1` is accepted and normalized. Remove any other added path
 
 **Verify**
 
-External Settings show the connected model. A text-only model is ready for Music 3, T2VA, and Refine. If you started the server with a projector, confirm vision with a real image request.
+External Settings show the connected model. A text-only model is ready for Music 3, T2VA, ordinary text-only Refine, and workflow-only H3 Continuum. If you started the server with a projector, confirm vision with a real image request.
 
 ## Vision is unavailable
 
@@ -229,11 +229,101 @@ The loaded model is text-only, its matching projector is missing, or the OpenAI-
 
 **Fix**
 
-For External llama.cpp, restart with the model's matching `--mmproj`. You can keep using a text-only server for Music 3, T2VA, and Refine. For local LM Studio, load a vision model before reconnecting. For another Custom endpoint, enable **Endpoint accepts image_url inputs** only when both server and model support that contract.
+For External llama.cpp, restart with the model's matching `--mmproj`. You can keep using a text-only server for Music 3, T2VA, ordinary text-only Refine, and workflow-only H3 Continuum. For local LM Studio, load a vision model before reconnecting. For another Custom endpoint, enable **Endpoint accepts image_url inputs** only when both server and model support that contract.
 
 **Verify**
 
 The selected model shows **Vision** and completes a real image request.
+
+## Continuum sequence or handoff failure
+
+**Symptom**
+
+Writer rejects a sequence plan, reports a failure at a specific chunk, cannot find a sampler, asks you to select one sampler, or says the Sequence Prompt source is not editable.
+
+**Cause**
+
+The prompt model returned an invalid semantic plan or chunk body; the Timeline text no longer has exact contiguous boundaries; the configured values are outside H3 Continuum's native 1–16 chunks and 4–30 seconds per chunk; the selected sampler is not using **Prompt Format = Timeline**; or the workflow does not expose one unambiguous a supported **H3 Continuum Sampler V3.4–V3.7** connected to an editable **Text (Multiline)** source.
+
+**Fix**
+
+Review the reported chunk and clarify the Creative Brief. A malformed plan receives one automatic structural repair; a second invalid plan stops instead of being guessed. Keep the shared preamble before the first Timeline header and keep every `[start-end]` header on its own line with exact boundaries derived from the configured chunk duration. Add or select exactly one compatible H3 Continuum sampler and connect an editable Text (Multiline) node to **Sequence Prompt**. When Prompt Format, chunk count, or chunk duration differs, review the proposed values before using **Sync settings & apply**.
+
+**Verify**
+
+The complete canonical Timeline appears in the connected text widget, **Prompt Format** is **Timeline**, sampler chunk values match Writer, Continuum resolves every section with the shared preamble, and the workflow accepts the prompt without Fixed fallback or parser warnings.
+
+## Continuum sampler not found during generation or refinement
+
+**Symptom**
+
+Writer reports **Continuum sampler not found** before sequence generation or chunk refinement starts.
+
+**Cause**
+
+Continuum prompt identities are derived from the active H3 Continuum sampler conditioning topology. Without that sampler, Writer cannot know whether `<Picture N>` belongs to Reference Images, First/Last keyframes, or nothing at all.
+
+**Fix**
+
+Add a supported **H3 Continuum Sampler V3.4–V3.7** to the current workflow. If several compatible samplers are present, select exactly one on the canvas before generating or refining.
+
+**Verify**
+
+Generation reaches the sequence planner only after Writer can inspect the intended sampler. Workflow-only references may remain absent from Prompt Writer/Qwen media as long as their H3 Continuum conditioning inputs are connected and their roles are described in the Creative Brief.
+
+## Continuum conditioning changed after generation
+
+**Symptom**
+
+Writer reports **Continuum conditioning changed** or the backend returns `CONTINUUM_REFERENCE_SOURCE_DRIFT` when refining or applying a saved sequence.
+
+**Cause**
+
+New Continuum sequences snapshot the normalized H3 Continuum downstream conditioning inventory used during planning. The active sampler now resolves one or more Reference Image, First Frame, Last Frame, Video Reference, or Driving Audio inputs to different observable workflow sources even though public tags such as `<Picture 1>` may still look unchanged.
+
+**Fix**
+
+Restore the original H3 Continuum conditioning wiring or regenerate the sequence against the current workflow. Writer does not silently reinterpret a saved sequence plan against a different reference/keyframe source.
+
+**Verify**
+
+Refine and **Apply to Continuum** proceed without a source-drift warning. Legacy saved sequences without an inventory snapshot remain readable and acquire the active snapshot after their next successful chunk refinement.
+
+## Continuum chunk returned a standalone H3 wrapper
+
+**Symptom**
+
+A prompt model tries to return `integrated_multimodal_description:`, `subject_definitions:`, `[Shot 1]`, a standalone keyframe-alignment line, a Markdown fence, or repeats the shared sequence preamble inside one Timeline chunk.
+
+**Cause**
+
+The model followed a standalone H3 authoring habit instead of the dedicated Continuum chunk-body contract. Continuum already owns the outer Timeline boundaries and prepends the shared preamble to every resolved chunk.
+
+**Fix**
+
+Writer treats these shapes as objective chunk-format failures and makes one narrow Continuum-only text correction. The correction removes the wrapper or repeated preamble while preserving supported action, state, camera, dialogue, sound, and valid scoped reference tags.
+
+**Verify**
+
+The stored chunk body contains only local Continuum prompt prose. It has no shared-preamble duplicate, standalone H3 field labels, `[Shot N]` wrapper, or nested Timeline header.
+
+## Continuum reference declaration failure
+
+**Symptom**
+
+Writer reports `CONTINUUM_REFERENCE_IDENTITY_DRIFT` for an undeclared public reference, or `CONTINUUM_REFERENCE_SCOPE_DRIFT` when a declared reference is used outside its valid chunk scope.
+
+**Cause**
+
+The Creative Brief, semantic plan, or generated chunk uses a public reference identity that the selected H3 Continuum sampler does not expose in that scope. With active **Reference Images**, those inputs own compact public `<Picture 1..N>` numbering and First/Last Frame stay untagged. Without Reference Images, active First/Last Frame keyframes own the compact Picture identities. **Video Reference** is `<Video 1>`; **Reference Audio** on V3.5+ is persistent `<Audio 1>`; **Driving Audio** has no `<Audio N>` tag. In multi-chunk keyframe runs, the opening Picture tag is valid only in Chunk 1 and the final Picture tag only in the final chunk. Prompt Writer uploads do not automatically inherit any downstream identity.
+
+**Fix**
+
+Select the intended H3 Continuum sampler and inspect its active conditioning inputs. With Reference Images, use their compact active-connection numbering; for example, physical Reference Image 2 and 5 become public `<Picture 1>` and `<Picture 2>`. Without Reference Images, use the temporal keyframe numbering derived from the connected First/Last inputs. Use `<Video 1>` only when Video Reference is connected. Use `<Audio 1>` only for connected Reference Audio on V3.5+; never create an `<Audio 1>` tag merely because Driving Audio is connected. Keep opening/final keyframe tags out of middle chunks and the shared preamble.
+
+**Verify**
+
+Generation reaches the planner and chunk writer without `CONTINUUM_REFERENCE_IDENTITY_DRIFT` or `CONTINUUM_REFERENCE_SCOPE_DRIFT`. Every public tag belongs to the selected downstream inventory and appears only in chunks where that conditioning identity is valid.
 
 ## API authentication, rate limit, or truncated response
 

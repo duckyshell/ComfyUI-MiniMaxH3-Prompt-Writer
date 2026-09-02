@@ -76,6 +76,29 @@ class ContextPlanTests(unittest.TestCase):
         self.assertEqual(result["context_profile"], "standard")
         self.assertEqual(result["max_output_tokens"], 2048)
 
+    def test_continuum_planner_gets_dedicated_large_output_budget(self):
+        assembled = request(mode="T2VA")
+        assembled["input"]["continuum_stage"] = "plan"
+        result = plan_context(
+            assembled,
+            {"recommended_context": "standard"},
+            requested_context="auto",
+            requested_kv_cache="q8",
+            thinking=False,
+        )
+        self.assertEqual(result["max_output_tokens"], 8192)
+        self.assertEqual(result["reserved_output_tokens"], 8704)
+
+        assembled["input"]["continuum_stage"] = "plan_repair"
+        repair = plan_context(
+            assembled,
+            {"recommended_context": "standard"},
+            requested_context="auto",
+            requested_kv_cache="q8",
+            thinking=False,
+        )
+        self.assertEqual(repair["max_output_tokens"], 8192)
+
     def test_music_keeps_its_separate_non_thinking_output_budget(self):
         result = plan_context(
             request(mode="Music3"),

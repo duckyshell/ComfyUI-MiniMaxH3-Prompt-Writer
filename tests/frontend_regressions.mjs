@@ -1294,6 +1294,13 @@ test("text-only Direct UI disables visual and Music modes and explains the fallb
   assert.match(skinSource, /\.h3ps-workspaces button:disabled/);
 });
 
+test("closed Prompt Writer does not advertise an active modal", () => {
+  assert.match(mainSource, /<section class="h3ps-modal" role="dialog" aria-label="H3 Prompt Writer" hidden>/);
+  assert.doesNotMatch(mainSource, /<section class="h3ps-modal" role="dialog" aria-modal="true"/);
+  assert.match(mainSource, /function openStudio\(\)[\s\S]{0,300}modal\.hidden = false;[\s\S]{0,120}modal\.setAttribute\("aria-modal", "true"\)/);
+  assert.match(mainSource, /function closeStudio\(\)[\s\S]{0,360}modal\.removeAttribute\("aria-modal"\);[\s\S]{0,100}modal\.hidden = true;/);
+});
+
 test("fullscreen reuses the studio root and persists its UI state", () => {
   assert.match(mainSource, /data-fullscreen-toggle/);
   assert.match(mainSource, /root\.classList\.toggle\("is-fullscreen", studio\.fullscreen\)/);

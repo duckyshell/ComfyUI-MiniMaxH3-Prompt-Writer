@@ -2831,7 +2831,7 @@ function createStudio() {
   root.setAttribute("aria-hidden", "true");
   root.innerHTML = `
     <div class="h3ps-backdrop" data-close-studio></div>
-    <section class="h3ps-modal" role="dialog" aria-modal="true" aria-label="H3 Prompt Writer">
+    <section class="h3ps-modal" role="dialog" aria-label="H3 Prompt Writer" hidden>
       <header class="h3ps-header">
         <div class="h3ps-brand">
           <img class="h3ps-brandmark" src="${studioBrandIcon}" alt="H3 Prompt Writer">
@@ -3513,8 +3513,11 @@ function createStudio() {
 
 function openStudio() {
   const current = createStudio();
+  const modal = current.root.querySelector(".h3ps-modal");
   setMusicSystemPromptExpanded(false);
   syncMusicSystemPromptSummary();
+  modal.hidden = false;
+  modal.setAttribute("aria-modal", "true");
   current.root.classList.add("is-open");
   current.root.setAttribute("aria-hidden", "false");
   document.body.classList.add("h3ps-modal-open");
@@ -3523,10 +3526,13 @@ function openStudio() {
 
 function closeStudio() {
   if (!studio) return;
+  const modal = studio.root.querySelector(".h3ps-modal");
   setSettingsOpen(false);
   setOtherModelsPopover(false);
   closeVideoPreview();
   closeImagePreview();
+  modal.removeAttribute("aria-modal");
+  modal.hidden = true;
   studio.root.classList.remove("is-open");
   studio.root.setAttribute("aria-hidden", "true");
   document.body.classList.remove("h3ps-modal-open");

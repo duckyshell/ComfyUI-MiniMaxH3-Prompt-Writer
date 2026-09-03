@@ -1138,7 +1138,8 @@ function updatePromptResidency(status) {
 
 function selectedModelSupportsVramHandoff() {
   const model = studio?.selectedModel;
-  return model?.family === "gguf" || (model?.family === "ollama" && isLocalOllamaHost(studio.ollamaHost));
+  return ["gguf", "external"].includes(model?.family)
+    || (model?.family === "ollama" && isLocalOllamaHost(studio.ollamaHost));
 }
 
 function vramHandoffIsEnabled() {
@@ -1418,8 +1419,12 @@ async function startGenerationPreview() {
     } else if (result.format_repair_failure) {
       showToast("Prompt generated with a format warning", `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`, null, null, { dismissOnWorkspaceClick: true });
     } else {
-      const reasoning = result.api_provider ? "Reasoning provider managed" : `Thinking ${result.thinking ? "on" : "off"}`;
-      showToast(studio.mode === "Music3" ? "Caption generated" : "Prompt generated", `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · ${reasoning}`);
+      const details = [
+        `${result.total_seconds.toFixed(1)}s`,
+        `${result.tokens_per_second.toFixed(1)} tok/s`,
+        result.api_provider ? "Reasoning provider managed" : external ? null : `Thinking ${result.thinking ? "on" : "off"}`,
+      ];
+      showToast(studio.mode === "Music3" ? "Caption generated" : "Prompt generated", details.filter(Boolean).join(" · "));
     }
   } catch (error) {
     if (error.code === "GENERATION_CANCELLED") {
@@ -2174,7 +2179,7 @@ function syncThinkingAvailability() {
   label.hidden = apiManaged;
   label.classList.toggle("is-disabled", disabled);
   label.title = externalManaged
-    ? "Thinking is managed by the external llama.cpp server."
+    ? "Thinking is controlled by the external llama.cpp server. Start it with --reasoning on --reasoning-effort low to enable, or --reasoning off to disable."
     : unsupported
     ? "This provider model does not report thinking controls."
     : disabled ? "Thinking needs 16K or larger Context." : "";

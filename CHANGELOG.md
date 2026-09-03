@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Features
+
+- Added **Auto VRAM** support for local External llama.cpp servers, releasing idle ComfyUI workflow models before prompt generation while leaving the external server lifecycle untouched.
+
 ## 0.4.4 - 2026-09-02
 
 ### Features

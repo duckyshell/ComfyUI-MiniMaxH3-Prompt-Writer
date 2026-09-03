@@ -1,7 +1,7 @@
 const INSTALL_KEY = Symbol.for("minimax.h3.prompt.studio.vramHandoff");
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export const AUTO_VRAM_TOOLTIP = "Automatically manages VRAM when switching between Prompt Writer and ComfyUI, so you don't need to free or unload models manually. Works with Direct GGUF and local Ollama.";
+export const AUTO_VRAM_TOOLTIP = "Automatically frees ComfyUI VRAM before Prompt Writer generation. Direct GGUF and local Ollama also hand VRAM back before ComfyUI Queue; External llama.cpp remains server-managed.";
 
 export function autoVramControlMarkup(supported) {
   if (!supported) return "";
@@ -78,6 +78,7 @@ export async function releaseComfyVramWhenIdle({
   if (!isCurrent()) throw handoffError("WRITER_PREPARATION_CANCELLED", "Writer preparation was superseded by ComfyUI Queue.");
   if (status?.comfyui?.available !== true) throw handoffError("COMFYUI_STATE_UNAVAILABLE", "ComfyUI memory state could not be confirmed.");
   if (comfyQueueIsBusy(status)) throw handoffError("COMFYUI_BUSY", "ComfyUI is busy. Wait for the workflow queue to finish.");
+  if (status.comfyui.loaded_models === 0) return status;
 
   await freeComfyVram();
   if (!isCurrent()) throw handoffError("WRITER_PREPARATION_CANCELLED", "Writer preparation was superseded by ComfyUI Queue.");

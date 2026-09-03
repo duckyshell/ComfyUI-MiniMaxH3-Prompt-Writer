@@ -178,14 +178,28 @@ test("VRAM handoff waits for targeted Writer models to leave residency", async (
   ]);
 });
 
-test("Auto VRAM uses standard /free only for idle ComfyUI and confirms stable release", async () => {
-  const freeReadings = [12000, 12016];
+test("Auto VRAM skips empty ComfyUI and otherwise confirms stable /free release", async () => {
   let freeCalls = 0;
-  const result = await releaseComfyVramWhenIdle({
+  const alreadyEmpty = await releaseComfyVramWhenIdle({
     getStatus: async () => ({
       comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 0 },
-      gpu_memory: { free_mb: freeReadings.shift() ?? 12016 },
+      gpu_memory: { free_mb: 12000 },
     }),
+    freeComfyVram: async () => { freeCalls += 1; },
+  });
+  assert.equal(freeCalls, 0);
+  assert.equal(alreadyEmpty.comfyui.loaded_models, 0);
+
+  const freeReadings = [12000, 12016];
+  const statuses = [
+    { comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 1 }, gpu_memory: { free_mb: 8000 } },
+    ...freeReadings.map((free_mb) => ({
+      comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 0 },
+      gpu_memory: { free_mb },
+    })),
+  ];
+  const result = await releaseComfyVramWhenIdle({
+    getStatus: async () => statuses.shift(),
     freeComfyVram: async () => { freeCalls += 1; },
     sleep: async () => {},
   });
@@ -207,7 +221,7 @@ test("Auto VRAM aborts Writer preparation when Queue wins the race", async () =>
   let current = true;
   await assert.rejects(releaseComfyVramWhenIdle({
     getStatus: async () => ({
-      comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 0 },
+      comfyui: { available: true, queue_running: 0, queue_pending: 0, loaded_models: 1 },
       gpu_memory: { free_mb: 12000 },
     }),
     freeComfyVram: async () => { current = false; },
@@ -829,8 +843,23 @@ test("Direct Thinking is disabled when the GGUF template has no detected control
 
 test("External llama.cpp keeps reasoning under server control", () => {
   assert.match(mainSource, /externalManaged = studio\.selectedModel\?\.family === "external"/);
-  assert.match(mainSource, /Thinking is managed by the external llama\.cpp server\./);
+  assert.match(mainSource, /Thinking is controlled by the external llama\.cpp server\./);
+  assert.match(mainSource, /--reasoning on --reasoning-effort low/);
+  assert.match(mainSource, /external \? null : `Thinking/);
   assert.match(stateSource, /state\.selectedModel\?\.family === "external" \? false : state\.thinking/);
+});
+
+test("External llama.cpp offers forward-only Auto VRAM in ComfyUI", () => {
+  assert.match(mainSource, /\["gguf", "external"\]\.includes\(model\?\.family\)/);
+  assert.match(AUTO_VRAM_TOOLTIP, /External llama\.cpp remains server-managed/);
+
+  const queueHandoffStart = mainSource.indexOf("async function unloadWriterModelsBeforeQueue()");
+  const queueHandoffEnd = mainSource.indexOf("\nfunction showVramHandoffQueueError", queueHandoffStart);
+  assert.ok(queueHandoffStart >= 0 && queueHandoffEnd > queueHandoffStart);
+  const queueHandoffSource = mainSource.slice(queueHandoffStart, queueHandoffEnd);
+  assert.match(queueHandoffSource, /activeFamily === "gguf"/);
+  assert.match(queueHandoffSource, /activeFamily === "ollama"/);
+  assert.doesNotMatch(queueHandoffSource, /external|releaseExternal/i);
 });
 
 test("text-only Direct models expose only T2VA", () => {

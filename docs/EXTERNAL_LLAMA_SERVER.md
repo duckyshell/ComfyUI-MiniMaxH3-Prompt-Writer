@@ -33,6 +33,8 @@ The command uses current official llama.cpp options. Adjust context, GPU layers,
 
 Writer prepares the brief and prompt instructions. When the server supports vision, Writer can also send images and video contact sheets. It sends a Chat Completions request and can cancel its active HTTP request.
 
+In ComfyUI, **Auto VRAM** can release idle ComfyUI workflow models before an External request. It does not start, stop, or unload the external server or its model.
+
 The external server controls:
 
 - model and projector loading;

@@ -99,10 +99,13 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         _FakeVisionHandler.instances = []
         _FakeMTMD.callbacks = {}
 
-    def fake_modules(self, *, top_level_ggml_types=True):
+    def fake_modules(self, *, top_level_ggml_types=True, top_level_log_callback=True):
         llama_cpp = types.ModuleType("llama_cpp")
         llama_cpp.Llama = _FakeModel
-        llama_cpp.llama_log_callback = lambda callback: callback
+        if top_level_log_callback:
+            llama_cpp.llama_log_callback = lambda callback: callback
+        else:
+            llama_cpp.ggml_log_callback = lambda callback: callback
         chat_format = types.ModuleType("llama_cpp.llama_chat_format")
         chat_format.MTMDChatHandler = _FakeVisionHandler
         modules = {"llama_cpp": llama_cpp, "llama_cpp.llama_chat_format": chat_format}
@@ -255,6 +258,20 @@ class DirectMusicRuntimeTests(unittest.TestCase):
             reasoning_effort="xhigh",
         )
         self.assertIsNone(plan["reasoning_effort"])
+
+    def test_mtmd_logging_accepts_the_renamed_ggml_log_callback(self):
+        with (
+            patch.dict(sys.modules, self.fake_modules(top_level_log_callback=False)),
+            patch.object(gguf_backend, "_MTMD_LOG_CALLBACK", None),
+            patch.object(gguf_backend, "_MTMD_LAST_LOG_LEVEL", 0),
+        ):
+            gguf_backend._configure_mtmd_logging(_FakeMTMD)
+
+            callback = _FakeMTMD.callbacks["mtmd"]
+            output = StringIO()
+            with redirect_stderr(output):
+                callback(4, b"vision evaluation failed\n", None)
+            self.assertIn("vision evaluation failed", output.getvalue())
 
     def test_mtmd_logging_suppresses_info_and_keeps_warnings_and_errors(self):
         with (

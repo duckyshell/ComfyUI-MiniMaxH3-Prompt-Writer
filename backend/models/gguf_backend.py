@@ -40,9 +40,14 @@ def _configure_mtmd_logging(mtmd_cpp: Any) -> None:
 
     with _MTMD_LOG_LOCK:
         if _MTMD_LOG_CALLBACK is None:
-            from llama_cpp import llama_log_callback
+            try:
+                from llama_cpp import llama_log_callback as log_callback_type
+            except ImportError:
+                # llama-cpp-python renamed the symbol; the (level, text,
+                # user_data) signature is unchanged.
+                from llama_cpp import ggml_log_callback as log_callback_type
 
-            @llama_log_callback
+            @log_callback_type
             def mtmd_log_callback(level, text, _user_data):
                 global _MTMD_LAST_LOG_LEVEL
                 try:

@@ -35,8 +35,12 @@ body.h3ps-modal-open { overflow: hidden; }
   width: calc(var(--h3ps-icon-size) * var(--h3ps-interface-scale));
   height: calc(var(--h3ps-icon-size) * var(--h3ps-interface-scale));
 }
-.h3ps-root ::selection { background: var(--h3ps-accent-soft); }
-.h3ps-root :is(button, textarea, input, select):focus-visible {
+.h3ps-root ::selection {
+  background: var(--h3ps-accent-soft);
+  color: var(--h3ps-text-editor);
+}
+.h3ps-root :is(button, textarea, input, select):focus-visible,
+.h3ps-editor-wrap.is-editing {
   outline: 1.5px solid rgba(232, 97, 60, .72);
   outline-offset: 2px;
   box-shadow: none;
@@ -46,10 +50,10 @@ body.h3ps-modal-open { overflow: hidden; }
 
 .h3ps-input-panel,
 .h3ps-output-panel,
-.h3ps-editor { scrollbar-width: none; -ms-overflow-style: none; }
-.h3ps-input-panel::-webkit-scrollbar,
-.h3ps-output-panel::-webkit-scrollbar,
-.h3ps-editor::-webkit-scrollbar { display: none; }
+.h3ps-editor {
+  scrollbar-width: thin;
+  scrollbar-color: var(--h3ps-scrollbar) transparent;
+}
 
 .h3ps-floating-launcher {
   position: fixed;

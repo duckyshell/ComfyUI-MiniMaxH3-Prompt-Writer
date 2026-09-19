@@ -1,7 +1,7 @@
 .h3ps-root {
   --h3ps-accent: #e8613c;
   --h3ps-accent-strong: #f0734d;
-  --h3ps-accent-soft: rgba(232, 97, 60, .14);
+  --h3ps-accent-soft: rgba(232, 97, 60, .2);
   --h3ps-green: #6bc99a;
   --h3ps-warning: #dfa94f;
   --h3ps-danger: #ed806d;

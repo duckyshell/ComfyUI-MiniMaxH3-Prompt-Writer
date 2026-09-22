@@ -1,0 +1,14 @@
+{
+  "name": "H3 Prompt Writer",
+  "short_name": "H3 Prompt Writer",
+  "description": "Multimodal MiniMax H3 prompt writer for ComfyUI with local and API providers",
+  "start_url": "./",
+  "icons": [
+    {
+      "src": "/assets/h3-prompt-writer-launcher.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "display": "standalone"
+}

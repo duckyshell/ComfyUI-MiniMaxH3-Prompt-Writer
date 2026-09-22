@@ -108,9 +108,13 @@ def create_app(settings: Settings) -> web.Application:
     web_root = settings.upstream_repo / "web"
     static_root = Path(__file__).resolve().parent / "static"
     index_path = PACKAGE_ROOT / "ui" / "index.html"
+    manifest_path = PACKAGE_ROOT / "ui" / "manifest.json"
 
     async def index(_request: web.Request) -> web.FileResponse:
         return web.FileResponse(index_path)
+
+    async def manifest(_request: web.Request) -> web.FileResponse:
+        return web.FileResponse(manifest_path)
 
     def error_response(error: Exception, *, status: int = 400) -> web.Response:
         return web.json_response(
@@ -219,6 +223,7 @@ def create_app(settings: Settings) -> web.Application:
 
     app.router.add_get("/", index)
     app.router.add_get("/healthz", health)
+    app.router.add_get("/manifest.json", manifest)
     app.router.add_get("/standalone/gguf/state", managed_state)
     app.router.add_post("/standalone/gguf/config", managed_config)
     app.router.add_post("/standalone/gguf/roots/add", add_model_root)

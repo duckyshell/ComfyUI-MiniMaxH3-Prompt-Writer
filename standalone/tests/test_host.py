@@ -36,6 +36,12 @@ class StandaloneHostTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("/scripts/boot.js", await response.text())
 
+        response = await self.client.get("/manifest.json")
+        self.assertEqual(response.status, 200)
+        payload = await response.json()
+        self.assertEqual(payload["name"], "H3 Prompt Writer")
+        self.assertEqual(payload["display"], "standalone")
+
         response = await self.client.get("/healthz")
         payload = await response.json()
         self.assertTrue(payload["ok"])

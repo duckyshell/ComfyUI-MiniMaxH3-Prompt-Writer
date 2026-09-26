@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.7 - 2026-09-26
 
+- Fixed ComfyUI keyboard shortcuts remaining blocked after closing Writer's media tools, and made the launcher's keyboard focus easier to see ([#36](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/36)).
 - Added Save/Load text drafts for Single and Sequence, plus audio extraction from video selections.
 - Added an Ollama generation budget and a manual Direct GGUF projector selector.
 - Removed the video Creative Brief character limit and improved long-text editing.
 - Fixed Single Reference numbering after deleting or reordering media.
-- Fixed ComfyUI keyboard shortcuts remaining blocked after closing Writer's media tools, and made the launcher's keyboard focus easier to see.
 
 ## 0.4.6 - 2026-09-09
 

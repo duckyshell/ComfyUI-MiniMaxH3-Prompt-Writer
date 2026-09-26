@@ -17,7 +17,7 @@ test('editor trim is source-relative and maintains a nonempty interval',()=>{
 });
 test('editor keeps draft and source separate and requests actual frame timestamps',()=>{
   const js=readFileSync(new URL('../web/media_editor.js',import.meta.url),'utf8');
-  assert.match(js,/current.source_url\|\|current.content_url/);
+  assert.match(js,/current.source_url\s*\|\|\s*current.content_url/);
   assert.match(js,/serial\('frame',\{time:t,direction:step\}\)/);
   assert.doesNotMatch(js,/1\s*\/\s*30|toDataURL|drawImage\(video/);
   assert.match(js,/data-ed-sheet alt="Media representation"/);

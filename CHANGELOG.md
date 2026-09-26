@@ -6,6 +6,7 @@
 - Added an Ollama generation budget and a manual Direct GGUF projector selector.
 - Removed the video Creative Brief character limit and improved long-text editing.
 - Fixed Single Reference numbering after deleting or reordering media.
+- Fixed ComfyUI keyboard shortcuts remaining blocked after closing Writer's media tools, and made the launcher's keyboard focus easier to see.
 
 ## 0.4.6 - 2026-09-09
 

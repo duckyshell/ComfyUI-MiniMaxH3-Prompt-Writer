@@ -33,7 +33,7 @@ export function trimRange(start,end,duration) {
 function markup(icon) {
   return `<section class="h3ps-media-editor" aria-hidden="true">
     <div class="h3ps-preview-backdrop" data-ed-close></div>
-    <div class="h3ps-cmp-dialog h3ps-ed-dialog" role="dialog" aria-modal="true" aria-labelledby="h3ps-ed-title" tabindex="-1">
+    <div class="h3ps-cmp-dialog h3ps-ed-dialog" role="dialog" aria-labelledby="h3ps-ed-title" tabindex="-1">
       <header><span><small>Media Editor</small><strong id="h3ps-ed-title"></strong></span><div class="h3ps-cmp-shell-controls" data-ed-shell><button type="button" class="h3ps-icon-button" data-ed-close title="Close (Esc)" aria-label="Close editor">${icon('close',18)}</button><div class="h3ps-ed-close-popover" data-ed-close-popover hidden role="group" aria-label="Unapplied changes"><strong>Unapplied changes</strong><span><button type="button" class="h3ps-secondary-button" data-ed-keep>Keep</button><button type="button" class="h3ps-secondary-button" data-ed-discard>Discard</button></span></div></div></header>
       <div class="h3ps-ed-body">
         <div class="h3ps-ed-workspace">
@@ -275,27 +275,147 @@ export function createMediaEditor({root,icon,request,onSaved,onAddFrame,onAddAud
   const observer=new ResizeObserver(position);observer.observe(stage);
   const onKey=e=>{if(!asset)return;if(e.key==='Escape'){e.preventDefault();if(confirming){confirming=false;sync();return;}const menu=root.querySelector('[data-interface-size-menu]');if(menu&&!menu.hidden){root.querySelector('[data-interface-size-toggle]').click();return;}close();}else if(e.code==='Space'&&isVideo()&&!['INPUT','SELECT','TEXTAREA','BUTTON'].includes(document.activeElement?.tagName)){e.preventDefault();play();}};
   document.addEventListener('keydown',onKey);
-  function open(current,opener){
-    if(asset)return;asset=current;source={...(current.source||current)};epoch++;version=0;trigger=opener||document.activeElement;mediaReady=false;loading=true;
-    edit={crop:{x:0,y:0,w:source.width,h:source.height},start:0,end:source.duration||0,...current.edit,
-      frame_count_mode:current.frame_count_mode||'auto',include_endpoints:current.include_endpoints!==false,sample_index:current.sample_index||0};edit.crop={...edit.crop};applied=JSON.stringify(edit);customMode=!['auto','4','6','8'].includes(edit.frame_count_mode);ratio=null;ratioName='free';snap=false;confirming=false;saving=false;loop=false;$('[data-ed-loop]').checked=false;
-    $('#h3ps-ed-title').textContent=current.filename;
-    $('[data-ed-temporal]').hidden=$('[data-ed-sampling]').hidden=$('[data-ed-loop-control]').hidden=!isVideo();image.hidden=isVideo();video.hidden=!isVideo();decoded.hidden=true;
-    const e=epoch,ready=()=>{if(!asset||e!==epoch)return;loading=false;mediaReady=true;sync();};
-    let fallback=false;
-    const failed=async()=>{
-      if(!asset||e!==epoch)return;
-      if(fallback){loading=false;sync();notify('The browser could not play the prepared source.');return;}
-      fallback=true;loading=true;sync();$('[data-ed-status]').textContent='Preparing browser-compatible source…';
-      try{const result=await serial('source');if(!asset||e!==epoch)return;
-        if(isVideo()){video.src=result.url;video.load();}else image.src=result.url;
-      }catch(error){if(asset&&e===epoch){loading=false;sync();notify(error.message);}}
+  function open(current, opener) {
+    if (asset) return;
+    asset = current;
+    source = { ...(current.source || current) };
+    epoch++;
+    version = 0;
+    trigger = opener || document.activeElement;
+    mediaReady = false;
+    loading = true;
+    edit = {
+      crop: { x: 0, y: 0, w: source.width, h: source.height },
+      start: 0,
+      end: source.duration || 0,
+      ...current.edit,
+      frame_count_mode: current.frame_count_mode || "auto",
+      include_endpoints: current.include_endpoints !== false,
+      sample_index: current.sample_index || 0,
     };
-    image.onload=ready;image.onerror=failed;video.onloadeddata=ready;video.onerror=failed;
-    if(isVideo()){video.src=current.source_url||current.content_url;video.load();video.onloadedmetadata=()=>{if(asset&&e===epoch)video.currentTime=edit.start;};}else image.src=current.source_url||current.content_url;
-    for(const selector of ['[data-theme-toggle]','[data-interface-size-picker]','[data-fullscreen-toggle]']){const control=root.querySelector(selector);if(!control)continue;const home=document.createComment('Media editor control position');control.before(home);homes.push({control,home});$('[data-ed-shell]').insertBefore(control,$('[data-ed-shell] [data-ed-close]'));}
-    el.classList.add('is-open');el.setAttribute('aria-hidden','false');onOpenChange(true);appliedView();timelineView();sync();requestAnimationFrame(()=>$('.h3ps-ed-dialog').focus());
+    edit.crop = { ...edit.crop };
+    applied = JSON.stringify(edit);
+    customMode = !["auto", "4", "6", "8"].includes(edit.frame_count_mode);
+    ratio = null;
+    ratioName = "free";
+    snap = false;
+    confirming = false;
+    saving = false;
+    loop = false;
+    $("[data-ed-loop]").checked = false;
+    $("#h3ps-ed-title").textContent = current.filename;
+    $("[data-ed-temporal]").hidden =
+      $("[data-ed-sampling]").hidden =
+      $("[data-ed-loop-control]").hidden =
+        !isVideo();
+    image.hidden = isVideo();
+    video.hidden = !isVideo();
+    decoded.hidden = true;
+    const e = epoch,
+      ready = () => {
+        if (!asset || e !== epoch) return;
+        loading = false;
+        mediaReady = true;
+        sync();
+      };
+    let fallback = false;
+    const failed = async () => {
+      if (!asset || e !== epoch) return;
+      if (fallback) {
+        loading = false;
+        sync();
+        notify("The browser could not play the prepared source.");
+        return;
+      }
+      fallback = true;
+      loading = true;
+      sync();
+      $("[data-ed-status]").textContent =
+        "Preparing browser-compatible source…";
+      try {
+        const result = await serial("source");
+        if (!asset || e !== epoch) return;
+        if (isVideo()) {
+          video.src = result.url;
+          video.load();
+        } else image.src = result.url;
+      } catch (error) {
+        if (asset && e === epoch) {
+          loading = false;
+          sync();
+          notify(error.message);
+        }
+      }
+    };
+    image.onload = ready;
+    image.onerror = failed;
+    video.onloadeddata = ready;
+    video.onerror = failed;
+    if (isVideo()) {
+      video.src = current.source_url || current.content_url;
+      video.load();
+      video.onloadedmetadata = () => {
+        if (asset && e === epoch) video.currentTime = edit.start;
+      };
+    } else image.src = current.source_url || current.content_url;
+    for (const selector of [
+      "[data-theme-toggle]",
+      "[data-interface-size-picker]",
+      "[data-fullscreen-toggle]",
+    ]) {
+      const control = root.querySelector(selector);
+      if (!control) continue;
+      const home = document.createComment("Media editor control position");
+      control.before(home);
+      homes.push({ control, home });
+      $("[data-ed-shell]").insertBefore(
+        control,
+        $("[data-ed-shell] [data-ed-close]"),
+      );
+    }
+    el.classList.add("is-open");
+    el.setAttribute("aria-hidden", "false");
+    $(".h3ps-ed-dialog").setAttribute("aria-modal", "true");
+    onOpenChange(true);
+    appliedView();
+    timelineView();
+    sync();
+    requestAnimationFrame(() => {
+      if (asset && e === epoch) $(".h3ps-ed-dialog").focus();
+    });
   }
-  function close(force=false){if(!asset)return true;if(busy&&!force)return false;if(!force&&confirming){confirming=false;sync();return false;}if(!force&&dirty()){confirming=true;sync();$('[data-ed-keep]').focus();return false;}stop();epoch++;const returnTo=trigger?.isConnected?trigger:root.querySelector(`[data-asset-id="${asset.id}"]`);asset=null;source=null;video.removeAttribute('src');video.load();image.removeAttribute('src');decoded.removeAttribute('src');for(const {home,control} of homes.splice(0))home.replaceWith(control);el.classList.remove('is-open');el.setAttribute('aria-hidden','true');onOpenChange(false);returnTo?.focus?.({preventScroll:true});return true;}
+  function close(force = false) {
+    if (!asset) return true;
+    if (busy && !force) return false;
+    if (!force && confirming) {
+      confirming = false;
+      sync();
+      return false;
+    }
+    if (!force && dirty()) {
+      confirming = true;
+      sync();
+      $("[data-ed-keep]").focus();
+      return false;
+    }
+    stop();
+    epoch++;
+    const returnTo = trigger?.isConnected
+      ? trigger
+      : root.querySelector(`[data-asset-id="${asset.id}"]`);
+    asset = null;
+    source = null;
+    video.removeAttribute("src");
+    video.load();
+    image.removeAttribute("src");
+    decoded.removeAttribute("src");
+    for (const { home, control } of homes.splice(0)) home.replaceWith(control);
+    el.classList.remove("is-open");
+    el.setAttribute("aria-hidden", "true");
+    $(".h3ps-ed-dialog").removeAttribute("aria-modal");
+    onOpenChange(false);
+    returnTo?.focus?.({ preventScroll: true });
+    return true;
+  }
   return {open,close,destroy(){close(true);observer.disconnect();document.removeEventListener('keydown',onKey);el.remove();}};
 }

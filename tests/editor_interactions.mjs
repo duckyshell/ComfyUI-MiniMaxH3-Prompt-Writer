@@ -58,7 +58,7 @@ function fixture(t, options={}){
   globalThis.document={createElement:tag=>new Element(tag),addEventListener(){},removeEventListener(){},activeElement:null};
   globalThis.window={confirm:()=>false};
   globalThis.ResizeObserver=class{observe(){}disconnect(){}};
-  globalThis.requestAnimationFrame=fn=>{fn();return 1;};
+  globalThis.requestAnimationFrame=fn=>{if(options.frames)options.frames.push(fn);else fn();return 1;};
   globalThis.cancelAnimationFrame=()=>{};
   const asset={id:'v',type:'video',mode:'Reference',filename:'clip.mp4',width:544,height:960,duration:8,
     source:{width:544,height:960,duration:8},source_url:'source',contact_sheet_url:'applied-0',frames:Array(6),frame_count_mode:'auto'};
@@ -211,4 +211,27 @@ test('audio extraction explains invalid selection, downloads and adds a trimmed 
   assert.equal(await (await fetch(f.downloads[0].url)).text(),'audio');
   t.mock.timers.tick(60000);
   assert.equal(f.saved.length,0);
+});
+
+
+test("closed editor releases modality and cannot receive delayed opening focus", (t) => {
+  const frames = [],
+    f = fixture(t, { frames });
+  const dialog = f.$(".h3ps-ed-dialog");
+  assert.equal(dialog.attrs["aria-modal"], "true");
+  assert.equal(f.editor.close(), true);
+  assert.equal(dialog.attrs["aria-modal"], undefined);
+  document.activeElement = null;
+  frames.splice(0).forEach((fn) => fn());
+  assert.equal(document.activeElement, null);
+});
+
+test("discard confirmation keeps the editor modal until closing is accepted", (t) => {
+  const f = fixture(t),
+    dialog = f.$(".h3ps-ed-dialog");
+  f.$('[data-ed-ratio="1:1"]').onclick();
+  assert.equal(f.editor.close(), false);
+  assert.equal(dialog.attrs["aria-modal"], "true");
+  f.$("[data-ed-discard]").onclick();
+  assert.equal(dialog.attrs["aria-modal"], undefined);
 });

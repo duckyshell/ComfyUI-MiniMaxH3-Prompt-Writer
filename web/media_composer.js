@@ -20,7 +20,7 @@ function markup(icon) {
   return `
 <section class="h3ps-composer" aria-hidden="true">
   <div class="h3ps-preview-backdrop" data-close></div>
-  <div class="h3ps-cmp-dialog" role="dialog" aria-modal="true" aria-labelledby="h3ps-cmp-title" tabindex="-1">
+  <div class="h3ps-cmp-dialog" role="dialog" aria-labelledby="h3ps-cmp-title" tabindex="-1">
     <header>
       <span><small>Media Composer</small><strong id="h3ps-cmp-title">Compose a new Picture</strong></span>
       <div class="h3ps-cmp-shell-controls" data-shell-controls><button class="h3ps-icon-button" type="button" data-close aria-label="Close composer" title="Close (Esc)">${i("close", 18)}</button></div>
@@ -618,20 +618,61 @@ export function createMediaComposer({
     if(state.selectedUid&&!state.items.some((it)=>it.uid===state.selectedUid))state.selectedUid=null;
   }
 
-  function open({assets=[],trigger=null}={}) {
-    if(state.open)return;
-    state.openGeneration++;
-    setAssets(assets);state.zoom=1;state.panX=state.panY=0;
-    const controls=$("[data-shell-controls]"),closeButton=controls.querySelector("[data-close]");
-    for(const selector of ["[data-theme-toggle]","[data-interface-size-picker]","[data-fullscreen-toggle]"]){
-      const control=root.querySelector(selector);if(!control)continue;
-      const home=document.createComment("Composer control position");control.before(home);shellHomes.push({control,home});controls.insertBefore(control,closeButton);
+  function open({ assets = [], trigger = null } = {}) {
+    if (state.open) return;
+    const openGeneration = ++state.openGeneration;
+    setAssets(assets);
+    state.zoom = 1;
+    state.panX = state.panY = 0;
+    const controls = $("[data-shell-controls]"),
+      closeButton = controls.querySelector("[data-close]");
+    for (const selector of [
+      "[data-theme-toggle]",
+      "[data-interface-size-picker]",
+      "[data-fullscreen-toggle]",
+    ]) {
+      const control = root.querySelector(selector);
+      if (!control) continue;
+      const home = document.createComment("Composer control position");
+      control.before(home);
+      shellHomes.push({ control, home });
+      controls.insertBefore(control, closeButton);
     }
-    state.returnFocus=trigger||document.activeElement;state.open=true;el.classList.add("is-open");el.setAttribute("aria-hidden","false");onOpenChange(true);normalizeCanvas();renderAll();state.assets.filter((a)=>a.type==="image"||a.type==="video").forEach((a)=>loadVisual(a).then(()=>state.open&&renderPreview()).catch(()=>{}));requestAnimationFrame(()=>($(`[data-source-id]`)||dom.dialog).focus());
+    state.returnFocus = trigger || document.activeElement;
+    state.open = true;
+    el.classList.add("is-open");
+    el.setAttribute("aria-hidden", "false");
+    dom.dialog.setAttribute("aria-modal", "true");
+    onOpenChange(true);
+    normalizeCanvas();
+    renderAll();
+    state.assets
+      .filter((a) => a.type === "image" || a.type === "video")
+      .forEach((a) =>
+        loadVisual(a)
+          .then(() => state.open && renderPreview())
+          .catch(() => {}),
+      );
+    requestAnimationFrame(() => {
+      if (state.open && state.openGeneration === openGeneration)
+        ($(`[data-source-id]`) || dom.dialog).focus();
+    });
   }
-  function close() { if(!state.open)return;clearDragGhost();endCaption();state.open=false;state.drag=null;
-    for(const {control,home} of shellHomes.splice(0)){home.replaceWith(control)}
-    el.classList.remove("is-open");el.setAttribute("aria-hidden","true");onOpenChange(false);state.returnFocus?.focus?.({preventScroll:true}); }
+  function close() {
+    if (!state.open) return;
+    clearDragGhost();
+    endCaption();
+    state.open = false;
+    state.drag = null;
+    for (const { control, home } of shellHomes.splice(0)) {
+      home.replaceWith(control);
+    }
+    el.classList.remove("is-open");
+    el.setAttribute("aria-hidden", "true");
+    dom.dialog.removeAttribute("aria-modal");
+    onOpenChange(false);
+    state.returnFocus?.focus?.({ preventScroll: true });
+  }
   function destroy() { close();resizeObserver.disconnect();document.removeEventListener("keydown",onKey);window.removeEventListener("resize",onResize);el.remove();state.visuals.clear();state.visualPromises.clear(); }
 
   renderControls();

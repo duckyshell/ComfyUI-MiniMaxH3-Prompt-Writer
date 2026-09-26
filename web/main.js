@@ -186,6 +186,7 @@ let mediaPanelRequest = 0;
 let ggufRuntimeDiagnosticsPromise = null;
 let referenceInsertTarget = null;
 let studioReturnFocus = null;
+let studioFocusEpoch = 0;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({
@@ -1967,12 +1968,12 @@ function setOtherModelsPopover(open) {
   const trigger = studio.root.querySelector("[data-other-models-toggle]");
   if (!popover) return;
   popover.hidden = !open;
+  if (open) popover.setAttribute("aria-modal", "true");
+  else popover.removeAttribute("aria-modal");
   if (backdrop) backdrop.hidden = !open;
   trigger?.setAttribute("aria-expanded", String(open));
   if (open) {
-    requestAnimationFrame(() => {
-      popover.querySelector("[data-other-models-close]")?.focus();
-    });
+    scheduleStudioFocus(() => popover.querySelector("[data-other-models-close]"));
   } else if (popover.contains(document.activeElement)) {
     trigger?.focus();
   }
@@ -2814,7 +2815,7 @@ function toggleRefine(open) {
   if (open && studio.mode === "Music3") toggleLyricsRefine(false);
   panel.hidden = !open;
   outputPanel.classList.toggle("is-refining", open);
-  if (open) requestAnimationFrame(() => panel.querySelector("textarea").focus({ preventScroll: true }));
+  if (open) scheduleStudioFocus(() => panel.querySelector("textarea"));
 }
 
 function toggleLyricsRefine(open) {
@@ -2822,7 +2823,7 @@ function toggleLyricsRefine(open) {
   const panel = studio.root.querySelector("[data-lyrics-refine-panel]");
   if (open) toggleRefine(false);
   panel.hidden = !open;
-  if (open) requestAnimationFrame(() => panel.querySelector("textarea").focus({ preventScroll: true }));
+  if (open) scheduleStudioFocus(() => panel.querySelector("textarea"));
 }
 
 async function cancelLyricsRefinement() {
@@ -3281,7 +3282,7 @@ function createStudio() {
     </section>
 
     <div class="h3ps-other-models-backdrop" aria-hidden="true" data-other-models-backdrop hidden></div>
-    <section class="h3ps-other-models-popover" role="dialog" aria-modal="true" aria-label="Other verified models" data-other-models-popover hidden>
+    <section class="h3ps-other-models-popover" role="dialog" aria-label="Other verified models" data-other-models-popover hidden>
       <header><span><strong>Other verified models</strong><small>Recommended GGUF and projector pairs</small></span><button class="h3ps-icon-button" type="button" aria-label="Close verified models" data-other-models-close>${icon("close", 16)}</button></header>
       <div class="h3ps-other-models-catalog" data-other-models-catalog></div>
     </section>
@@ -3860,45 +3861,73 @@ async function openFloatingMedia() {
   } catch (error) { showToast("Media panel unavailable", error.message); }
 }
 
+function focusAvailableControl(element) {
+  if (
+    !element?.isConnected ||
+    element.disabled ||
+    element.closest('[hidden], [inert], [aria-hidden="true"]') ||
+    !element.getClientRects().length
+  ) return false;
+  element.focus({ preventScroll: true });
+  return document.activeElement === element;
+}
+
+function scheduleStudioFocus(target) {
+  const current = studio;
+  const epoch = studioFocusEpoch;
+  requestAnimationFrame(() => {
+    if (
+      studio !== current ||
+      epoch !== studioFocusEpoch ||
+      !current.root.classList.contains("is-open")
+    ) return;
+    focusAvailableControl(target());
+  });
+}
+
 function openStudio() {
   mediaPanelRequest++;
   const current = createStudio();
+  if (current.root.classList.contains("is-open")) return;
+  studioFocusEpoch++;
   current.floatingMedia?.suspend(true);
   const modal = current.root.querySelector(".h3ps-modal");
-  studioReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const opener = document.activeElement;
+  studioReturnFocus = opener instanceof HTMLElement && !current.root.contains(opener) ? opener : null;
   setMusicSystemPromptExpanded(false);
   syncMusicSystemPromptSummary();
   modal.hidden = false;
+  modal.inert = false;
   modal.setAttribute("aria-modal", "true");
   current.root.classList.add("is-open");
   current.root.setAttribute("aria-hidden", "false");
   document.body.classList.add("h3ps-modal-open");
-  requestAnimationFrame(() => {
-    updateBriefLayout();
-    modal.tabIndex = -1;
-    (modal.querySelector("[data-close-studio]:not([hidden])") || modal).focus({ preventScroll: true });
-  });
+  modal.tabIndex = -1;
+  updateBriefLayout();
+  scheduleStudioFocus(() => modal.querySelector("button[data-close-studio]:not([hidden])") || modal);
 }
 
 function closeStudio() {
   if (!HOST_CAPABILITIES.windowed) return false;
   mediaPanelRequest++;
-  if (!studio) return;
-  studio.sequence?.leave();
+  if (!studio?.root.classList.contains("is-open")) return;
   const modal = studio.root.querySelector(".h3ps-modal");
-  studio.mediaComposer?.close();
   if (studio.mediaEditor?.close() === false) return false;
+  if (studio.mediaComposer?.close() === false) return false;
+  studio.sequence?.leave();
+  studioFocusEpoch++;
   setSettingsOpen(false);
   setOtherModelsPopover(false);
 
-
   modal.removeAttribute("aria-modal");
   modal.hidden = true;
+  modal.inert = true;
   studio.root.classList.remove("is-open");
   studio.root.setAttribute("aria-hidden", "true");
   document.body.classList.remove("h3ps-modal-open");
   studio.floatingMedia?.suspend(false);
-  studioReturnFocus?.focus?.({ preventScroll: true });
+  if (studio.root.contains(document.activeElement)) document.activeElement.blur();
+  if (!focusAvailableControl(studioReturnFocus)) focusAvailableControl(app.canvas?.canvas);
   studioReturnFocus = null;
 }
 

@@ -155,7 +155,7 @@ test("an old Composer Add cannot clear a reopened composition", async () => {
   const started = deferred();
   const state = { items: [{}], open: true, openGeneration: 1 };
   const context = vm.createContext({
-    state, dom: { add: { disabled: false }, dialog: { focus() {} } },
+    state, dom: { add: { disabled: false }, dialog: { focus() {}, setAttribute() {}, removeAttribute() {} } },
     exportPicture: async () => ({}),
     onAddPicture: () => { started.resolve(); return upload.promise; },
     normalizeCanvas() {}, clearDragGhost() {}, endCaption() {},

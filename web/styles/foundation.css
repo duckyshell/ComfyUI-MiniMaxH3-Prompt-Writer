@@ -73,8 +73,9 @@ body.h3ps-modal-open { overflow: hidden; }
   transform: translateY(-1px);
 }
 .h3ps-floating-launcher:focus-visible {
-  outline: 2px solid rgba(232, 97, 60, .72) !important;
+  outline: 3px solid var(--h3ps-launcher-focus) !important;
   outline-offset: 4px;
+  box-shadow: 0 0 0 4px #17191e, 0 0 0 8px rgba(255, 138, 80, .28);
 }
 .h3ps-floating-launcher:active { cursor: grabbing; transform: scale(.97); }
 .h3ps-floating-launcher > img { display: block; width: 100%; height: 100%; border-radius: inherit; object-fit: contain; pointer-events: none; }

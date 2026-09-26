@@ -1,3 +1,4 @@
+import "./focus_lifecycle.mjs";
 import "./reference_labels.mjs";
 import "./draft_files.mjs";
 import "./desktop_notifications.mjs";
@@ -1523,8 +1524,6 @@ test("text-only Direct UI disables visual modes and explains the fallback", () =
 test("closed Prompt Writer does not advertise an active modal", () => {
   assert.match(mainSource, /<section class="h3ps-modal" role="dialog" aria-label="H3 Prompt Writer" hidden>/);
   assert.doesNotMatch(mainSource, /<section class="h3ps-modal" role="dialog" aria-modal="true"/);
-  assert.match(mainSource, /function openStudio\(\)[\s\S]{0,500}modal\.hidden = false;[\s\S]{0,120}modal\.setAttribute\("aria-modal", "true"\)/);
-  assert.match(mainSource, /function closeStudio\(\)[\s\S]{0,500}modal\.removeAttribute\("aria-modal"\);[\s\S]{0,100}modal\.hidden = true;/);
 });
 
 test("theme selection is scoped, persisted, and exposed in the main header", () => {
@@ -1639,14 +1638,14 @@ test("runtime pickers and the verified-model dialog keep keyboard state in sync"
   assert.match(mainSource, /function setRuntimeMenuOpen\(name, open, restoreFocus = false\)/);
   assert.match(mainSource, /else if \(runtimeMenu\) setRuntimeMenuOpen\(runtimeMenu\.dataset\.runtimeMenu, false, true\)/);
   assert.match(mainSource, /data-other-models-backdrop[^>]*hidden/);
-  assert.match(mainSource, /role="dialog" aria-modal="true" aria-label="Other verified models"/);
+  assert.match(mainSource, /role="dialog" aria-label="Other verified models"/);
   assert.match(styleSources.overlays, /\.h3ps-other-models-backdrop\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*119;/);
   assert.doesNotMatch(styleSources.overlays, /100vmax/);
 });
 
 test("focus styling stays visible for controls without outlining the dialog shell", () => {
   assert.match(styleSources.foundation, /\.h3ps-root \.h3ps-modal:focus,[\s\S]{0,80}\.h3ps-root \.h3ps-modal:focus-visible\s*\{\s*outline:\s*none !important;/);
-  assert.match(styleSources.foundation, /\.h3ps-floating-launcher:focus-visible\s*\{[^}]*outline:\s*2px solid rgba\(232, 97, 60, \.72\) !important/);
+  assert.match(styleSources.foundation, /\.h3ps-floating-launcher:focus-visible\s*\{[^}]*outline:\s*3px solid var\(--h3ps-launcher-focus\) !important/);
   assert.doesNotMatch(styleSources.settings, /\.h3ps-provider-selector > button:focus-visible\s*\{[^}]*outline:\s*0/);
   assert.match(styleSources["themes/dark"], /\.h3ps-root\s*\{[\s\S]*color-scheme:\s*dark;/);
   assert.doesNotMatch(styleSources["themes/dark"], /:root\s*\{[^}]*color-scheme:/);
@@ -1658,9 +1657,6 @@ test("fullscreen reuses the studio root and persists its UI state", () => {
   assert.match(mainSource, /setAttribute\("aria-pressed", String\(studio\.fullscreen\)\)/);
   assert.match(mainSource, /if \(studio\.fullscreen\) setFullscreen\(false\)/);
   assert.match(mainSource, /saveUserPreferences\(localStorage, studio\)/);
-  assert.match(mainSource, /current\.root\.classList\.add\("is-open"\)[\s\S]{0,420}requestAnimationFrame\(\(\) => \{[\s\S]{0,120}updateBriefLayout\(\)/);
-  assert.match(mainSource, /\(modal\.querySelector\("\[data-close-studio\]:not\(\[hidden\]\)"\) \|\| modal\)\.focus\(\{ preventScroll: true \}\)/);
-  assert.match(mainSource, /studioReturnFocus\?\.focus\?\.\(\{ preventScroll: true \}\)/);
   assert.match(mainSource, /fitTextarea\(brief, minimumHeight, 2\)/);
   assert.match(stylesSource, /\.h3ps-root\.is-fullscreen \.h3ps-brief textarea \{ max-height: none; \}/);
 });

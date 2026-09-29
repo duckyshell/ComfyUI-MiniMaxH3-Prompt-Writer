@@ -6,7 +6,7 @@ import gc
 import sys
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Any, Callable
 
 from ..context import ContextPlanError, plan_context
@@ -125,6 +125,25 @@ def _cancel_to_eos(cancel_event: threading.Event, eos_token: int) -> Callable[..
         return scores
 
     return processor
+
+
+@contextmanager
+def _abort_when_cancelled(cancel_event: threading.Event, model: Any):
+    # Llama clears its abort flag when each completion starts, so keep setting it until the call returns.
+    done = threading.Event()
+
+    def watch() -> None:
+        while not done.wait(0.1):
+            if cancel_event.is_set():
+                model.abort()
+
+    thread = threading.Thread(target=watch, name="h3promptwriter-cancel", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        done.set()
+        thread.join()
 
 
 class GGUFBackend:
@@ -406,7 +425,7 @@ class GGUFBackend:
                     or model_info.get("capabilities", {}).get("images") is False
                 )
                 runtime_kind = "text" if text_only else "multimodal"
-                signature = (model_info["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"], runtime_kind)
+                signature = (model_info["id"], runtime_plan["context_tokens"], runtime_plan["kv_cache"], runtime_kind, model_info.get("projector") if not text_only else None)
                 cold_start = self.model is None or self.runtime_signature != signature
                 model_name = _short_value(model_info.get("name"), model_info["id"])
                 context = _context_label(runtime_plan["context_tokens"])
@@ -428,9 +447,14 @@ class GGUFBackend:
                 if self.cancel_event.is_set():
                     raise ModelError("GENERATION_CANCELLED", "Generation was cancelled after model loading.")
 
-                logits_processors = self._logits_processors(
-                    _cancel_to_eos(self.cancel_event, self.model.token_eos())
-                )
+                # Current llama-cpp-python runs a Python logits processor over the whole vocabulary for every
+                # token, which cuts generation speed several times. Cancel through Llama.abort() when available.
+                abortable = hasattr(self.model, "abort")
+                cancel_options = {} if abortable else {
+                    "logits_processor": self._logits_processors(
+                        _cancel_to_eos(self.cancel_event, self.model.token_eos())
+                    )
+                }
                 media_started: float | None = None
                 visual_references = _visual_reference_label(assembled)
 
@@ -475,38 +499,40 @@ class GGUFBackend:
                         **sampling,
                         "max_tokens": max_tokens,
                         "seed": seed,
-                        "logits_processor": logits_processors,
+                        **cancel_options,
                     }
                     chat_template_options = template_kwargs(
                         model_info,
                         thinking=thinking,
                         reasoning_effort=runtime_plan.get("reasoning_effort") if thinking else None,
                     )
-                    if text_only:
-                        if chat_template_options:
-                            base_chat_handler = (
-                                getattr(self.model, "chat_handler", None)
-                                or getattr(self.model, "_chat_handlers", {}).get(self.model.chat_format)
-                            )
-                            if base_chat_handler is None:
-                                from llama_cpp.llama_chat_format import get_chat_completion_handler
+                    cancel_watch = _abort_when_cancelled(self.cancel_event, self.model) if abortable else nullcontext()
+                    with cancel_watch:
+                        if text_only:
+                            if chat_template_options:
+                                base_chat_handler = (
+                                    getattr(self.model, "chat_handler", None)
+                                    or getattr(self.model, "_chat_handlers", {}).get(self.model.chat_format)
+                                )
+                                if base_chat_handler is None:
+                                    from llama_cpp.llama_chat_format import get_chat_completion_handler
 
-                                base_chat_handler = get_chat_completion_handler(self.model.chat_format)
-                            response = base_chat_handler(
-                                llama=self.model,
-                                **options,
-                                **chat_template_options,
-                            )
+                                    base_chat_handler = get_chat_completion_handler(self.model.chat_format)
+                                response = base_chat_handler(
+                                    llama=self.model,
+                                    **options,
+                                    **chat_template_options,
+                                )
+                            else:
+                                response = self.model.create_chat_completion(**options)
                         else:
-                            response = self.model.create_chat_completion(**options)
-                    else:
-                        self.chat_handler.verbose = False
-                        with _quiet_mtmd_info(), suppress_known_llama_noise():
-                            response = self.chat_handler(
-                                llama=self.model,
-                                **options,
-                                **chat_template_options,
-                            )
+                            self.chat_handler.verbose = False
+                            with _quiet_mtmd_info(), suppress_known_llama_noise():
+                                response = self.chat_handler(
+                                    llama=self.model,
+                                    **options,
+                                    **chat_template_options,
+                                )
                     if self.cancel_event.is_set():
                         raise ModelError("GENERATION_CANCELLED", "Generation was cancelled.")
                     return response

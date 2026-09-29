@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from backend.models.contract import ModelError
 from backend.h3_pipeline import _audit
-from backend.models.gguf_backend import GGUFBackend, _cancel_to_eos
+from backend.models.gguf_backend import GGUFBackend, _abort_when_cancelled, _cancel_to_eos
 
 
 def reference_prompt(word_count: int, *, include_soundscape: bool = True) -> str:
@@ -154,6 +154,29 @@ class GenerationCharacterizationTests(unittest.TestCase):
         self.assertIs(processor([], scores), scores)
         self.assertEqual(scores.assignments[0], (slice(None), float("-inf")))
         self.assertEqual(scores.assignments[1], (7, 0.0))
+
+    def test_abort_watch_reasserts_abort_until_the_call_returns(self):
+        cancel_event = threading.Event()
+        aborted = threading.Event()
+
+        class _Abortable:
+            def abort(self):
+                aborted.set()
+
+        with _abort_when_cancelled(cancel_event, _Abortable()):
+            self.assertFalse(aborted.wait(0.3))
+            cancel_event.set()
+            self.assertTrue(aborted.wait(1))
+            # A new completion can clear the abort flag after media processing.
+            aborted.clear()
+            self.assertTrue(aborted.wait(1))
+        aborted.clear()
+        self.assertFalse(aborted.wait(0.3))
+
+        # A later request must not inherit cancellation from the previous one.
+        cancel_event.clear()
+        with _abort_when_cancelled(cancel_event, _Abortable()):
+            self.assertFalse(aborted.wait(0.3))
 
     def test_manual_generation_budget_caps_each_thinking_and_fallback_request(self):
         backend = _CharacterizedBackend([

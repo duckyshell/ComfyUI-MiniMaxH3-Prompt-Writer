@@ -1,3 +1,4 @@
+import http.client
 import json
 import threading
 import time
@@ -18,6 +19,7 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     requests = []
     slow_started = threading.Event()
+    anthropic_endpoint = False
 
     def log_message(self, *_args):
         return
@@ -26,6 +28,7 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
     def reset(cls):
         cls.requests = []
         cls.slow_started.clear()
+        cls.anthropic_endpoint = False
 
     def _json(self, payload, status=200, headers=None):
         body = json.dumps(payload).encode("utf-8")
@@ -48,6 +51,14 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         type(self).requests.append(("GET", self.path, dict(self.headers), None))
         if self.path == "/v1/models":
+            if type(self).anthropic_endpoint:
+                if not self._anthropic_headers_valid():
+                    return
+                self._json({
+                    "data": [{"id": "claude-test-model", "type": "model", "display_name": "Claude"}],
+                    "has_more": False,
+                })
+                return
             self._json({
                 "data": [
                     {
@@ -88,6 +99,15 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
         else:
             self._json({"error": {"message": "not found"}}, 404)
 
+    def _anthropic_headers_valid(self):
+        if self.headers.get("anthropic-version") != "2023-06-01":
+            self._json({"error": {"message": "anthropic-version: header is required"}}, 400)
+            return False
+        if self.headers.get("Authorization") != "Bearer secret-test-key":
+            self._json({"error": {"message": "invalid API key"}}, 401)
+            return False
+        return True
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length) or b"{}")
@@ -95,6 +115,12 @@ class _FakeApiHandler(BaseHTTPRequestHandler):
         if not self.path.endswith("/chat/completions"):
             self._json({"error": {"message": "not found"}}, 404)
             return
+        if type(self).anthropic_endpoint:
+            if not self._anthropic_headers_valid():
+                return
+            if "temperature" in payload or "top_p" in payload:
+                self._json({"error": {"message": "sampling controls are not supported by this model"}}, 400)
+                return
         model = payload.get("model")
         if model == "rate-limited":
             self._json(
@@ -252,6 +278,59 @@ class ApiProviderBackendTests(unittest.TestCase):
         self.assertEqual(result["model"]["remote_model"], "manual-vision-model")
         self.assertEqual(result["model"]["capability_source"], "user_declared")
         self.assertTrue(result["model"]["capabilities"]["images"])
+
+    def test_anthropic_custom_endpoint_lists_models_and_streams_multimodal_completion(self):
+        _FakeApiHandler.anthropic_endpoint = True
+        messages = [
+            {"role": "system", "content": "Write an H3 prompt."},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Use this image reference."},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
+            ]},
+        ]
+        with patch.object(self.backend, "_http_connection", side_effect=lambda _url, timeout: http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_address[1], timeout=timeout,
+        )):
+            result = self.backend.probe({
+                "preset": "custom",
+                "base_url": "https://API.ANTHROPIC.COM:443/v1/",
+                "credential": {"source": "session", "value": "secret-test-key"},
+                "custom_capabilities": {"images": True},
+            })
+            model = result["models"][0]
+            self.assertEqual(model["remote_model"], "claude-test-model")
+            self.assertTrue(model["capabilities"]["images"])
+            self.backend.list_models(result["connection"]["id"], refresh=True)
+            connection = self.backend._get_connection(result["connection"]["id"])
+            response = _ApiChatHandler(self.backend, connection, model["remote_model"])(
+                messages=messages, temperature=0.8, top_p=0.95, top_k=64,
+                max_tokens=1536, seed=None, thinking=False,
+            )
+
+        self.assertEqual(response["choices"][0]["message"]["content"], "API_OK")
+        self.assertEqual([request[:2] for request in _FakeApiHandler.requests], [
+            ("GET", "/v1/models"), ("GET", "/v1/models"), ("POST", "/v1/chat/completions"),
+        ])
+        self.assertEqual(_FakeApiHandler.requests[-1][3]["messages"], messages)
+        self.assertNotIn("secret-test-key", json.dumps(result))
+
+    def test_anthropic_compatibility_does_not_apply_to_other_custom_hosts(self):
+        for base_url in ("https://api.anthropic.com.example/v1", "https://proxy.example/anthropic/v1"):
+            with self.subTest(base_url=base_url):
+                connection = self._connection()
+                connection.base_url = base_url
+                with patch.object(self.backend, "_http_connection", side_effect=lambda _url, timeout: http.client.HTTPConnection(
+                    "127.0.0.1", self.server.server_address[1], timeout=timeout,
+                )):
+                    _ApiChatHandler(self.backend, connection, "vision-reasoning-model")(
+                        messages=[], temperature=0.8, top_p=0.95, top_k=64,
+                        max_tokens=1536, seed=None, thinking=False,
+                    )
+                request = _FakeApiHandler.requests[-1]
+                self.assertNotIn("anthropic-version", request[2])
+                self.assertEqual(request[2]["Authorization"], "Bearer secret-test-key")
+                self.assertEqual(request[3]["temperature"], 0.8)
+                self.assertEqual(request[3]["top_p"], 0.95)
 
     def test_custom_missing_model_list_without_manual_model_is_an_endpoint_error(self):
         with self.assertRaises(ModelError) as raised:

@@ -52,6 +52,14 @@ For another Custom endpoint, enable **Endpoint accepts image_url inputs** only w
 
 Custom is a transport contract, not a claim that every OpenAI-compatible server or model is supported.
 
+## Claude through Custom
+
+Choose **Custom**, enter `https://api.anthropic.com/v1`, and paste an Anthropic API key scoped to a single workspace. Connect, then select a Claude model. Enable **Endpoint accepts image_url inputs** when using a vision-capable model with image references.
+
+Writer supplies the required `anthropic-version` header and uses Anthropic's [OpenAI-compatible Chat Completions endpoint](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk). Native Claude thinking and prompt-cache controls are not exposed through this setup.
+
+Model discovery and multimodal streaming are covered by local HTTP contract tests. A credentialed live Anthropic smoke test has not been run.
+
 ## Keys and saved settings
 
 The key is sent once to the local H3 backend and held only in the current Writer backend process's memory. It is not read from environment variables and is not written to browser storage, model settings, developer notes, or request content. The backend uses it only to authenticate provider requests. Disconnecting removes the in-memory connection. The browser may save the preset, base URL, model ID, Gemini Thinking level, and Custom capability settings.

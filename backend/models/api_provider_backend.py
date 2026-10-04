@@ -144,6 +144,10 @@ def _api_path(base_url: str, suffix: str) -> str:
     return f"{path}/{suffix.lstrip('/')}" or "/"
 
 
+def _is_anthropic_endpoint(base_url: str) -> bool:
+    return urlsplit(base_url).hostname == "api.anthropic.com"
+
+
 @dataclass
 class ApiConnection:
     id: str
@@ -191,7 +195,9 @@ class _ApiChatHandler:
         # pipeline's non-thinking and repair budgets are not API request caps.
         # New OpenAI reasoning models and Gemini 3.6+ reject or deprecate
         # sampling controls. Keep those presets on the smallest portable set.
-        if not thinking and preset in {"openrouter", "custom"}:
+        # Claude model generations differ in which sampling controls they accept.
+        # Let Anthropic choose defaults rather than rejecting otherwise valid requests.
+        if not thinking and preset in {"openrouter", "custom"} and not _is_anthropic_endpoint(self.connection.base_url):
             payload["temperature"] = temperature
             payload["top_p"] = top_p
         if preset == "gemini":
@@ -359,6 +365,10 @@ class ApiProviderBackend:
         }
         if connection.api_key:
             headers["Authorization"] = f"Bearer {connection.api_key}"
+        if _is_anthropic_endpoint(connection.base_url):
+            # Model discovery uses Anthropic's native Models API, even when
+            # generation uses its OpenAI-compatible Chat Completions route.
+            headers["anthropic-version"] = "2023-06-01"
         return headers
 
     def _request_json(

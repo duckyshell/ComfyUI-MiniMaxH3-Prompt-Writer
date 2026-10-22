@@ -122,10 +122,10 @@ export function settingsMarkup(icon) {
             <button type="button" data-restore-default-drafts>${icon("refresh", 13)}<span data-restore-default-drafts-label>Restore default drafts</span></button>
           </div>
         </section>
-        <section class="h3ps-settings-card h3ps-notifications-settings">
-          <header><span><small>Notifications</small></span></header>
-          <label class="h3ps-toggle-control"><input type="checkbox" data-desktop-notifications><span></span>Desktop notifications</label>
-          <p class="h3ps-field-help" data-desktop-notifications-hint></p>
+        <section class="h3ps-settings-card h3ps-additional-settings">
+          <header><span><small>Additional settings</small></span></header>
+          <label class="h3ps-toggle-control" data-launcher-settings hidden><input type="checkbox" data-hide-launcher><span></span>Hide H3 button</label>
+          <label class="h3ps-toggle-control" data-desktop-notifications-hint><input type="checkbox" data-desktop-notifications><span></span>Desktop notifications</label>
         </section>
       </div>
     </section>`;

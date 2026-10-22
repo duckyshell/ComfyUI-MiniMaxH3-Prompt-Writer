@@ -2,6 +2,7 @@ import "./focus_lifecycle.mjs";
 import "./reference_labels.mjs";
 import "./draft_files.mjs";
 import "./desktop_notifications.mjs";
+import "./launcher_visibility.mjs";
 import { generationButtonMarkup } from "../web/writer_controls.js";
 import { aspectRatioMarkup, splitMenuMarkup } from "../web/writer_controls.js";
 import './media_visual.mjs';

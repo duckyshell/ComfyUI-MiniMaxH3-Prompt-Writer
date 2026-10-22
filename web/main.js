@@ -43,6 +43,7 @@ import { editMedia } from "./api/h3studio.js";
 
 const EXTENSION_NAME = "minimax.h3.prompt.studio";
 const LAUNCHER_SCHEMA_VERSION = "2";
+const HIDE_LAUNCHER_SETTING = "H3PromptWriter.General.HideButton";
 const VRAM_HANDOFF_SUPPORTED = typeof app?.queuePrompt === "function";
 const HOST_CAPABILITIES = { windowed: true, comfyMemory: VRAM_HANDOFF_SUPPORTED, workflowMedia: true, ...app.h3psHost };
 const vramHandoffCoordinator = createVramHandoffCoordinator();
@@ -3434,7 +3435,7 @@ function createStudio() {
   const notificationsToggle = root.querySelector("[data-desktop-notifications]");
   const syncNotifications = () => {
     notificationsToggle.checked = studio.desktopNotifications.enabled;
-    root.querySelector("[data-desktop-notifications-hint]").textContent = studio.desktopNotifications.hint;
+    root.querySelector("[data-desktop-notifications-hint]").title = studio.desktopNotifications.hint;
   };
   notificationsToggle.addEventListener("change", async () => {
     notificationsToggle.disabled = true;
@@ -3442,6 +3443,20 @@ function createStudio() {
     finally { notificationsToggle.disabled = false; syncNotifications(); }
   });
   syncNotifications();
+  const hideLauncherToggle = root.querySelector("[data-hide-launcher]");
+  root.querySelector("[data-launcher-settings]").hidden = !HOST_CAPABILITIES.windowed;
+  syncLauncherVisibility();
+  hideLauncherToggle.addEventListener("change", async () => {
+    hideLauncherToggle.disabled = true;
+    try {
+      await app.extensionManager.setting.set(HIDE_LAUNCHER_SETTING, hideLauncherToggle.checked);
+    } catch (error) {
+      showToast("Setting not saved", error.message);
+    } finally {
+      hideLauncherToggle.disabled = false;
+      syncLauncherVisibility();
+    }
+  });
   root.querySelector("[data-draft-save]").onclick=()=>{ setClearMenuOpen(false); saveTextDraft(); };
   const draftInput=root.querySelector("[data-draft-file]");
   root.querySelector("[data-draft-load]").onclick=()=>{ if(!studio.requestBusy) { setClearMenuOpen(false); draftInput.click(); } };
@@ -3932,10 +3947,34 @@ function closeStudio() {
   studioReturnFocus = null;
 }
 
+function syncLauncherVisibility(hidden = app.extensionManager?.setting?.get(HIDE_LAUNCHER_SETTING) === true) {
+  const launcher = document.querySelector("[data-h3ps-launcher]");
+  if (launcher) launcher.hidden = hidden;
+  const toggle = studio?.root.querySelector("[data-hide-launcher]");
+  if (toggle) toggle.checked = hidden;
+}
+
+function onLauncherVisibilityChange(hidden, previous) {
+  syncLauncherVisibility(hidden === true);
+  // ComfyUI also calls onChange during registration; only explain a user change.
+  if (!HOST_CAPABILITIES.windowed || hidden !== true || previous !== false) return;
+  const message = "Open Writer from the Comfy menu → Extensions → H3 Prompt Writer → Open H3 Prompt Writer.";
+  if (studio?.root.classList.contains("is-open")) {
+    showToast("H3 button hidden", message, null, null, { dismissOnWorkspaceClick: true });
+  } else {
+    const notice = { severity: "info", summary: "H3 button hidden", detail: message, life: 0, closable: true };
+    app.extensionManager.toast.add(notice);
+    document.addEventListener("pointerdown", () => app.extensionManager.toast.remove(notice), { once: true });
+  }
+}
+
 function installLauncher() {
   if (!HOST_CAPABILITIES.windowed) return;
   const existingLauncher = document.querySelector("[data-h3ps-launcher]");
-  if (existingLauncher?.dataset.h3psLauncherVersion === LAUNCHER_SCHEMA_VERSION) return;
+  if (existingLauncher?.dataset.h3psLauncherVersion === LAUNCHER_SCHEMA_VERSION) {
+    syncLauncherVisibility();
+    return;
+  }
   existingLauncher?.remove();
   document.querySelector("[data-h3ps-launcher-group]")?.remove();
   const launcher = document.createElement("button");
@@ -4022,6 +4061,7 @@ function installLauncher() {
     if (!saved || drag) return;
     applyPosition(saved);
   });
+  syncLauncherVisibility();
 }
 
 document.addEventListener("keydown", (event) => {
@@ -4083,6 +4123,13 @@ document.addEventListener("keydown", (event) => {
 
 app.registerExtension({
   name: EXTENSION_NAME,
+  settings: [{
+    id: HIDE_LAUNCHER_SETTING,
+    name: "Hide H3 button",
+    type: "boolean",
+    defaultValue: false,
+    onChange: onLauncherVisibilityChange,
+  }],
   beforeConfigureGraph() { workflowRevision++; },
   commands: [{ id: "h3-prompt-studio.open", label: "Open H3 Prompt Writer", function: openStudio },
     { id: "h3-prompt-studio.media", label: "Prompt Writer media over workflow", function: openFloatingMedia }],

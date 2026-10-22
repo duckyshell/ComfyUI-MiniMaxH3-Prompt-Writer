@@ -5,15 +5,40 @@ from unittest.mock import patch
 from backend import runtime_diagnostics
 
 
+NATIVE_CUDA = {
+    "ok": True,
+    "cuda": True,
+    "cpu": True,
+    "gpu_device": True,
+    "device_count": 2,
+    "registries": 2,
+    "error": None,
+}
+NATIVE_CPU = {
+    "ok": True,
+    "cuda": False,
+    "cpu": True,
+    "gpu_device": False,
+    "device_count": 1,
+    "registries": 1,
+    "error": None,
+}
+
+
 class RuntimeDiagnosticsTests(unittest.TestCase):
     def setUp(self):
         runtime_diagnostics._CACHE = None
 
-    def probe(self, version: str = "0.3.46", *, module_available: bool = True):
+    def probe(self, version: str = "0.3.46", *, module_available: bool = True, native: dict | None = None):
         with (
             patch.object(runtime_diagnostics.importlib.metadata, "version", return_value=version),
             patch.object(runtime_diagnostics, "_module_available", return_value=module_available),
             patch.object(runtime_diagnostics, "_host_accelerator", return_value={"name": "NVIDIA Test"}),
+            patch.object(
+                runtime_diagnostics,
+                "_run_native_probe",
+                return_value=(NATIVE_CUDA if native is None else native, None),
+            ),
         ):
             return runtime_diagnostics.get_gguf_runtime_diagnostics()
 
@@ -22,12 +47,63 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["package_version"], "0.3.46")
-        self.assertIsNone(result["gpu_offload"])
-        self.assertIsNone(result["backend"])
+        self.assertTrue(result["gpu_offload"])
+        self.assertEqual(result["backend"], "CUDA")
+        self.assertEqual(result["native"], {
+            "registries": 2,
+            "device_count": 2,
+            "cuda_backend": True,
+            "cpu_backend": True,
+        })
         self.assertEqual(result["onboarding"]["state"], "ready")
         source = inspect.getsource(runtime_diagnostics)
         self.assertNotIn("from llama_cpp", source)
         self.assertNotIn("import llama_cpp", source)
+
+    def test_cpu_only_native_runtime_reports_no_gpu_offload(self):
+        result = self.probe(native=NATIVE_CPU)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["gpu_offload"])
+        self.assertEqual(result["backend"], "CPU")
+        self.assertEqual(result["onboarding"]["state"], "ready")
+        self.assertTrue(any("CUDA" in warning for warning in result["warnings"]))
+
+    def test_native_initialization_failure_is_a_broken_runtime(self):
+        result = self.probe(native={
+            "ok": False,
+            "cuda": False,
+            "cpu": False,
+            "gpu_device": False,
+            "device_count": 0,
+            "registries": 0,
+            "error": "OSError: [WinError 126] The specified module could not be found",
+        })
+
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["error_type"], "NativeBackendError")
+        self.assertIn("WinError 126", result["error"])
+        self.assertIsNone(result["gpu_offload"])
+        self.assertEqual(result["onboarding"]["state"], "broken")
+
+    def test_unavailable_probe_subprocess_keeps_runtime_ready_with_warning(self):
+        with (
+            patch.object(runtime_diagnostics.importlib.metadata, "version", return_value="0.3.46"),
+            patch.object(runtime_diagnostics, "_module_available", return_value=True),
+            patch.object(runtime_diagnostics, "_host_accelerator", return_value=None),
+            patch.object(
+                runtime_diagnostics,
+                "_run_native_probe",
+                return_value=(None, "TimeoutExpired: probe timed out"),
+            ),
+        ):
+            result = runtime_diagnostics.get_gguf_runtime_diagnostics()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIsNone(result["gpu_offload"])
+        self.assertIsNone(result["backend"])
+        self.assertEqual(result["onboarding"]["state"], "ready")
+        self.assertTrue(any("did not complete" in warning for warning in result["warnings"]))
 
     def test_missing_package_exposes_non_native_missing_state(self):
         with (
@@ -114,6 +190,11 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
             patch.object(runtime_diagnostics.importlib.metadata, "version", return_value="0.3.46") as version,
             patch.object(runtime_diagnostics, "_module_available", return_value=True),
             patch.object(runtime_diagnostics, "_host_accelerator", return_value=None),
+            patch.object(
+                runtime_diagnostics,
+                "_run_native_probe",
+                return_value=(NATIVE_CUDA, None),
+            ) as native_probe,
         ):
             first = runtime_diagnostics.get_gguf_runtime_diagnostics()
             second = runtime_diagnostics.get_gguf_runtime_diagnostics()
@@ -122,6 +203,7 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(second, refreshed)
         self.assertEqual(version.call_count, 2)
+        self.assertEqual(native_probe.call_count, 2)
 
 
 if __name__ == "__main__":

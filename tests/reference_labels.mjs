@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import {referenceTextRemapper} from "../web/reference_labels.js";
 import {newSequence, effectiveMedia} from "../web/sequence_state.js";
+import {msg} from "../web/i18n.js";
 
 const picture=(id,n)=>({id,mode:"Reference",type:"image",reference:`<Picture ${n}>`});
 
@@ -28,8 +29,8 @@ test("Reference media updates remap Single text and undo baselines without rewri
   const studio={mode:"Reference",assets:before,modeDrafts:{Reference:{brief:"<Picture 2>",prompt:"<Picture 1>"}},
     lastModelPrompt:"<Picture 2>",refineRestore:{prompt:"<Picture 2>",lastModelPrompt:"<Picture 1>"},
     root:{querySelector:s=>fields.get(s)},sequence:{state:sequence}};
-  const accept=new Function("studio","referenceTextRemapper","promptLengthMeta","updateBriefLayout","renderPromptHighlights","syncModifiedState","saveCurrentModeDraft","saveModeDrafts","localStorage","showToast",handler+";return acceptMediaAssets;")(
-    studio,referenceTextRemapper,s=>String(s?.length||0),()=>{},()=>{},()=>{},()=>{},()=>{},null,(...args)=>notices.push(args));
+  const accept=new Function("studio","referenceTextRemapper","promptLengthMeta","updateBriefLayout","renderPromptHighlights","syncModifiedState","saveCurrentModeDraft","saveModeDrafts","localStorage","showToast","msg",handler+";return acceptMediaAssets;")(
+    studio,referenceTextRemapper,s=>String(s?.length||0),()=>{},()=>{},()=>{},()=>{},()=>{},null,(...args)=>notices.push(args),msg);
   accept(after);
   for(const key of ["[data-video-brief]","[data-output]","[data-refine-instruction]"])assert.equal(fields.get(key).value,"<Picture 1> beside <Missing Picture 1>");
   assert.equal(studio.lastModelPrompt,"<Picture 1>");assert.equal(studio.refineRestore.lastModelPrompt,"<Missing Picture 1>");

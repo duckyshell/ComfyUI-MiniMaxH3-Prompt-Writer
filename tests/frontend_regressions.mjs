@@ -2,14 +2,23 @@ import "./focus_lifecycle.mjs";
 import "./reference_labels.mjs";
 import "./draft_files.mjs";
 import "./desktop_notifications.mjs";
+import { Window } from "happy-dom";
 import { generationButtonMarkup } from "../web/writer_controls.js";
 import { aspectRatioMarkup, splitMenuMarkup } from "../web/writer_controls.js";
+import { configureI18n, localizedError, messageText, msg, setLanguagePreference, t } from "../web/i18n.js";
+import { writeToastContent } from "../web/toast.js";
+import { writeStatusContent } from "../web/status.js";
+import { settingsMarkup, generateModelSummaryMarkup } from "../web/settings.js";
+import { messages as en } from "../web/locales/en.js";
+import { messages as zhCN } from "../web/locales/zh-CN.js";
+import { autoVramControlMarkup } from "../web/vram_handoff.js";
 import './media_visual.mjs';
 import './sequence.mjs';
 import "./writer_async.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
 import "./composer_geometry.mjs";
 import "./editor_geometry.mjs";
 import "./editor_interactions.mjs";
@@ -23,18 +32,14 @@ const { availableReferenceTags, comfyVramIsAlreadyEmpty, createSessionId, fileCo
 const responseSource = await readFile(new URL("../web/api/response.js", import.meta.url), "utf8");
 const responseEncoded = Buffer.from(responseSource).toString("base64");
 const { readApiResponse } = await import(`data:text/javascript;base64,${responseEncoded}`);
-const vramHandoffSource = await readFile(new URL("../web/vram_handoff.js", import.meta.url), "utf8");
-const vramHandoffEncoded = Buffer.from(vramHandoffSource).toString("base64");
 const {
-  AUTO_VRAM_TOOLTIP,
-  autoVramControlMarkup,
   createVramHandoffCoordinator,
   installVramHandoff,
   isLocalOllamaHost,
   releaseComfyVramWhenIdle,
   unloadWriterModels,
   writerResidencyTargets,
-} = await import(`data:text/javascript;base64,${vramHandoffEncoded}`);
+} = await import("../web/vram_handoff.js");
 const stateSource = await readFile(new URL("../web/studio_state.js", import.meta.url), "utf8");
 const stateEncoded = Buffer.from(stateSource).toString("base64");
 const {
@@ -78,11 +83,11 @@ const {
   isPersistedDraftMode,
   resetModeDraft,
 } = await import(`data:text/javascript;base64,${stateEncoded}`);
-const settingsSource = await readFile(new URL("../web/settings.js", import.meta.url), "utf8");
-const settingsEncoded = Buffer.from(settingsSource).toString("base64");
-const { settingsMarkup } = await import(`data:text/javascript;base64,${settingsEncoded}`);
 const mainSource = await readFile(new URL("../web/main.js", import.meta.url), "utf8");
+const vramHandoffSource = await readFile(new URL("../web/vram_handoff.js", import.meta.url), "utf8");
 const composerSource = await readFile(new URL("../web/media_composer.js", import.meta.url), "utf8");
+const editorSource = await readFile(new URL("../web/media_editor.js", import.meta.url), "utf8");
+const floatingSource = await readFile(new URL("../web/floating_media.js", import.meta.url), "utf8");
 const styleModules = [
   "tokens",
   "themes/dark",
@@ -384,8 +389,9 @@ test("Queue invalidates Writer attempts synchronously and tracked requests remai
 test("Auto VRAM markup is absent outside ComfyUI and carries the approved tooltip", () => {
   assert.equal(autoVramControlMarkup(false), "");
   const markup = autoVramControlMarkup(true);
-  assert.match(markup, />Auto VRAM<\/label>/);
-  assert.match(markup, new RegExp(AUTO_VRAM_TOOLTIP.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(markup, /data-i18n="vram\.auto_label">Auto VRAM<\/span>/);
+  assert.match(markup, /data-i18n-title="vram\.auto_tooltip"/);
+  assert.match(markup, new RegExp(en["vram.auto_tooltip"].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("replacing a persistent media listener prevents duplicate dispatch", () => {
@@ -513,8 +519,7 @@ test("technical errors reuse workspace-click dismissal without closing on the op
 
 test("Thinking fallback suggests more context only when Direct GGUF was context-limited", () => {
   assert.match(mainSource, /result\.thinking_budget_reduced[\s\S]{0,160}studio\.selectedModel\?\.family === "gguf"/);
-  assert.match(mainSource, /A larger Context setting can give Thinking more room\./);
-  assert.match(mainSource, /Thinking used its full token budget\./);
+  assert.match(mainSource, /msg\(`thinking\.fallback\.\$\{contextBound \? "context" : "budget"\}\.\$\{output\}`\)/);
   assert.doesNotMatch(mainSource, /Thinking reached its budget —/);
 });
 
@@ -535,6 +540,7 @@ test("user preferences persist only stable non-secret settings", () => {
     musicLyricsUseBrief: false,
     fullscreen: true,
     vramHandoff: true,
+    vramHandoffChosen: true,
     theme: "light",
     interfaceSize: "125",
     selectedModel: { id: "api::secret-connection::model", api_connection_id: "secret-connection" },
@@ -564,6 +570,7 @@ test("user preferences persist only stable non-secret settings", () => {
     music_lyrics_use_brief: false,
     fullscreen: true,
     vram_handoff: true,
+    vram_handoff_chosen: true,
     theme: "light",
     interface_size: "125",
   });
@@ -604,7 +611,8 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     direct_reasoning_effort: "auto",
     music_lyrics_use_brief: true,
     fullscreen: false,
-    vram_handoff: false,
+    vram_handoff: true,
+    vram_handoff_chosen: false,
     theme: "dark",
     interface_size: "100",
   });
@@ -658,7 +666,8 @@ test("a clean first run defaults to Ollama while saved provider preferences rema
   const clean = createStudioState({ sessionId: "clean", storage: memoryStorage() });
   assert.equal(clean.settingsProvider, "ollama");
   assert.equal(clean.preferredProvider, "ollama");
-  assert.equal(clean.vramHandoff, false);
+  assert.equal(clean.vramHandoff, true);
+  assert.equal(clean.vramHandoffChosen, false);
   assert.equal(clean.theme, "dark");
   assert.equal(clean.interfaceSize, "100");
 
@@ -679,6 +688,33 @@ test("a clean first run defaults to Ollama while saved provider preferences rema
   });
   assert.equal(savedApi.settingsProvider, "api");
   assert.equal(savedApi.preferredProvider, "api");
+});
+
+test("Auto VRAM defaults on but an explicit opt-out persists", () => {
+  const legacy = memoryStorage({
+    [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({ version: 1, vram_handoff: false }),
+  });
+  assert.equal(loadUserPreferences(legacy).vram_handoff, true);
+  assert.equal(loadUserPreferences(legacy).vram_handoff_chosen, false);
+  assert.equal(createStudioState({ sessionId: "legacy-vram", storage: legacy }).vramHandoff, true);
+
+  const optedOut = memoryStorage({
+    [USER_PREFERENCES_STORAGE_KEY]: JSON.stringify({ version: 1, vram_handoff: false, vram_handoff_chosen: true }),
+  });
+  assert.equal(loadUserPreferences(optedOut).vram_handoff, false);
+  assert.equal(loadUserPreferences(optedOut).vram_handoff_chosen, true);
+  const optedOutState = createStudioState({ sessionId: "opted-out", storage: optedOut });
+  assert.equal(optedOutState.vramHandoff, false);
+  assert.equal(optedOutState.vramHandoffChosen, true);
+
+  const freshStorage = memoryStorage();
+  const fresh = createStudioState({ sessionId: "fresh-vram", storage: freshStorage });
+  assert.equal(fresh.vramHandoff, true);
+  fresh.vramHandoff = false;
+  fresh.vramHandoffChosen = true;
+  saveUserPreferences(freshStorage, fresh);
+  assert.equal(loadUserPreferences(freshStorage).vram_handoff, false);
+  assert.equal(loadUserPreferences(freshStorage).vram_handoff_chosen, true);
 });
 
 test("audio notice triggers once per global zero-to-present transition", () => {
@@ -736,7 +772,7 @@ test("Reference insertion uses the caret without replacing selected text and emi
 });
 
 test("Audio added notice remains visible for six seconds", () => {
-  assert.match(mainSource, /"Audio added"[\s\S]{0,280}\{ durationMs: 6000 \}/);
+  assert.match(mainSource, /msg\("toast\.media\.audio_added\.title"\)[\s\S]{0,280}\{ durationMs: 6000 \}/);
 });
 
 test("mode drafts round trip prompts longer than 16k without truncation", () => {
@@ -774,9 +810,9 @@ test("clear prompts removes brief and generated output while preserving lyrics a
     lyrics: "[Verse]\nKeep these lyrics",
     marker: "preserved",
   });
-  assert.match(mainSource, /data-clear-media><strong>Clear media<\/strong>/);
-  assert.match(mainSource, /data-clear-prompts><strong>Clear prompts<\/strong><small>Keep media<\/small>/);
-  assert.match(mainSource, /data-clear-all><strong>Clear all<\/strong><small>Media and prompts<\/small>/);
+  assert.match(mainSource, /data-clear-media><strong data-i18n="workspace\.clear_media">Clear media<\/strong>/);
+  assert.match(mainSource, /data-clear-prompts><strong data-i18n="workspace\.clear_prompts">Clear prompts<\/strong><small data-i18n="workspace\.keep_media">Keep media<\/small>/);
+  assert.match(mainSource, /data-clear-all><strong data-i18n="workspace\.clear_all">Clear all<\/strong><small data-i18n="workspace\.clear_all_note">Media and prompts<\/small>/);
   assert.match(mainSource, /if \(!await clearCurrentMedia\(\{ notify: false \}\)\) return;/);
   assert.match(stylesSource, /\.h3ps-clear-control \{[^}]*display: inline-flex;[^}]*border-radius: 7px;/);
   assert.match(stylesSource, /\.h3ps-clear-menu \{[^}]*right: -20px;[^}]*width: max-content;[^}]*max-width: calc\(100vw - 24px\);/);
@@ -880,22 +916,49 @@ test("studio state owns model, runtime, lifecycle, and System Prompt settings", 
   assert.equal(systemPromptProfile("Music3Lyrics"), "music3_lyrics");
   assert.equal(currentSystemPromptOverride(state, "Reference"), "Custom reference");
 
+  state.keepModelLoaded = true;
   selectModelState(state, { id: "direct-model", family: "gguf", capabilities: { audio: true } });
   assert.equal(state.settingsProvider, "direct");
   assert.equal(state.audioSupported, true);
+  assert.equal(state.keepModelLoaded, true);
 
+  state.keepModelLoaded = true;
   selectModelState(state, { id: "ollama::gemma4:12b", family: "ollama", remote_model: "gemma4:12b", capabilities: { audio: false } });
   assert.equal(state.settingsProvider, "ollama");
+  assert.equal(state.keepModelLoaded, false);
 
+  state.keepModelLoaded = true;
   selectModelState(state, { id: "api::connection::model", family: "api", api_connection_id: "connection", remote_model: "model", capabilities: { audio: false } });
   assert.equal(state.settingsProvider, "api");
   assert.equal(state.keepModelLoaded, false);
+});
+
+test("only Direct GGUF can keep a model loaded", () => {
+  const state = createStudioState({ sessionId: "11111111-2222-4333-8444-555555555555", storage: memoryStorage() });
+  state.keepModelLoaded = true;
+  selectModelState(state, { id: "ollama::gemma", family: "ollama", remote_model: "gemma", capabilities: { audio: false } });
   assert.equal(state.keepModelLoaded, false);
+  state.keepModelLoaded = true;
+  assert.equal(buildGeneratePayload(state, { creativeBrief: "A quiet shot.", seed: 1 }).unload_after, true);
+
+  state.keepModelLoaded = true;
+  selectModelState(state, { id: "external-model", family: "external", capabilities: { audio: false } });
+  assert.equal(state.keepModelLoaded, false);
+  state.keepModelLoaded = true;
+  assert.equal(buildGeneratePayload(state, { creativeBrief: "A quiet shot.", seed: 1 }).unload_after, true);
+
+  state.keepModelLoaded = true;
+  selectModelState(state, { id: "direct-model.gguf", family: "gguf", capabilities: { audio: false } });
+  assert.equal(state.keepModelLoaded, true);
+  assert.equal(buildGeneratePayload(state, { creativeBrief: "A quiet shot.", seed: 1 }).unload_after, false);
+
+  assert.match(mainSource, /keepLoadedControl\.hidden = model\?\.family !== "gguf"/);
+  assert.match(mainSource, /if \(studio\.selectedModel\?\.family !== "gguf"\) \{/);
 });
 
 test("Reference assets replace one dropped file and append multiple dropped files", () => {
-  assert.match(mainSource, /class="h3ps-replace-asset"[^>]*data-replace-asset="\$\{asset\.id\}"[^>]*aria-label="Replace[^>]*>\$\{icon\("refresh", 12\)\}<\/button>/);
-  assert.match(mainSource, /class="h3ps-remove-asset"[^>]*data-remove-asset="\$\{asset\.id\}"/);
+  assert.match(mainSource, /class="h3ps-replace-asset"[^>]*data-replace-asset="\$\{asset\.id\}"[^>]*aria-label="\$\{t\("media\.replace", \{ name: assetName \}\)\}"/);
+  assert.match(mainSource, /class="h3ps-remove-asset"[^>]*data-remove-asset="\$\{asset\.id\}"[^>]*aria-label="\$\{t\("media\.remove", \{ name: assetName \}\)\}"/);
   assert.doesNotMatch(mainSource, /data-asset-menu|data-asset-menu-toggle|data-preview-asset|icon\("dots"/);
   assert.doesNotMatch(mainSource, /asset\.mode !== "Reference"[^\n]+data-replace-asset/);
   assert.match(mainSource, /input\.multiple = !replaceAssetId/);
@@ -911,6 +974,16 @@ test("Reference assets replace one dropped file and append multiple dropped file
   assert.equal(replacementTargetForFileDrop("asset-2", 2), null);
 });
 
+test("media panel templates translate inline so labels are localized on first render", () => {
+  assert.match(mainSource, /<strong data-i18n="media\.empty_t2va_title">\$\{t\("media\.empty_t2va_title"\)\}<\/strong>/);
+  assert.match(mainSource, /<small data-i18n="media\.empty_t2va_hint">\$\{t\("media\.empty_t2va_hint"\)\}<\/small>/);
+  assert.match(mainSource, /<span data-i18n="media\.filter_all">\$\{t\("media\.filter_all"\)\}<\/span>/);
+  assert.match(mainSource, /<span data-i18n="media\.filter_images">\$\{t\("media\.filter_images"\)\}<\/span>/);
+  assert.match(mainSource, /<span data-i18n="media\.filter_video">\$\{t\("media\.filter_video"\)\}<\/span>/);
+  assert.match(mainSource, /<span data-i18n="media\.filter_audio">\$\{t\("media\.filter_audio"\)\}<\/span>/);
+  assert.match(mainSource, /<small data-i18n="media\.drop_files">\$\{t\("media\.drop_files"\)\}<\/small>/);
+});
+
 test("media card overlays stay inside the thumbnail and below previews", () => {
   assert.match(stylesSource, /\.h3ps-duration\s*\{[^}]*position:\s*absolute;[^}]*right:\s*7px;[^}]*bottom:\s*49px;/);
   assert.match(stylesSource, /\.h3ps-replace-asset, \.h3ps-remove-asset \{[^}]*width:\s*22px;[^}]*height:\s*22px;/);
@@ -924,7 +997,7 @@ test("media card overlays stay inside the thumbnail and below previews", () => {
 
 test("Actions keeps media tools ordered and explains unavailable states without hiding Compose", async () => {
   const { mediaVisualDescriptor } = await import("../web/media_visual.js");
-  const markup = mainSource.slice(mainSource.indexOf('${splitMenuMarkup(icon, {label: "Actions"'), mainSource.indexOf('<p class="h3ps-section-hint"'));
+  const markup = mainSource.slice(mainSource.indexOf('${splitMenuMarkup(icon, {label:'), mainSource.indexOf('<p class="h3ps-section-hint"'));
   assert.match(markup, /data-media-panel-action[\s\S]*data-open-composer[\s\S]*<hr data-compose-separator>[\s\S]*data-clear-media[\s\S]*data-clear-prompts[\s\S]*data-clear-all/);
   assert.doesNotMatch(markup, /data-open-composer[^>]*hidden|data-compose-separator[^>]*hidden/);
   assert.match(stylesSource, /\.h3ps-clear-menu button:disabled \{ opacity: .45; cursor: default;/);
@@ -933,7 +1006,7 @@ test("Actions keeps media tools ordered and explains unavailable states without 
     querySelector: selector => selector === "[data-media-panel-action]" ? panel : compose,
   } };
   const controlSource = mainSource.slice(mainSource.indexOf("function referenceComposerAssets("), mainSource.indexOf("async function addComposedPicture("));
-  const sync = new Function("studio", "mediaVisualDescriptor", controlSource + ";return syncComposerControl;")(studio, mediaVisualDescriptor);
+  const sync = new Function("studio", "mediaVisualDescriptor", "t", controlSource + ";return syncComposerControl;")(studio, mediaVisualDescriptor, t);
   sync();
   assert.equal(panel.disabled, true); assert.equal(panel.title, "Add media first");
   assert.equal(compose.disabled, true); assert.equal(compose.title, "Add a Picture or Video first");
@@ -969,13 +1042,13 @@ test("Media Composer creates an independent Picture from prepared visual sources
   assert.match(composerSource, /ctx\.drawImage\(bitmap,it\.x,it\.y,it\.w,it\.h\)/);
   assert.doesNotMatch(composerSource, /\bCover\b|background selector|transform:\s*scale/);
   assert.match(composerSource, /\["auto", "Auto"\]/);
-  assert.match(composerSource, /data-value="auto">Auto<\/button><button type="button" data-value="2">2 cols<\/button><button type="button" data-value="3">3 cols<\/button><button type="button" data-value="grid">Grid<\/button>/);
+  assert.match(composerSource, /data-value="auto" data-i18n="common\.auto">\$\{t\("common\.auto"\)\}<\/button><button type="button" data-value="2" data-i18n="media\.composer\.cols2">\$\{t\("media\.composer\.cols2"\)\}<\/button><button type="button" data-value="3" data-i18n="media\.composer\.cols3">\$\{t\("media\.composer\.cols3"\)\}<\/button><button type="button" data-value="grid" data-i18n="media\.composer\.grid">\$\{t\("media\.composer\.grid"\)\}<\/button>/);
   assert.match(composerSource, /if\(d\.type==="resize"\)[\s\S]{0,240}d\.it\.weight=/);
   assert.match(composerSource, /if \(r\) \{ W=Math\.max\(reqW, reqH\*r\)/);
   assert.match(composerSource, /drawOutput\(canvas\.getContext\("2d"\),r\.W,r\.H,false\)/);
-  assert.match(composerSource, /data-copy[^>]*aria-label="Copy PNG">\$\{i\("copy", 14\)\}<\/button>/);
+  assert.match(composerSource, /data-copy[^>]*aria-label="\$\{t\("media\.composer\.copy_png"\)\}"[^>]*data-i18n-aria-label="media\.composer\.copy_png">\$\{i\("copy", 14\)\}<\/button>/);
   assert.match(composerSource, /ClipboardItem\(\{"image\/png":png\}\)/);
-  assert.match(composerSource, /data-download[^>]*>\$\{i\("download", 13\)\}Download<\/button>/);
+  assert.match(composerSource, /data-download>\$\{i\("download", 13\)\}<span data-i18n="media\.composer\.download">\$\{t\("media\.composer\.download"\)\}<\/span><\/button>/);
   assert.match(composerSource, /URL\.createObjectURL\(payload\.blob\)/);
   assert.doesNotMatch(composerSource, /showReferenceLabels|referenceLabelRect|drawReferenceLabels|data-reference-labels/);
   assert.doesNotMatch(composerSource, /data-label-layer/);
@@ -985,6 +1058,17 @@ test("Media Composer creates an independent Picture from prepared visual sources
   assert.match(styleSources.composer, /caption-inline textarea\{[^}]*color:var\(--h3ps-canvas-text\)/);
   assert.match(styleSources.composer, /\.h3ps-cmp-source\{cursor:grab/);
   assert.doesNotMatch(styleSources.composer, /\.h3ps-cmp-source\{height:104px/);
+});
+
+test("media tools translate their own subtrees and refresh dynamic labels", () => {
+  for (const source of [composerSource, editorSource, floatingSource]) {
+    assert.match(source, /import \{[^}]*onLocaleChange[^}]*\} from "\.\/i18n\.js"/);
+    assert.match(source, /translateDom\(/);
+    assert.match(source, /offLocale\(\)/);
+  }
+  assert.match(composerSource, /data-i18n="media\.composer\.title"/);
+  assert.match(editorSource, /data-i18n="media\.editor\.title"/);
+  assert.match(floatingSource, /data-i18n="media\.float\.title"/);
 });
 
 test("VRAM retry waits for the required free-memory target", () => {
@@ -1025,15 +1109,28 @@ test("Direct Thinking is disabled when the GGUF template has no detected control
 
 test("External llama.cpp keeps reasoning under server control", () => {
   assert.match(mainSource, /externalManaged = studio\.selectedModel\?\.family === "external"/);
-  assert.match(mainSource, /Thinking is controlled by the external llama\.cpp server\./);
-  assert.match(mainSource, /--reasoning on --reasoning-effort low/);
-  assert.match(mainSource, /external \? null : `Thinking/);
+  assert.match(mainSource, /t\("runtime\.thinking_external"\)/);
+  assert.match(mainSource, /external \? null : msg\("toast\.generation\.thinking"/);
   assert.match(stateSource, /state\.selectedModel\?\.family === "external" \? false : state\.thinking/);
+});
+
+test("external connection toast falls back when context tokens are absent or non-numeric", () => {
+  const helper = mainSource.match(/^function externalConnectedContextTokens\(model\) \{[\s\S]*?^}/m)?.[0];
+  assert.ok(helper, "external context guard helper is present");
+  const context = vm.createContext({});
+  vm.runInContext(helper, context);
+  assert.equal(context.externalConnectedContextTokens({ context_verified: true, server_context_tokens: 16384 }), 16);
+  assert.equal(context.externalConnectedContextTokens({ context_verified: true, server_context_tokens: "16384" }), null);
+  assert.equal(context.externalConnectedContextTokens({ context_verified: true }), null);
+  assert.equal(context.externalConnectedContextTokens({ context_verified: false, server_context_tokens: 16384 }), null);
+  assert.match(mainSource, /connectedContextTokens !== null[\s\S]{0,250}toast\.external\.connected\.message_context/);
+  assert.match(mainSource, /: msg\("toast\.external\.connected\.message", \{ model: result\.model\.name \}\)/);
 });
 
 test("External llama.cpp offers capability-driven two-way Auto VRAM", () => {
   assert.match(mainSource, /\["gguf", "external"\]\.includes\(model\?\.family\)/);
-  assert.match(AUTO_VRAM_TOOLTIP, /lifecycle-capable External llama\.cpp routers/);
+  assert.match(en["vram.auto_tooltip"], /lifecycle-capable External llama\.cpp routers/);
+  assert.doesNotMatch(vramHandoffSource, /AUTO_VRAM_TOOLTIP/);
 
   const queueHandoffStart = mainSource.indexOf("async function unloadWriterModelsBeforeQueue(signal)");
   const queueHandoffEnd = mainSource.indexOf("\nfunction showVramHandoffQueueError", queueHandoffStart);
@@ -1046,7 +1143,8 @@ test("External llama.cpp offers capability-driven two-way Auto VRAM", () => {
 
 test("verified router manual Unload stays visible across residency refreshes",()=>{
   const start=mainSource.indexOf('function lifecycleTargets()'), end=mainSource.indexOf('function syncLifecycleActions',start);
-  const render=new Function('studio','escapeHtml',mainSource.slice(start,end)+'; return lifecycleTargets().map(t=>lifecycleButtonMarkup(t)).join("");');
+  const renderSource=new Function('studio','escapeHtml','t','msg','messageText',mainSource.slice(start,end)+'; return lifecycleTargets().map(t=>lifecycleButtonMarkup(t)).join("");');
+  const render=(studio,escapeHtml)=>renderSource(studio,escapeHtml,t,msg,messageText);
   const id='external::local::writer';
   for (const [state,owned,enabled] of [['loaded',true,true],['sleeping',false,true],['loading',true,false],['unloading',true,false],['unloaded',false,false],['unknown',true,true],['unknown',false,false]]) {
     const html=render({selectedModel:{id,family:'external',lifecycle_supported:true},promptResidency:{direct:null,ollama:[],external:[{model_id:id,state,writer_owned:owned}]}},String);
@@ -1247,7 +1345,10 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(markup, /API providers/);
   assert.match(markup, /data-installed-model/);
   assert.match(markup, /Installed models/);
-  assert.match(markup, /h3ps-installed-model-heading">Select Model/);
+  assert.match(markup, /h3ps-installed-model-heading" data-i18n="settings\.select_model">Select Model/);
+  assert.match(markup, /data-i18n-placeholder="settings\.enter_tokens"/);
+  assert.match(markup, /data-i18n-aria-label="settings\.provider_aria"/);
+  assert.match(markup, /data-i18n-aria-label="settings\.installed_model_aria"/);
   assert.doesNotMatch(markup, /Model used for Direct GGUF/);
   assert.match(markup, /data-model-refresh/);
   assert.match(markup, /data-model-scan-slot/);
@@ -1257,18 +1358,18 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.doesNotMatch(markup, /Prompt models/);
   assert.doesNotMatch(markup, /data-model-menu/);
   assert.doesNotMatch(markup, /<strong>Context<\/strong>/);
-  assert.match(mainSource, /llama-cpp-python is not installed/);
+  assert.match(mainSource, /t\("models\.runtime_missing_title"\)/);
   assert.match(mainSource, /data-copy-direct-runtime-command/);
-  assert.match(mainSource, /Close ComfyUI, run this from your ComfyUI Portable folder/);
-  assert.match(mainSource, /Installation guide ↗/);
-  assert.match(mainSource, /Troubleshooting guide ↗/);
-  assert.match(mainSource, /llama-cpp-python is installed, but the runtime is not usable/);
-  assert.match(mainSource, /diagnostics\.gpu_offload === false[\s\S]{0,100}"Runtime detected"/);
-  assert.match(mainSource, /Runtime update required/);
-  assert.match(mainSource, /Runtime \$\{requirement\.minimum_version\}\+ required/);
+  assert.match(mainSource, /t\("models\.restart_before"\)/);
+  assert.match(mainSource, /t\("models\.installation_guide"\)/);
+  assert.match(mainSource, /t\("models\.troubleshooting_guide"\)/);
+  assert.match(mainSource, /t\("models\.runtime_broken_title"\)/);
+  assert.match(mainSource, /diagnostics\.gpu_offload === false[\s\S]{0,100}t\("models\.runtime_detected"\)/);
+  assert.match(mainSource, /t\("models\.runtime_update_required"\)/);
+  assert.match(mainSource, /t\("models\.update_suffix", \{ version: requirement\.minimum_version \}\)/);
   assert.match(mainSource, /install_or_upgrade_command/);
   assert.doesNotMatch(mainSource, /dependency !== "llama-cpp-python"/);
-  assert.match(mainSource, /Troubleshooting ↗/);
+  assert.match(mainSource, /t\("models\.troubleshooting"\)/);
   assert.match(mainSource, /refreshGGUFRuntimeDiagnostics\(\)/);
   assert.match(markup, /h3ps-model-icon h3ps-provider-icon[^>]+data-provider-icon="direct"/);
   assert.match(mainSource, /runtimeSettings\.hidden = !\["direct", "ollama"\]\.includes\(provider\)/);
@@ -1276,23 +1377,23 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   assert.match(mainSource, /studio\.selectedModel\?\.family === "gguf"/);
   assert.doesNotMatch(mainSource, /\/api\/pull/);
   assert.doesNotMatch(mainSource, /Install .*Gemma|Cancel download|Downloading model/i);
-  assert.match(mainSource, /Compatible · not yet H3-tested/);
+  assert.match(mainSource, /t\("providers\.ollama\.not_tested"\)/);
   assert.match(mainSource, /data-copy-ollama-command/);
-  assert.match(mainSource, /Choose a model for your GPU/);
+  assert.match(mainSource, /t\("providers\.ollama\.choose_gpu"\)/);
   assert.match(mainSource, /<code>\$\{escapeHtml\(command\)\}<\/code>/);
   assert.match(mainSource, /h3ps-ollama-model-state/);
   assert.match(mainSource, /is-detected/);
-  assert.match(mainSource, /Detected/);
+  assert.match(mainSource, /t\("providers\.ollama\.detected"\)/);
   assert.doesNotMatch(mainSource, /Recommended for your GPU|Lighter model|Larger model/);
   assert.match(mainSource, /data-ollama-model/);
   assert.match(mainSource, /data-ollama-add-model/);
-  assert.match(mainSource, /\+ Add model/);
+  assert.match(mainSource, /t\("providers\.ollama\.add_model"\)/);
   assert.match(skinSource, /h3ps-root \.h3ps-ollama-add-model-toggle[^}]+color: var\(--h3ps-accent-strong\)[^}]+font-size: var\(--h3ps-font-label-sm\)[^}]+cursor: pointer/);
   assert.match(skinSource, /h3ps-ollama-model-select select[\s\S]{0,900}background-position: right 12px center[\s\S]{0,300}cursor: pointer/);
   assert.match(skinSource, /h3ps-api-model-select select[\s\S]{0,900}background-position: right 12px center[\s\S]{0,300}cursor: pointer/);
-  assert.match(mainSource, /Choose another tested model/);
+  assert.match(mainSource, /t\("providers\.ollama\.choose_another"\)/);
   assert.match(mainSource, /studio\.ollamaAddModelOpen = !studio\.ollamaAddModelOpen/);
-  assert.match(mainSource, /Need models on another drive\?/);
+  assert.match(mainSource, /t\("providers\.ollama\.storage_title"\)/);
   assert.match(mainSource, /OLLAMA_MODELS/);
   assert.match(mainSource, /syncOllamaAutoDetection/);
   assert.match(mainSource, /setTimeout\(\(\) => refreshOllama\(\{ automatic: true \}\), 4000\)/);
@@ -1304,10 +1405,160 @@ test("Settings separates providers, installed models, diagnostics, and verified 
   }
   assert.doesNotMatch(mainSource, /h3ps-provider-icon">[SO]<\/span>/);
   assert.match(mainSource, /data-api-provider-form/);
-  assert.match(mainSource, /The key is sent once to the local H3 backend/);
-  assert.match(mainSource, /Reasoning provider managed/);
+  assert.match(mainSource, /t\("providers\.api\.key_hint"\)/);
+  assert.match(mainSource, /t\("toast\.generation\.reasoning_managed"\)/);
   assert.match(mainSource, /label\.hidden = apiManaged/);
   assert.doesNotMatch(mainSource, /credential_source|environment_name|Not analyzed locally|Exclude from AI analysis|data-analysis-asset/);
+});
+
+test("provider panels are translation-driven", () => {
+  assert.match(mainSource, /noteKey: "providers\.api\.note\.gemini"/);
+  assert.match(mainSource, /function apiProviderName\(provider\)/);
+  assert.match(mainSource, /t\("providers\.external\.connect_hint"\)/);
+  assert.match(mainSource, /t\("providers\.ollama\.get_title"\)/);
+  assert.match(mainSource, /t\("providers\.api\.disclosure_title"\)/);
+  assert.match(mainSource, /showErrorToast\("toast\.api\.failed\.title"/);
+  const refreshStart = mainSource.indexOf("const refreshLocalizedUi = () => {");
+  const refreshEnd = mainSource.indexOf("onLocaleChange(() => {", refreshStart);
+  assert.ok(refreshStart >= 0 && refreshEnd > refreshStart, "locale refresh hook is present");
+  assert.match(mainSource.slice(refreshStart, refreshEnd), /syncProviderPanelCopy\(\);/);
+});
+
+test("provider panel copy follows locale changes without replacing form state", () => {
+  const panelWindow = new Window();
+  const panelRoot = panelWindow.document.createElement("div");
+  panelWindow.document.body.append(panelRoot);
+  const panelStart = mainSource.indexOf("function renderExternalServerControl()");
+  const panelEnd = mainSource.indexOf("function setOtherModelsPopover(");
+  assert.ok(panelStart >= 0 && panelEnd > panelStart, "provider panel render functions are present");
+  const state = {
+    root: panelRoot,
+    externalModel: {
+      name: "meta/llama",
+      endpoint: "http://127.0.0.1:8080",
+      remote_model: "llama",
+      server_context_tokens: 16384,
+      context_verified: true,
+    },
+    externalServerConfig: { url: "http://127.0.0.1:8080", model: "llama" },
+    externalServerError: null,
+    ollamaHost: "http://127.0.0.1:11434",
+    ollamaHostSettingsOpen: false,
+    ollamaStorageHelpOpen: false,
+    ollamaAddModelOpen: false,
+    ollamaStatus: {
+      state: "ready",
+      version: "0.9.1",
+      compatible_models: [
+        { id: "ollama:alpha", remote_model: "alpha", name: "alpha", tested_for_h3: false },
+        { id: "ollama:beta", remote_model: "beta", name: "beta", tested_for_h3: true, thinking_detected: true },
+      ],
+    },
+    ollamaModelName: "alpha",
+    gpuMemory: { total_mb: 8192 },
+    apiProviderConfig: { preset: "gemini", gemini_reasoning_effort: "minimal" },
+    apiProviderPresets: [],
+    apiProviderConnection: {
+      provider_name: "Gemini",
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      key_hint: "",
+      connection_verified: true,
+      reasoning_effort: "minimal",
+    },
+    apiProviderModels: [{
+      id: "api:gemini:gemini-2.5-pro",
+      remote_model: "gemini-2.5-pro",
+      name: "gemini-2.5-pro",
+      capabilities: { images: true },
+      model_context_limit: 1048576,
+    }],
+    apiProviderError: null,
+  };
+  const factory = new Function(
+    "studio", "t", "escapeHtml", "icon", "DEFAULT_OLLAMA_HOST", "detectedVramTier", "reasoningLabel",
+    `${mainSource.slice(panelStart, panelEnd)}
+     return { renderExternalServerControl, renderOllamaProviderControl, renderApiProviderControl, syncProviderPanelCopy };`,
+  );
+  const escape = (value) => String(value)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const panels = factory(
+    state,
+    t,
+    escape,
+    (name) => `<svg data-icon="${name}"></svg>`,
+    "http://127.0.0.1:11434",
+    () => "under-8",
+    (value) => (value === "auto" ? t("settings.auto") : value[0].toUpperCase() + value.slice(1)),
+  );
+  configureI18n({ preference: "en", root: panelRoot, navigatorLanguage: "en-US" });
+  try {
+    panelRoot.innerHTML = `
+      <div data-external-provider-control>${panels.renderExternalServerControl()}</div>
+      <div data-ollama-provider-control>${panels.renderOllamaProviderControl()}</div>
+      <div data-api-provider-control>${panels.renderApiProviderControl()}</div>`;
+    const externalForm = panelRoot.querySelector("[data-external-server-form]");
+    const modelInput = externalForm.querySelector('input[name="model"]');
+    externalForm.querySelector('input[name="url"]').value = "http://10.0.0.9:8080";
+    modelInput.value = "draft-model";
+    externalForm.querySelector('input[name="api_key"]').value = "draft-key";
+    modelInput.focus();
+    modelInput.setSelectionRange(2, 6);
+    const ollamaSelect = panelRoot.querySelector("[data-ollama-model]");
+    ollamaSelect.selectedIndex = 1;
+    assert.equal(panelRoot.querySelector('[data-provider-dynamic="external-state"]').textContent, "http://127.0.0.1:8080 · 16K context");
+    assert.equal(panelRoot.querySelector('[data-provider-dynamic="ollama-version"]').textContent, "Version 0.9.1 · local service");
+    assert.equal(panelRoot.querySelector(".h3ps-api-disclosure strong").textContent, "What leaves this computer");
+
+    setLanguagePreference("zh-CN");
+    panels.syncProviderPanelCopy();
+
+    assert.equal(panelRoot.querySelector('[data-provider-dynamic="external-state"]').textContent, "http://127.0.0.1:8080 · 16K 上下文");
+    assert.equal(panelRoot.querySelector(".h3ps-external-connection-status > em").textContent, "已连接");
+    assert.equal(panelRoot.querySelector("[data-external-server-form] small").textContent, "仅限本机。上下文与 KV 缓存由服务器管理。模型生命周期控制需要 llama.cpp 路由器。");
+    assert.equal(panelRoot.querySelector('[data-external-server-form] button[type="submit"]').textContent, "重新连接");
+    assert.equal(panelRoot.querySelector('[data-external-server-form] input[name="model"]').placeholder, "服务器列出多个模型时必填");
+    assert.equal(panelRoot.querySelector('[data-provider-dynamic="ollama-version"]').textContent, "版本 0.9.1 · 本地服务");
+    assert.equal(panelRoot.querySelector(".h3ps-api-disclosure strong").textContent, "哪些数据会离开此电脑");
+    assert.equal(panelRoot.querySelector(".h3ps-api-badges span:last-child").textContent, "供应商管理");
+    assert.match(panelRoot.querySelector('[data-provider-dynamic="api-connected-meta"]').textContent, /无密钥$/);
+    assert.equal(externalForm.querySelector('input[name="url"]').value, "http://10.0.0.9:8080");
+    assert.equal(modelInput.value, "draft-model");
+    assert.equal(externalForm.querySelector('input[name="api_key"]').value, "draft-key");
+    assert.equal(panelWindow.document.activeElement, modelInput);
+    assert.equal(modelInput.selectionStart, 2);
+    assert.equal(modelInput.selectionEnd, 6);
+    assert.equal(ollamaSelect.selectedIndex, 1);
+    assert.equal(ollamaSelect.value, "beta");
+
+    state.apiProviderConnection = null;
+    state.apiProviderConfig = {
+      preset: "custom",
+      base_url: "",
+      model_id: "",
+      gemini_reasoning_effort: "minimal",
+      custom_images: false,
+      custom_context_tokens: null,
+    };
+    const customContainer = panelWindow.document.createElement("div");
+    panelRoot.append(customContainer);
+    customContainer.innerHTML = `<div data-api-provider-control>${panels.renderApiProviderControl()}</div>`;
+    const customPreset = customContainer.querySelector('[data-api-preset="custom"]');
+    assert.equal(customPreset.querySelector("strong").textContent, "自定义");
+    assert.equal(customContainer.querySelector(".h3ps-api-intro strong").textContent, "连接 自定义");
+    setLanguagePreference("en");
+    panels.syncProviderPanelCopy();
+    assert.equal(customPreset.querySelector("strong").textContent, "Custom");
+    assert.equal(customContainer.querySelector(".h3ps-api-intro strong").textContent, "Connect Custom");
+
+    state.apiProviderError = { message: "boom" };
+    customContainer.innerHTML = `<div data-api-provider-control>${panels.renderApiProviderControl()}</div>`;
+    assert.equal(customContainer.querySelector(".h3ps-api-error strong").textContent, "Connection failed");
+    setLanguagePreference("zh-CN");
+    panels.syncProviderPanelCopy();
+    assert.equal(customContainer.querySelector(".h3ps-api-error strong").textContent, "连接失败");
+  } finally {
+    configureI18n({ preference: "en", root: panelRoot, navigatorLanguage: "en-US" });
+  }
 });
 
 test("Reference defaults use plain Picture 1 and Video 1 text while canonical tags remain user-authored", () => {
@@ -1337,8 +1588,10 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.match(mainSource, /data-thinking/);
   assert.match(mainSource, /data-keep-loaded/);
   assert.match(mainSource, /autoVramControlMarkup\(VRAM_HANDOFF_SUPPORTED\)/);
-  assert.match(vramHandoffSource, />Auto VRAM<\/label>/);
-  assert.match(vramHandoffSource, /data-vram-handoff-control/);
+  const vramMarkup = autoVramControlMarkup(true);
+  assert.match(vramMarkup, /data-i18n="vram\.auto_label">Auto VRAM<\/span>/);
+  assert.match(vramMarkup, /data-vram-handoff-control/);
+  assert.match(vramMarkup, /data-i18n-title="vram\.auto_tooltip"/);
   assert.match(mainSource, /isLocalOllamaHost\(studio\.ollamaHost\)/);
   assert.match(mainSource, /VRAM_HANDOFF_SUPPORTED = typeof app\?\.queuePrompt === "function"/);
   assert.match(mainSource, /installVramHandoff\(app/);
@@ -1348,37 +1601,47 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   const freeVramStart = mainSource.indexOf("async function releaseComfyVram");
   const freeVramEnd = mainSource.indexOf("function showVramRetry", freeVramStart);
   const freeVramSource = mainSource.slice(freeVramStart, freeVramEnd);
-  assert.match(freeVramSource, /finally\s*\{[\s\S]*button\.disabled = false;[\s\S]*button\.innerHTML = `\$\{icon\("memory", 15\)\}Free ComfyUI VRAM`;/);
+  assert.match(freeVramSource, /finally\s*\{[\s\S]*button\.disabled = false;[\s\S]*button\.innerHTML = `\$\{icon\("memory", 15\)\}<span data-i18n="workspace\.free_comfy_vram">\$\{t\("workspace\.free_comfy_vram"\)\}<\/span>`;/);
   assert.match(freeVramSource, /requiredFreeMb/);
   assert.match(freeVramSource, /targetReached/);
   assert.doesNotMatch(freeVramSource, /if \(typeof retry === "function"\) \{\s*shouldRetry = true/);
-  assert.match(mainSource, /Unload Ollama/);
-  assert.match(mainSource, /Unload Direct/);
-  assert.match(mainSource, /Stop & unload/);
+  assert.match(mainSource, /msg\("lifecycle\.unload_ollama"\)/);
+  assert.match(mainSource, /msg\("lifecycle\.unload_direct"\)/);
+  assert.match(mainSource, /msg\("lifecycle\.stop_unload"\)/);
   assert.doesNotMatch(mainSource, /Stop request/);
-  assert.match(mainSource, /Checking…/);
-  assert.match(mainSource, /Ollama is not running/);
-  assert.match(settingsSource, /title="Open model settings"/);
-  assert.match(settingsSource, /data-active-runtime-summary>Runtime · Auto</);
-  assert.match(settingsSource, /data-runtime-option="context" data-value="large">32K</);
-  assert.match(settingsSource, /data-runtime-option="context" data-value="maximum">48K</);
-  assert.match(settingsSource, /data-runtime-option="context" data-value="custom">Custom</);
-  assert.match(settingsSource, /Generation budget/);
-  assert.match(settingsSource, /data-direct-runtime-advanced[\s\S]*KV cache[\s\S]*Generation budget/);
-  assert.match(settingsSource, /data-reasoning-effort-control hidden/);
-  assert.match(settingsSource, /data-direct-advanced-summary>Auto</);
-  assert.match(settingsSource, /data-value="2048">2K</);
-  assert.match(settingsSource, /data-value="4096">4K</);
-  assert.match(settingsSource, /data-value="8192">8K</);
-  assert.doesNotMatch(settingsSource, /data-runtime-summary/);
-  assert.doesNotMatch(settingsSource, />Custom (Context|Generation budget)</);
+  assert.match(mainSource, /t\("providers\.ollama\.checking"\)/);
+  assert.match(mainSource, /msg\(status\.state === "not_installed" \? "toast\.ollama\.not_installed" : "toast\.ollama\.not_running"\)/);
+  const summaryMarkup = generateModelSummaryMarkup(() => "");
+  assert.match(summaryMarkup, /data-i18n-title="settings\.open_model"/);
+  assert.match(summaryMarkup, /data-i18n="models\.prompt_model"/);
+  assert.match(summaryMarkup, /data-i18n="models\.runtime_summary">Runtime · Auto</);
+  assert.match(summaryMarkup, /data-active-runtime-summary/);
+  assert.match(mainSource, /<section class="h3ps-input-panel">\s*\$\{generateModelSummaryMarkup\(icon\)\}/);
+  assert.match(mainSource, /function selectedModelCategoryLabel\(model\)/);
+  assert.match(mainSource, /if \(model\?\.family === "gguf"\) return t\("settings\.direct"\)/);
+  assert.match(mainSource, /if \(model\?\.family === "external"\) return t\("settings\.external"\)/);
+  assert.match(mainSource, /data-active-model-source[^\n]*selectedModelCategoryLabel\(model\)/);
+  assert.match(mainSource, /data-active-model-name[^\n]*model\.name\.split\("\/"\)\.pop\(\)/);
+  assert.match(stylesSource, /\.h3ps-input-panel > \.h3ps-active-model \{/);
+  assert.match(markup, /data-runtime-option="context" data-value="large">32K</);
+  assert.match(markup, /data-runtime-option="context" data-value="maximum">48K</);
+  assert.match(markup, /data-runtime-option="context" data-value="custom" data-i18n="settings\.custom">Custom</);
+  assert.match(markup, /data-i18n="settings\.generation_budget">Generation budget</);
+  assert.match(markup, /data-direct-runtime-advanced[\s\S]*data-i18n="settings\.kv_cache">KV cache[\s\S]*data-i18n="settings\.generation_budget">Generation budget/);
+  assert.match(markup, /data-reasoning-effort-control hidden/);
+  assert.match(markup, /data-direct-advanced-summary data-i18n="settings\.auto">Auto</);
+  assert.match(markup, /data-value="2048">2K</);
+  assert.match(markup, /data-value="4096">4K</);
+  assert.match(markup, /data-value="8192">8K</);
+  assert.doesNotMatch(markup, /data-runtime-summary/);
+  assert.doesNotMatch(markup, />Custom (Context|Generation budget)</);
   assert.match(mainSource, /reasoning_effort_values/);
   assert.match(mainSource, /reasoningControl\.hidden = values\.length === 0/);
   assert.match(mainSource, /Number\(studio\.reasoningEffort !== "auto" && values\.includes\(studio\.reasoningEffort\)\)/);
   assert.match(mainSource, /generationBudgetOverride = studio\.generationBudget !== "auto"/);
   assert.match(mainSource, /overrideCount = Number\(studio\.kvCache !== "auto"\)/);
   assert.match(mainSource, /Number\.isInteger\(studio\.generationBudgetTokens\)/);
-  assert.match(mainSource, /overrideCount === 1 \? "" : "s"/);
+  assert.match(mainSource, /t\(overrideCount === 1 \? "runtime\.overrides\.one" : "runtime\.overrides\.other", \{ count: overrideCount \}\)/);
   assert.match(stylesSource, /\.h3ps-runtime-picker \{ position:relative/);
   assert.match(stylesSource, /--h3ps-runtime-field-width:132px/);
   assert.match(stylesSource, /\.h3ps-runtime-custom input \{[^}]*width:12ch[^}]*appearance:textfield/);
@@ -1390,11 +1653,332 @@ test("Settings shows compact global System Prompt summaries and an on-demand edi
   assert.match(mainSource, /const availableContexts = model\.context_profiles/);
   assert.match(mainSource, /studio\.directContextProfile = "auto"/);
   assert.match(mainSource, /button\.disabled = unavailable/);
-  assert.match(mainSource, /Large model · measure locally/);
-  assert.match(mainSource, /llama-cpp-python \$\{model\.minimum_runtime\}\+/);
-  assert.match(mainSource, /"Server managed"/);
+  assert.match(mainSource, /t\("models\.large_measure"\)/);
+  assert.match(mainSource, /t\("models\.minimum_runtime", \{ version: model\.minimum_runtime \}\)/);
+  assert.match(mainSource, /t\("runtime\.server_managed"\)/);
   assert.match(mainSource, /generate\(buildGeneratePayload\(studio/);
   assert.match(mainSource, /refine\(buildRefinePayload\(studio/);
+});
+
+test("an external llama.cpp chat tab is mounted in the writer header without state loss", async () => {
+  const [chatHtml, chatCss, chatSource, markdownSource] = await Promise.all([
+    readFile(new URL("../web/llama_chat.html", import.meta.url), "utf8"),
+    readFile(new URL("../web/styles/llama_chat.css", import.meta.url), "utf8"),
+    readFile(new URL("../web/llama_chat.js", import.meta.url), "utf8"),
+    readFile(new URL("../web/markdown.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(mainSource, /chat: '<path d="M20 12a8 8 0 0 1-8 8H4l2-3\.2A8 8 0 1 1 20 12Z"\/><path d="M8 11h8m-8 3h5"\/>'/);
+  assert.match(mainSource, /<button type="button" data-workspace="chat" class="h3ps-chat-workspace" hidden title="\$\{t\("chat\.open_title"\)\}" data-i18n-title="chat\.open_title">\$\{icon\("chat", 14\)\}<span data-i18n="chat\.open">/);
+  assert.match(mainSource, /<div class="h3ps-chat-view" data-chat-view hidden>\s*<iframe class="h3ps-chat-frame" data-chat-frame/);
+  assert.match(mainSource, /const configured = Boolean\(studio\.externalServerConfig\?\.url\);/);
+  assert.match(mainSource, /const activated = Boolean\(studio\.externalModel\);/);
+  assert.match(mainSource, /const available = configured && activated;/);
+  assert.match(mainSource, /tab\.hidden = !available;/);
+  assert.match(mainSource, /frame\.src = new URL\("\.\/llama_chat\.html", import\.meta\.url\)\.href/);
+  assert.match(mainSource, /frame\.contentWindow\.postMessage\(\{ type: "h3ps-locale", locale \}, window\.location\.origin\)/);
+  assert.match(mainSource, /frame\.contentWindow\.postMessage\(\{ type: "h3ps-theme", theme \}, window\.location\.origin\)/);
+  assert.match(mainSource, /studio\.floatingMedia\?\.refresh\(\);\s*postThemeToChat\(\);/);
+  assert.match(mainSource, /chatFrame\?\.addEventListener\("load", \(\) => \{/);
+  assert.match(mainSource, /if \(studio\) studio\.chatBusy = false;/);
+  assert.match(mainSource, /syncChatFramePreferences\(\);\s*\}\);/);
+  assert.match(mainSource, /event\.data\?\.type === "h3ps-chat-busy"/);
+  assert.match(mainSource, /const busy = event\.data\.busy === true;/);
+  assert.match(mainSource, /studio\.chatBusy = busy;/);
+  assert.match(mainSource, /const writerBusy = Boolean\(studio\.requestBusy\);/);
+  assert.match(mainSource, /const chatBusy = Boolean\(studio\.chatBusy\);/);
+  assert.match(mainSource, /if \(writerBusy \|\| chatBusy\) \{/);
+  assert.match(mainSource, /toast\.close\.busy_title/);
+  assert.doesNotMatch(mainSource, /window\.open\(target\.href, "h3ps-llama-chat"/);
+  assert.match(mainSource, /studio\.chatOpen = true;/);
+  assert.match(mainSource, /classList\.toggle\("is-chat", chat\)/);
+  assert.match(mainSource, /chatView\.hidden = open \|\| !studio\.chatOpen;/);
+  assert.match(mainSource, /if \(event\.origin !== window\.location\.origin \|\| !studio\) return;/);
+  assert.match(mainSource, /event\.source !== chatFrame\?\.contentWindow/);
+  assert.match(mainSource, /event\.data\?\.type === "h3ps-close-chat"/);
+  assert.match(mainSource, /studio\.settingsProvider = "external";\s*renderInferenceSettings\(\);/);
+  assert.doesNotMatch(mainSource.slice(mainSource.indexOf("window.addEventListener(\"message\""), mainSource.indexOf("root.querySelector(\"[data-clear-media]\")")), /selectSettingsProvider\("external"\)/);
+  assert.match(stylesSource, /\.h3ps-workspaces button\.h3ps-chat-workspace \{/);
+  assert.match(stylesSource, /\.h3ps-root\.is-chat \.h3ps-workspace-toolbar/);
+  assert.match(stylesSource, /\.h3ps-chat-frame \{/);
+
+  assert.match(chatHtml, /<link rel="stylesheet" href="\.\/styles\/llama_chat\.css">/);
+  assert.match(chatHtml, /<script type="module" src="\.\/llama_chat\.js"><\/script>/);
+  for (const attribute of [
+    "data-chat-app", "data-chat-status", "data-chat-banner", "data-chat-messages",
+    "data-chat-form", "data-chat-input", "data-chat-send", "data-chat-stop",
+    "data-chat-unload",
+    "data-chat-params", "data-chat-close", "data-chat-empty", "data-chat-retry",
+    "data-chat-history-toggle", "data-chat-history", "data-chat-history-close",
+    "data-chat-history-list", "data-chat-history-empty",
+  ]) {
+    assert.match(chatHtml, new RegExp(attribute));
+  }
+  assert.match(chatHtml, /data-chat-input[^>]*maxlength="200000"/);
+  assert.match(chatHtml, /data-chat-attach[^>]*data-i18n-title="chat\.attach"/);
+  assert.match(chatHtml, /data-chat-file[^>]*accept="image\/jpeg,image\/png,image\/webp,video\/mp4,video\/webm,video\/mpeg"[^>]*multiple/);
+  assert.match(chatHtml, /data-chat-attachments hidden/);
+  assert.match(chatHtml, /data-chat-attach-error role="alert" hidden/);
+  assert.match(chatHtml, /data-chat-send disabled/);
+  assert.match(chatHtml, /data-chat-stop hidden/);
+  assert.match(chatHtml, /data-chat-unload hidden[^>]*data-i18n="chat\.unload"/);
+  assert.match(chatHtml, /<input type="checkbox" data-chat-thinking checked>/);
+  assert.match(chatHtml, /data-i18n="chat\.thinking_toggle"/);
+  assert.match(chatHtml, /data-i18n="chat\.thinking_toggle_hint"/);
+  assert.match(chatHtml, /data-chat-thinking-toggle aria-pressed="true"/);
+  assert.match(chatHtml, /data-chat-thinking-toggle[^>]*data-i18n-title="chat\.thinking_on_title"/);
+  assert.match(chatHtml, /data-i18n="chat\.thinking">Thinking<\/span>/);
+  assert.match(chatHtml, /data-chat-keep-loaded aria-pressed="true" hidden/);
+  assert.match(chatHtml, /data-chat-keep-loaded[^>]*data-i18n-title="chat\.keep_loaded_on_title"/);
+  assert.match(chatHtml, /data-i18n="chat\.keep_loaded">Keep loaded<\/span>/);
+  assert.match(chatHtml, /data-chat-history-toggle aria-expanded="false" aria-controls="h3lc-history" data-i18n="chat\.history"/);
+  assert.match(chatHtml, /<aside class="h3lc-history" id="h3lc-history" data-chat-history hidden>/);
+  assert.match(chatHtml, /data-chat-history-close[^>]*data-i18n-title="chat\.close_history"/);
+  assert.match(chatHtml, /<ul class="h3lc-history-list" data-chat-history-list><\/ul>/);
+  assert.match(chatHtml, /data-i18n="chat\.empty_body">Messages use the model connected in H3 Prompt Writer\. Saved conversations stay in this browser; images and videos are not saved\.<\/p>/);
+
+  assert.match(chatSource, /const CHAT_ENDPOINT = "\/h3studio\/chat";/);
+  assert.match(chatSource, /const CANCEL_ENDPOINT = "\/h3studio\/chat\/cancel";/);
+  assert.match(chatSource, /const PROBE_ENDPOINT = "\/h3studio\/external-server\/probe";/);
+  assert.match(chatSource, /const UNLOAD_ENDPOINT = "\/h3studio\/unload";/);
+  assert.match(chatSource, /JSON\.stringify\(\{ family: "external", model_id: modelId \}\)/);
+  assert.match(chatSource, /function isLocalEndpoint\(url\) \{/);
+  assert.match(chatSource, /host === "localhost" \|\| host === "127\.0\.0\.1" \|\| host === "::1"/);
+  assert.match(chatSource, /function canManageModel\(\) \{/);
+  assert.match(chatSource, /return isLocalEndpoint\(state\.config\?\.url\)/);
+  assert.match(chatSource, /state\.modelInfo\?\.lifecycle_supported === true/);
+  assert.match(chatSource, /Boolean\(state\.modelInfo\?\.id\)/);
+  assert.match(chatSource, /refs\.unload\?\.addEventListener\("click", \(\) => unloadModel\(\)\)/);
+  assert.match(chatSource, /thinking: document\.querySelector\("\[data-chat-thinking\]"\)/);
+  assert.match(chatSource, /thinkingToggle: document\.querySelector\("\[data-chat-thinking-toggle\]"\)/);
+  assert.match(chatSource, /keepLoaded: document\.querySelector\("\[data-chat-keep-loaded\]"\)/);
+  assert.match(chatSource, /const options = \{ thinking: refs\.thinking\.checked \};/);
+  assert.match(chatSource, /refs\.thinking\.checked = true;/);
+  assert.match(chatSource, /function syncThinkingToggle\(\) \{/);
+  assert.match(chatSource, /refs\.thinkingToggle\.setAttribute\("aria-pressed", String\(on\)\)/);
+  assert.match(chatSource, /refs\.thinkingToggle\?\.addEventListener\("click"/);
+  assert.match(chatSource, /refs\.thinking\.addEventListener\("change"/);
+  assert.match(chatSource, /thinking=\$\{refs\.thinking\.checked \? "on" : "off"\}/);
+  assert.match(chatSource, /thinking=\$\{payload\.thinking\}/);
+  assert.match(chatSource, /keepLoaded: true,/);
+  assert.match(chatSource, /function syncKeepLoaded\(\) \{/);
+  assert.match(chatSource, /refs\.keepLoaded\.hidden = !canManageModel\(\)/);
+  assert.match(chatSource, /refs\.keepLoaded\?\.addEventListener\("click"/);
+  assert.match(chatSource, /keep_loaded: state\.keepLoaded,/);
+  assert.match(chatSource, /keep_loaded=\$\{payload\.keep_loaded\}/);
+  assert.match(chatSource, /function copyTextToClipboard\(text\) \{/);
+  assert.match(chatSource, /navigator\.clipboard\?\.writeText/);
+  assert.match(chatSource, /document\.execCommand\("copy"\)/);
+  assert.match(chatSource, /function copyMessage\(article, button\) \{/);
+  assert.match(chatSource, /from "\.\/markdown\.js";/);
+  assert.match(chatSource, /function rawMessageText\(article\) \{/);
+  assert.match(chatSource, /const text = rawMessageText\(article\);/);
+  assert.match(chatSource, /content\.className = "h3lc-message-body h3lc-markdown";/);
+  assert.match(chatSource, /body\.className = "h3lc-message-body h3lc-markdown";/);
+  assert.match(chatSource, /renderMarkdown\(body, stored\.text\)/);
+  assert.match(chatSource, /function scheduleMarkdownRender\(assistant, wasNear\) \{/);
+  assert.match(chatSource, /scheduleMarkdownRender\(assistant, wasNear\);/);
+  assert.match(chatSource, /cancelMarkdownRender\(assistant\);/);
+  assert.match(chatSource, /renderMarkdown\(assistant\.content, state\.assistantText\);\s*assistant\.article\._rawText = state\.assistantText;/);
+  assert.match(chatSource, /article\._rawText = text;/);
+  assert.match(chatSource, /function deleteMessage\(article\) \{/);
+  assert.match(chatSource, /state\.messages\.splice\(index, 1\)/);
+  assert.match(chatSource, /dataset\.chatDelete = ""/);
+  assert.match(chatSource, /appendUserMessage\(text, attachments, message\)/);
+  assert.match(chatSource, /state\.stats = \{/);
+  assert.match(chatSource, /elapsed: Number\.isFinite\(elapsed\) && elapsed > 0 \? elapsed : null/);
+  assert.match(chatSource, /function addStats\(article, stats\) \{/);
+  assert.match(chatSource, /t\("chat\.stats", \{ seconds, speed/);
+  assert.match(chatSource, /from "\.\/chat_history\.js";/);
+  assert.match(chatSource, /historyToggle: document\.querySelector\("\[data-chat-history-toggle\]"\)/);
+  assert.match(chatSource, /historyList: document\.querySelector\("\[data-chat-history-list\]"\)/);
+  assert.match(chatSource, /historyEmpty: document\.querySelector\("\[data-chat-history-empty\]"\)/);
+  assert.match(chatSource, /function persistConversation\(\) \{/);
+  assert.match(chatSource, /const messages = sanitizeConversationMessages\(state\.messages\);/);
+  assert.match(chatSource, /state\.history = saveChatConversation\(localStorage, conversation\)/);
+  assert.match(chatSource, /state\.history = deleteChatConversation\(localStorage, id\)/);
+  assert.match(chatSource, /state\.history = loadChatHistory\(localStorage\)/);
+  assert.match(chatSource, /function renderHistory\(\) \{/);
+  assert.match(chatSource, /refs\.historyList\.append\(item\)/);
+  assert.match(chatSource, /function loadConversation\(id\) \{/);
+  assert.match(chatSource, /function requestDeleteConversation\(id\) \{/);
+  assert.match(chatSource, /\}, 3000\);/);
+  assert.match(chatSource, /t\("chat\.history_media_omitted", \{ count: stored\.media \}\)/);
+  assert.match(chatSource, /const content = stored\.text\s*\|\| \(stored\.media \? t\("chat\.history_media_omitted", \{ count: stored\.media \}\) : ""\);/);
+  assert.match(chatSource, /function newChat\(\) \{\s*persistConversation\(\);/);
+  assert.match(chatSource, /if \(current\) persistConversation\(\);/);
+  assert.match(chatSource, /refs\.historyToggle\.addEventListener\("click"/);
+  assert.match(chatSource, /if \(!refs\.history\.hidden\) \{\s*event\.preventDefault\(\);\s*setHistoryOpen\(false\);/);
+  assert.match(chatSource, /if \(open && !refs\.history\.hidden\) setHistoryOpen\(false\);/);
+  assert.match(chatSource, /const busy = state\.streaming \|\| state\.unloading;/);
+  assert.match(chatSource, /button\.disabled = busy;/);
+  assert.match(chatSource, /window\.addEventListener\("pagehide", \(\) => \{\s*persistConversation\(\);/);
+  assert.match(chatSource, /event\.key === CHAT_HISTORY_STORAGE_KEY/);
+  assert.match(chatSource, /configureI18n\(\{/);
+  assert.match(chatSource, /translateDom\(refs\.root\)/);
+  assert.match(chatSource, /window\.addEventListener\("storage"/);
+  assert.match(chatSource, /body\.getReader\(\)/);
+  assert.match(chatSource, /timeoutMs: null/);
+  assert.match(chatSource, /api\.fetchApi\(CANCEL_ENDPOINT/);
+  assert.match(chatSource, /localizedError\(warning, "chat\.error\.title"\)/);
+  assert.match(chatSource, /const embeddedHost = window\.parent !== window \? window\.parent : null;/);
+  assert.doesNotMatch(chatSource, /from "\/scripts\/app\.js"/);
+  assert.doesNotMatch(chatSource, /from "\/scripts\/api\.js"/);
+  assert.match(chatSource, /function readHostApi\(\) \{/);
+  assert.match(chatSource, /const host = embeddedHost\?\.comfyAPI\?\.api\?\.api;/);
+  assert.match(chatSource, /if \(host\?\.fetchApi\) return host;/);
+  assert.match(chatSource, /function readHostApp\(\) \{/);
+  assert.match(chatSource, /return embeddedHost\?\.comfyAPI\?\.app\?\.app \|\| null;/);
+  assert.match(chatSource, /const hostApi = readHostApi\(\);/);
+  assert.match(chatSource, /const api = hostApi \|\| \{/);
+  assert.match(chatSource, /return fetch\(new URL\(route, window\.location\.origin\), options\);/);
+  assert.match(chatSource, /const comfyApp = readHostApp\(\);/);
+  assert.match(chatSource, /app: comfyApp,/);
+  assert.match(chatSource, /booted embedded=\$\{Boolean\(embeddedHost\)\} api=\$\{hostApi \? "host" : "fetch"\}/);
+  assert.match(chatSource, /preference: hostLocale \|\| preferences\?\.language \|\| "auto"/);
+  assert.match(chatSource, /event\.data\?\.type !== "h3ps-locale"/);
+  assert.match(chatSource, /let hostTheme = null;/);
+  assert.match(chatSource, /document\.documentElement\.dataset\.theme = hostTheme \|\| storedTheme;/);
+  assert.match(chatSource, /event\.data\?\.type === "h3ps-theme"/);
+  assert.match(chatSource, /postToWriter\(\{ type: "h3ps-close-chat" \}\)/);
+  assert.match(chatSource, /postToWriter\(\{ type: "h3ps-open-settings" \}\)/);
+  assert.match(chatSource, /postToWriter\(\{ type: "h3ps-chat-busy", busy \}\)/);
+  assert.match(chatSource, /state\.streaming = true;\s*reportBusy\(true\);/);
+  assert.match(chatSource, /state\.streaming = false;\s*reportBusy\(false\);/);
+  assert.match(chatSource, /const MAX_IMAGES_PER_MESSAGE = 4;/);
+  assert.match(chatSource, /const MAX_VIDEOS_PER_MESSAGE = 1;/);
+  assert.match(chatSource, /const MAX_IMAGE_BYTES = 4 \* 1024 \* 1024;/);
+  assert.match(chatSource, /const MAX_VIDEO_BYTES = 10 \* 1024 \* 1024;/);
+  assert.match(chatSource, /const MAX_VIDEO_SECONDS = 10;/);
+  assert.match(chatSource, /canvas\.toDataURL\("image\/jpeg", IMAGE_QUALITY\)/);
+  assert.match(chatSource, /function buildUserContent\(text, attachments\) \{/);
+  assert.match(chatSource, /type: "image_url", image_url: \{ url: attachment\.dataUrl \}/);
+  assert.match(chatSource, /type: "video_url", video_url: \{ url: attachment\.dataUrl \}/);
+  assert.match(chatSource, /refs\.input\.addEventListener\("paste"/);
+  assert.match(chatSource, /refs\.form\.addEventListener\("drop"/);
+  assert.match(chatSource, /dataTransfer\?\.files/);
+  assert.match(chatSource, /images=\$\{imageCount\} videos=\$\{videoCount\}/);
+  assert.match(chatSource, /media_bytes=\$\{mediaBytes\}/);
+  assert.match(chatSource, /document\.createElement\(attachment\.kind === "video" \? "video" : "img"\)/);
+  assert.doesNotMatch(chatSource, /innerHTML/);
+  assert.doesNotMatch(chatSource, /localStorage\.setItem/);
+  assert.match(chatCss, /\.h3lc-message\.is-user \{/);
+  assert.match(chatCss, /\.h3lc-attachments \{/);
+  assert.match(chatCss, /\.h3lc-message-image \{/);
+  assert.match(chatCss, /\.h3lc-message-video \{/);
+  assert.match(chatCss, /\.h3lc-attachment-remove \{/);
+  assert.match(chatCss, /\.h3lc-composer\.is-dragging \{/);
+  assert.match(chatCss, /\.h3lc-attach svg \{ fill: none; stroke: currentColor;/);
+  assert.match(chatCss, /\.h3lc-thinking \{/);
+  assert.match(chatCss, /\.h3lc-thinking\[aria-pressed="true"\] \{/);
+  assert.match(chatCss, /\.h3lc-thinking:disabled \{/);
+  assert.match(chatCss, /\.h3lc-message-actions \{/);
+  assert.match(chatCss, /\.h3lc-message-action \{/);
+  assert.match(chatCss, /\.h3lc-message-action\[data-copied="true"\] \{/);
+  assert.match(chatCss, /@media \(hover: none\) \{/);
+  assert.match(chatCss, /\.h3lc-reasoning \{/);
+  assert.match(chatCss, /\.h3lc-switch \{/);
+  assert.match(chatCss, /\.h3lc-switch-track \{/);
+  assert.match(chatCss, /\.h3lc-history \{/);
+  assert.match(chatCss, /\.h3lc-history-item\.is-active \{/);
+  assert.match(chatCss, /\.h3lc-history-open strong \{/);
+  assert.match(chatCss, /\.h3lc-history-delete\[data-confirm="true"\] \{/);
+  assert.match(chatCss, /\.h3lc-message-body\.h3lc-markdown \{ white-space: normal; \}/);
+  assert.match(chatCss, /\.h3lc-markdown code \{/);
+  assert.match(chatCss, /\.h3lc-markdown pre \{/);
+  assert.match(chatCss, /\.h3lc-markdown blockquote \{/);
+  assert.match(chatCss, /\.h3lc-markdown table \{/);
+  assert.match(chatCss, /\.h3lc-markdown th,/);
+  assert.match(markdownSource, /export function renderMarkdown\(container, source\) \{/);
+  assert.match(markdownSource, /https\?/);
+  assert.match(markdownSource, /createTextNode/);
+  assert.doesNotMatch(markdownSource, /innerHTML|outerHTML|insertAdjacentHTML/);
+  assert.doesNotMatch(markdownSource, /javascript:/i);
+  assert.match(chatCss, /:root\[data-theme="light"\]/);
+  assert.equal((chatCss.match(/--h3lc-accent: #e8613c;/g) || []).length, 2);
+  assert.doesNotMatch(chatCss, /#6d8dff|#4f74ff|#4f6ef2/);
+  assert.match(chatCss, /\.h3lc-primary \{\s*border-color: transparent;\s*background: var\(--h3lc-accent\);\s*color: #170c09;/);
+  assert.match(chatCss, /\.h3lc-app \{\s*display: grid;\s*grid-template-rows: auto auto auto minmax\(0, 1fr\) auto;\s*height: 100%;\s*min-height: 0;/);
+  assert.doesNotMatch(chatCss, /100dvh/);
+  assert.match(chatCss, /@media \(max-height: 520px\)/);
+  assert.match(chatCss, /\.h3lc-input-wrap textarea \{ max-height: min\(96px, 22vh\); \}/);
+  assert.match(chatCss, /max-height: 40vh;\s*overflow-y: auto;\s*\}/);
+
+  for (const key of [
+    "chat.open", "chat.open_title", "chat.title", "chat.subtitle", "chat.new",
+    "chat.status.checking", "chat.status.connected", "chat.status.unavailable",
+    "chat.status.unconfigured", "chat.phase.loading_model", "chat.phase.generating",
+    "chat.not_configured", "chat.open_writer",
+    "chat.unload", "chat.unloading", "chat.unload_title",
+    "chat.thinking_toggle", "chat.thinking_toggle_hint",
+    "chat.thinking_on_title", "chat.thinking_off_title",
+    "chat.keep_loaded", "chat.keep_loaded_on_title", "chat.keep_loaded_off_title",
+    "chat.copy", "chat.copied", "chat.copy_title", "chat.delete", "chat.delete_title",
+    "chat.stats", "chat.stats_elapsed",
+    "chat.composer_placeholder",
+    "chat.attach", "chat.attach_hint", "chat.attachment_remove",
+    "chat.attachment_image", "chat.attachment_video",
+    "chat.attach.error_type", "chat.attach.error_image_count",
+    "chat.attach.error_video_count", "chat.attach.error_image_size",
+    "chat.attach.error_video_size", "chat.attach.error_video_duration",
+    "chat.attach.error_read", "chat.attach.error_image_decode",
+    "chat.attach.error_video_metadata",
+    "chat.empty_body",
+    "chat.history", "chat.history_title", "chat.close_history",
+    "chat.history_empty", "chat.history_untitled",
+    "chat.history_delete_title", "chat.history_confirm_delete",
+    "chat.history_confirm_delete_title", "chat.history_media_omitted",
+    "errors.EXTERNAL_UNLOAD_FAILED",
+  ]) {
+    assert.ok(en[key], `English locale is missing ${key}`);
+    assert.ok(zhCN[key], `Chinese locale is missing ${key}`);
+  }
+});
+
+test("the chat tab appears only once llama.cpp is configured and activated", () => {
+  const declaration = mainSource.match(/^function syncChatLauncher\([^]*?^}/m);
+  assert.ok(declaration, "syncChatLauncher");
+  const tab = { hidden: true };
+  let workspaceSyncs = 0;
+  const studio = {
+    root: { querySelector: (selector) => (selector === '[data-workspace="chat"]' ? tab : null) },
+    externalServerConfig: null,
+    externalModel: null,
+    externalServerError: null,
+    chatOpen: false,
+  };
+  const context = vm.createContext({
+    console: { log() {}, warn() {} },
+    studio,
+    syncWorkspace: () => { workspaceSyncs += 1; },
+  });
+  vm.runInContext(declaration[0], context);
+
+  context.syncChatLauncher();
+  assert.equal(tab.hidden, true, "unconfigured server hides the chat tab");
+
+  studio.externalServerConfig = { url: "http://127.0.0.1:8080", model: "" };
+  context.syncChatLauncher();
+  assert.equal(tab.hidden, true, "a configured but inactive server hides the chat tab");
+
+  studio.externalModel = { id: "external::http://127.0.0.1:8080::local" };
+  context.syncChatLauncher();
+  assert.equal(tab.hidden, false, "a configured and activated server shows the chat tab");
+
+  studio.chatOpen = true;
+  studio.externalModel = null;
+  studio.externalServerError = { code: "EXTERNAL_SERVER_UNAVAILABLE" };
+  context.syncChatLauncher();
+  assert.equal(tab.hidden, true, "losing activation hides the chat tab");
+  assert.equal(studio.chatOpen, false, "losing activation leaves the chat view");
+  assert.equal(workspaceSyncs, 1);
+});
+
+test("the shell exposes a language selector wired to the i18n preference", () => {
+  assert.match(mainSource, /class="h3ps-language-select" data-language/);
+  assert.match(mainSource, /data-i18n-title="common\.language"/);
+  assert.match(mainSource, /setLanguagePreference\(event\.target\.value\)/);
+  assert.match(mainSource, /studio\.languageChosen = true/);
+  assert.match(mainSource, /saveUserPreferences\(localStorage, studio\)/);
 });
 
 test("Settings owns a two-click restore for all mode draft defaults", () => {
@@ -1408,7 +1992,7 @@ test("Settings owns a two-click restore for all mode draft defaults", () => {
   assert.match(mainSource, /FL2VA:[\s\S]{0,1400}<Picture 2>/);
   assert.match(mainSource, /L2VA:[\s\S]{0,1200}final composition established by <Picture 1>/);
   assert.match(mainSource, /saveCurrentModeDraft\(\)/);
-  assert.match(mainSource, /Click again to confirm/);
+  assert.match(mainSource, /t\("toast\.drafts\.confirm_label"\)/);
   assert.match(mainSource, /setTimeout\(disarmDraftDefaults, 5000\)/);
   assert.match(mainSource, /studio\.modeDrafts = \{\}/);
   assert.match(mainSource, /mode === "Reference"[\s\S]{0,120}REFERENCE_DEFAULT_BRIEF[\s\S]{0,80}SAMPLE_PROMPT/);
@@ -1479,16 +2063,16 @@ test("Music 3 drafts and payload keep lyrics separate from H3 state", () => {
   assert.match(mainSource, /data-music-system-prompt-summary>Default/);
   assert.match(mainSource, /data-music-system-prompt-details hidden/);
   assert.doesNotMatch(mainSource, /Prompt behavior · shared by all providers/);
-  assert.match(mainSource, /Object\.hasOwn\(studio\.customSystemPrompts, "music3"\)[\s\S]{0,140}Object\.hasOwn\(studio\.customSystemPrompts, "music3_lyrics"\)[\s\S]{0,100}"Custom"/);
+  assert.match(mainSource, /Object\.hasOwn\(studio\.customSystemPrompts, "music3"\)[\s\S]{0,220}t\("settings\.custom"\)/);
   assert.match(mainSource, /data-system-prompt="\$\{profile\}"/);
-  assert.match(mainSource, /musicSystemPromptPanelMarkup\("music3", "Caption"/);
-  assert.match(mainSource, /musicSystemPromptPanelMarkup\("music3_lyrics", "Lyrics"/);
-  assert.match(mainSource, /data-system-prompt-reset="\$\{profile\}" hidden>Restore default/);
+  assert.match(mainSource, /musicSystemPromptPanelMarkup\("music3", "workspace\.caption"/);
+  assert.match(mainSource, /musicSystemPromptPanelMarkup\("music3_lyrics", "workspace\.lyrics"/);
+  assert.match(mainSource, /data-system-prompt-reset="\$\{profile\}" hidden data-i18n="system_prompt\.restore_default">Restore default/);
   assert.match(mainSource, /### Global Metadata[\s\S]*### Vocal Details[\s\S]*### Arrangement/);
   assert.doesNotMatch(mainSource, /global_metadata:/);
-  assert.match(mainSource, /Refine caption/);
-  assert.match(mainSource, /Generated caption/);
-  assert.match(mainSource, /data-lyrics-refine-toggle>[\s\S]{0,80}Refine<\/button>/);
+  assert.match(mainSource, /t\("workspace\.refine_caption"\)/);
+  assert.match(mainSource, /t\("workspace\.generated_caption"\)/);
+  assert.match(mainSource, /data-lyrics-refine-toggle>[\s\S]{0,120}data-i18n="workspace\.refine">Refine<\/span>/);
   assert.match(mainSource, /Leave Lyrics empty to create new lyrics, or describe how to rewrite the existing lyrics\./);
   assert.match(mainSource, /data-lyrics-use-brief checked/);
   assert.doesNotMatch(mainSource, /data-(?:lyrics-)?refine-submit[^>]*>[\s\S]{0,80}Rewrite<\/button>/);
@@ -1497,12 +2081,12 @@ test("Music 3 drafts and payload keep lyrics separate from H3 state", () => {
   assert.ok(requestIndex >= 0 && lyricsAssignmentIndex > requestIndex);
   assert.match(mainSource, /studio\.lyricsRestore = \{ lyrics: currentLyrics \}[\s\S]{0,180}lyrics\.value = result\.prompt/);
   assert.doesNotMatch(mainSource.slice(requestIndex, lyricsAssignmentIndex + 500), /lyrics-refine-instruction[^\n]*\.value = ""/);
-  assert.match(mainSource, /restore\.textContent = currentLyrics\.trim\(\) \? "Restore previous" : "Remove generated"/);
+  assert.match(mainSource, /restore\.textContent = currentLyrics\.trim\(\) \? t\("toast\.lyrics\.restore_previous"\) : t\("toast\.lyrics\.remove_generated"\)/);
   assert.match(mainSource, /data-lyrics-refine-restore[\s\S]{0,700}const previousLyrics = studio\.lyricsRestore\.lyrics;[\s\S]{0,80}lyrics\.value = previousLyrics/);
 });
 
 test("active requests block add, reorder, and mode switching", () => {
-  assert.match(mainSource, /error\.code === "EXTERNAL_VISION_REQUIRED"[\s\S]{0,160}showToast\("Vision model required"/);
+  assert.match(mainSource, /error\.code === "EXTERNAL_VISION_REQUIRED"[\s\S]{0,160}showErrorToast\("toast\.generation\.vision_required\.title"/);
   assert.match(mainSource, /data-add-media \$\{studio\.requestBusy \? "disabled" : ""\}/);
   assert.match(mainSource, /const draggable = studio\.requestBusy \? "false" : "true"/);
   assert.match(mainSource, /dragstart[\s\S]{0,180}if \(studio\.requestBusy\)/);
@@ -1514,11 +2098,20 @@ test("active requests block add, reorder, and mode switching", () => {
 
 test("text-only Direct UI disables visual modes and explains the fallback", () => {
   assert.match(mainSource, /function syncModeAvailability\(\)/);
-  assert.match(mainSource, /Text-only model · T2VA and Music3 available/);
-  assert.match(mainSource, /Switched to T2VA/);
+  assert.match(mainSource, /t\("models\.text_only_note"\)/);
+  assert.match(mainSource, /msg\("toast\.mode\.switched_t2va\.title"\)/);
   assert.match(mainSource, /if \(!generationModeIsAvailable\(\)\) return/);
   assert.match(stylesSource, /\.h3ps-modes button:disabled/);
   assert.match(skinSource, /\.h3ps-workspaces button:disabled/);
+});
+
+test("runtime and model labels are translation-driven", () => {
+  assert.match(mainSource, /function contextLabel\(value\)/);
+  assert.match(mainSource, /t\("models\.runtime_inspect_failed"\)/);
+  assert.match(mainSource, /hasTranslation\(`runtime\.reasoning\.\$\{value\}`\)/);
+  assert.match(mainSource, /msg\("toast\.models\.refreshed\.title"\)/);
+  assert.match(mainSource, /msg\("toast\.system_prompt\.reset\.title"\)/);
+  assert.match(mainSource, /t\("launcher\.open_title"\)/);
 });
 
 test("closed Prompt Writer does not advertise an active modal", () => {
@@ -1628,17 +2221,20 @@ test("workbench exposes responsive stacking and layered keyboard navigation", ()
   assert.doesNotMatch(mainSource, /role="(?:menu|menuitem|listbox|option)"|aria-haspopup="menu"/);
   assert.match(aspectRatioMarkup(()=>""), /class="h3ps-choice-menu h3ps-aspect-menu"[^>]*role="group"/);
   assert.match(aspectRatioMarkup(()=>""), /aria-pressed="false"\s+data-aspect="16:9"/);
+  assert.match(aspectRatioMarkup(()=>""), /data-i18n="aspect\.widescreen"/);
+  assert.match(aspectRatioMarkup(()=>""), /data-i18n="aspect\.square"/);
   assert.match(mainSource, /role="status" aria-live="polite" aria-atomic="true" data-status/);
   assert.match(mainSource, /if \(event\.key === "Tab"\)[\s\S]{0,1000}focusable/);
 });
 
 test("runtime pickers and the verified-model dialog keep keyboard state in sync", () => {
-  assert.match(settingsSource, /aria-haspopup="true" aria-expanded="false" data-runtime-toggle="context"/);
-  assert.match(settingsSource, /aria-haspopup="true" aria-expanded="false" data-runtime-toggle="reasoning"/);
+  const markup = settingsMarkup(() => "");
+  assert.match(markup, /aria-haspopup="true" aria-expanded="false" data-runtime-toggle="context"/);
+  assert.match(markup, /aria-haspopup="true" aria-expanded="false" data-runtime-toggle="reasoning"/);
   assert.match(mainSource, /function setRuntimeMenuOpen\(name, open, restoreFocus = false\)/);
   assert.match(mainSource, /else if \(runtimeMenu\) setRuntimeMenuOpen\(runtimeMenu\.dataset\.runtimeMenu, false, true\)/);
   assert.match(mainSource, /data-other-models-backdrop[^>]*hidden/);
-  assert.match(mainSource, /role="dialog" aria-label="Other verified models"/);
+  assert.match(mainSource, /role="dialog" aria-label="\$\{t\("workspace\.other_models"\)\}" data-i18n-aria-label="workspace\.other_models"/);
   assert.match(styleSources.overlays, /\.h3ps-other-models-backdrop\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*119;/);
   assert.doesNotMatch(styleSources.overlays, /100vmax/);
 });
@@ -1670,7 +2266,7 @@ test("prompt refinement keeps actions above a vertically resizable editor", () =
 
 test("refined media UI has neutral actions, no dead preview flow or reorder thumbnail ghost",()=>{
   assert.match(splitMenuMarkup(()=>"",{label:"Actions",primary:"data-actions-menu-toggle",toggle:"data-clear-menu-toggle",menu:"data-clear-menu",contents:"",ariaLabel:"Media actions"}),/data-actions-menu-toggle[^>]*>Actions/);
-  assert.match(mainSource,/splitMenuMarkup\(icon, \{label: "Actions"/);
+  assert.match(mainSource,/splitMenuMarkup\(icon, \{label: '<span data-i18n="workspace\.actions">Actions<\/span>'/);
   assert.doesNotMatch(mainSource,/h3ps-compose-button|openVideoPreview|openImagePreview|resampleCurrentVideo|h3ps-drag-ghost/);
   assert.match(mainSource,/ghost.width = ghost.height = 1/);
   assert.match(mainSource,/setDragImage\(ghost, 0, 0\)/);
@@ -1685,7 +2281,7 @@ test("refined media UI has neutral actions, no dead preview flow or reorder thum
   const studio={root:{querySelector:()=>toast}};
   let dismissed=0;
   const show=mainSource.slice(mainSource.indexOf('function showToast('),mainSource.indexOf('function defaultModeDraft('));
-  new Function('studio','hideToast','setTimeout','clearTimeout',show+';showToast("Trim required","Keep this notice",null,null,{dismissOnWorkspaceClick:true});')(studio,()=>dismissed++,(fn,ms)=>timers.push({fn,ms}),()=>{});
+  new Function('studio','hideToast','setTimeout','clearTimeout','writeToastContent',show+';showToast("Trim required","Keep this notice",null,null,{dismissOnWorkspaceClick:true});')(studio,()=>dismissed++,(fn,ms)=>timers.push({fn,ms}),()=>{},writeToastContent);
   assert.equal(timers.length,1);assert.equal(timers[0].ms,0);timers[0].fn();
   assert.equal(studio.toastDismissOnWorkspaceClick,true);
   const rule=mainSource.match(/if \(studio.toastDismissOnWorkspaceClick && !event.target.closest\("\[data-h3ps-toast\]"\)\) hideToast\(\);/)[0];
@@ -1699,7 +2295,76 @@ test("startup generation state has no legacy preview dependency",()=>{
   const start=mainSource.indexOf('function setGenerationState('),end=mainSource.indexOf('function updatePromptResidency(',start);
   const noop=()=>{},node={querySelector:()=>node,querySelectorAll:()=>[],classList:{toggle:noop},innerHTML:''};
   const studio={root:node,mode:'Reference'};
-  new Function('studio','icon','syncModeAvailability','renderMedia','syncLifecycleActions','HOST_CAPABILITIES','generationButtonMarkup',mainSource.slice(start,end)+';setGenerationState("idle","","");')(studio,noop,noop,noop,noop,{comfyMemory:true},generationButtonMarkup);
+  new Function('studio','icon','syncModeAvailability','renderMedia','syncLifecycleActions','HOST_CAPABILITIES','generationButtonMarkup','t','msg','writeStatusContent',mainSource.slice(start,end)+';setGenerationState("idle","","");')(studio,noop,noop,noop,noop,{comfyMemory:true},generationButtonMarkup,t,msg,writeStatusContent);
+});
+
+test("locale refresh never fetches or overwrites System Prompt editors", async () => {
+  const start = mainSource.indexOf("async function syncSystemPromptEditor(");
+  const end = mainSource.indexOf("function syncSystemPromptEditors(", start);
+  const node = (value = "") => ({ disabled: false, value, textContent: "", hidden: false, dataset: {} });
+  const fields = () => {
+    const textarea = node();
+    const status = node();
+    const summaryStatus = node();
+    const reset = node();
+    const count = node();
+    const map = new Map([
+      ['[data-system-prompt="standard"]', textarea],
+      ['[data-system-prompt-status="standard"]', status],
+      ['[data-system-prompt-summary-status="standard"]', summaryStatus],
+      ['[data-system-prompt-reset="standard"]', reset],
+      ['[data-system-prompt-count="standard"]', count],
+    ]);
+    return { textarea, status, summaryStatus, reset, count, root: { querySelector: selector => map.get(selector) } };
+  };
+  const statusStart = mainSource.indexOf("function setSystemPromptStatus(");
+  const statusEnd = mainSource.indexOf("\nfunction ", statusStart + 1);
+  assert.ok(statusStart >= 0 && statusEnd > statusStart, "setSystemPromptStatus must be a top-level function");
+  const setSystemPromptStatus = new Function(
+    "t",
+    mainSource.slice(statusStart, statusEnd) + ";return setSystemPromptStatus;",
+  )(t);
+  const build = () => new Function(
+    "studio", "getSystemPrompt", "showToast", "resizeSystemPromptEditor", "syncMusicSystemPromptSummary", "t", "setSystemPromptStatus",
+    mainSource.slice(start, end) + ";return syncSystemPromptEditor;",
+  );
+
+  const refreshing = fields();
+  refreshing.textarea.value = "keep me";
+  const refreshingStudio = { root: refreshing.root, systemPromptDefaults: {}, customSystemPrompts: { standard: "keep me" }, localeRefreshing: true };
+  let toasts = 0;
+  const refreshingSync = build()(
+    refreshingStudio,
+    async () => assert.fail("locale refresh must not fetch System Prompt defaults"),
+    () => { toasts += 1; },
+    () => {},
+    () => {},
+    t,
+    setSystemPromptStatus,
+  );
+  await refreshingSync("standard");
+  assert.equal(refreshing.textarea.value, "keep me");
+  assert.equal(refreshing.textarea.disabled, false);
+  assert.equal(toasts, 0);
+
+  const fetched = fields();
+  fetched.textarea.value = "stale";
+  const fetchedStudio = { root: fetched.root, systemPromptDefaults: {}, customSystemPrompts: {}, localeRefreshing: false };
+  let calls = 0;
+  const fetchedSync = build()(
+    fetchedStudio,
+    async (mode) => { calls += 1; assert.equal(mode, "T2VA"); return { profile: "standard", system_prompt: "default" }; },
+    () => {},
+    () => {},
+    () => {},
+    t,
+    setSystemPromptStatus,
+  );
+  await fetchedSync("standard");
+  assert.equal(calls, 1);
+  assert.equal(fetchedStudio.systemPromptDefaults.standard, "default");
+  assert.equal(fetched.textarea.value, "default");
+  assert.equal(fetched.textarea.disabled, false);
 });
 
 test("only confirmed Writer ownership makes unknown router state a release target",async()=>{
@@ -1707,4 +2372,563 @@ test("only confirmed Writer ownership makes unknown router state a release targe
   assert.deepEqual(await unloadWriterModels({getStatus:async()=>status,unloadModel:async()=>assert.fail('no confirmed Writer residency')}),[]);
   status.prompt_residency.external.targets[0].writer_owned=true;
   assert.deepEqual(writerResidencyTargets(status),[{family:'external',model_id:'old'}]);
+});
+
+test("long Writer model requests opt out of the ComfyUI 60s fetch timeout",async()=>{
+  const h3studioSource=await readFile(new URL("../web/api/h3studio.js",import.meta.url),"utf8");
+  const calls=[];
+  const context=vm.createContext({
+    api:{fetchApi:async(path,options)=>{calls.push({path,options});return{ok:true,text:async()=>"{}"};}},
+    readApiResponse:async response=>JSON.parse(await response.text()),
+  });
+  vm.runInContext(h3studioSource.replace(/^import .*$/gm,"").replace(/\bexport\s+/g,"")+"\n;globalThis.__api={generate,refine,request};",context);
+  await context.__api.generate({mode:"T2VA"});
+  await context.__api.refine({});
+  assert.equal(calls.find(call=>call.path==="/h3studio/generate").options.timeoutMs,null);
+  assert.equal(calls.find(call=>call.path==="/h3studio/refine").options.timeoutMs,null);
+});
+
+test("Writer window open and close release ComfyUI and llama resources",async()=>{
+  const activationStart=mainSource.indexOf("function activateLlamaChatTab(");
+  const activationEnd=mainSource.indexOf("function postLocaleToChat(",activationStart);
+  const helperStart=mainSource.indexOf("function releaseComfyResources(");
+  const activation=mainSource.slice(activationStart,activationEnd);
+  const helper=mainSource.slice(helperStart,activationStart);
+  const openStart=mainSource.indexOf("function openStudio(");
+  const openEnd=mainSource.indexOf("function closeStudio(",openStart);
+  const openBody=mainSource.slice(openStart,openEnd);
+  const closeStart=mainSource.indexOf("function closeStudio(");
+  const closeEnd=mainSource.indexOf("function syncLauncherLabels(",closeStart);
+  const closeBody=mainSource.slice(closeStart,closeEnd);
+  assert.doesNotMatch(activation,/releaseStudioResources\(|releaseLlamaResources\(/);
+  assert.match(openBody,/releaseStudioResources\("studio-opened"\);/);
+  assert.match(closeBody,/releaseStudioResources\("studio-closed"\);/);
+  assert.match(helper,/freeComfyVram\(\{ freeMemory: true \}\)/);
+  assert.match(helper,/releaseComfyResources\(reason\);[\s\S]*releaseLlamaResources\(reason\)/);
+
+  const h3studioSource=await readFile(new URL("../web/api/h3studio.js",import.meta.url),"utf8");
+  const calls=[];
+  const context=vm.createContext({
+    console,
+    api:{fetchApi:async(path,options)=>{calls.push({path,options});return{ok:true,text:async()=>"{}"};}},
+    readApiResponse:async response=>JSON.parse(await response.text()),
+  });
+  vm.runInContext(h3studioSource.replace(/^import .*$/gm,"").replace(/\bexport\s+/g,"")+"\n;globalThis.__api={freeComfyVram};",context);
+  await context.__api.freeComfyVram();
+  await context.__api.freeComfyVram({freeMemory:true});
+  const freeCalls=calls.filter(call=>call.path==="/free");
+  assert.equal(freeCalls.length,2);
+  assert.deepEqual(JSON.parse(freeCalls[0].options.body),{unload_models:true,free_memory:false});
+  assert.deepEqual(JSON.parse(freeCalls[1].options.body),{unload_models:true,free_memory:true});
+
+  const makeLlamaContext=(config,probe)=>{
+    const probes=[],unloads=[],logs=[];
+    const llamaConsole={
+      log:message=>logs.push(`log ${message}`),
+      warn:message=>logs.push(`warn ${message}`),
+    };
+    const llamaContext=vm.createContext({
+      console:llamaConsole,
+      studio:{externalServerConfig:config},
+      probeExternalServer:async payload=>{probes.push(payload);return probe();},
+      unloadModel:async target=>{unloads.push(target);},
+    });
+    vm.runInContext(helper,llamaContext);
+    return {llamaContext,probes,unloads,logs};
+  };
+
+  const unconfigured=makeLlamaContext(null,()=>({model:null}));
+  await unconfigured.llamaContext.releaseLlamaResources("test");
+  assert.equal(unconfigured.probes.length,0);
+  assert.equal(unconfigured.unloads.length,0);
+  assert.match(unconfigured.logs.join("\n"),/llama cleanup skipped reason=test configured=false/);
+
+  const model={id:"external::http://127.0.0.1:8080::qwen",remote_model:"qwen",lifecycle_supported:true};
+  const online=makeLlamaContext({url:"http://127.0.0.1:8080",model:"qwen"},()=>({model}));
+  await online.llamaContext.releaseLlamaResources("test");
+  assert.equal(JSON.stringify(online.probes),JSON.stringify([{url:"http://127.0.0.1:8080",model:"qwen"}]));
+  assert.equal(JSON.stringify(online.unloads),JSON.stringify([{family:"external",model_id:model.id}]));
+  assert.match(online.logs.join("\n"),/llama server online reason=test[\s\S]*lifecycle_supported=true/);
+  assert.match(online.logs.join("\n"),/llama model unload requested reason=test/);
+
+  const legacy=makeLlamaContext({url:"http://127.0.0.1:8080",model:"qwen"},()=>({model:{...model,lifecycle_supported:false}}));
+  await legacy.llamaContext.releaseLlamaResources("test");
+  assert.equal(legacy.unloads.length,0);
+  assert.match(legacy.logs.join("\n"),/lifecycle_supported=false/);
+
+  const offline=makeLlamaContext({url:"http://127.0.0.1:8080",model:"qwen"},()=>{const error=new Error("unreachable");error.code="EXTERNAL_SERVER_UNAVAILABLE";throw error;});
+  await offline.llamaContext.releaseLlamaResources("test");
+  assert.equal(offline.unloads.length,0);
+  assert.match(offline.logs.join("\n"),/llama cleanup skipped reason=test online=false[\s\S]*code=EXTERNAL_SERVER_UNAVAILABLE/);
+
+  const ambiguous=makeLlamaContext({url:"http://127.0.0.1:8080",model:""},()=>{const error=new Error("ambiguous");error.code="EXTERNAL_MODEL_AMBIGUOUS";throw error;});
+  await ambiguous.llamaContext.releaseLlamaResources("test");
+  assert.equal(ambiguous.unloads.length,0);
+  assert.doesNotMatch(ambiguous.logs.join("\n"),/online=false/);
+  assert.match(ambiguous.logs.join("\n"),/probe_failed=true[\s\S]*code=EXTERNAL_MODEL_AMBIGUOUS/);
+
+  let finishProbe;
+  const busy=makeLlamaContext({url:"http://127.0.0.1:8080",model:"qwen"},()=>new Promise(resolve=>{finishProbe=resolve;}));
+  const first=busy.llamaContext.releaseLlamaResources("first");
+  await busy.llamaContext.releaseLlamaResources("second");
+  assert.equal(busy.probes.length,1);
+  assert.match(busy.logs.join("\n"),/llama cleanup skipped reason=second already_running=true/);
+  finishProbe({model});
+  await first;
+});
+
+test("generation metadata and shared labels follow the active locale", () => {
+  const window = new Window();
+  const root = window.document.createElement("div");
+  window.document.body.append(root);
+  const output = window.document.createElement("textarea");
+  output.dataset.output = "";
+  const meta = window.document.createElement("span");
+  const metaWrap = window.document.createElement("div");
+  metaWrap.className = "h3ps-editor-meta";
+  metaWrap.append(meta);
+  root.append(output, metaWrap);
+
+  const start = mainSource.indexOf("function countWords(");
+  const end = mainSource.indexOf("function newGenerationSeed(", start);
+  const studio = { root };
+  const helpers = new Function(
+    "t",
+    "studio",
+    `${mainSource.slice(start, end)};return { promptLengthMeta, formatGenerationMeta, syncOutputLengthMeta };`,
+  )(t, studio);
+  const result = {
+    prompt: "one two",
+    model_load_seconds: 1,
+    media_processing_seconds: 0.5,
+    generation_seconds: 2,
+    total_seconds: 3,
+    tokens_per_second: 4.5,
+  };
+
+  configureI18n({ preference: "en", root, navigatorLanguage: "en-US" });
+  assert.equal(helpers.promptLengthMeta("one two"), "7 characters · 2 words");
+  assert.equal(
+    helpers.formatGenerationMeta(result),
+    "7 characters · 2 words · 3.0s total (1.0s load · 0.5s media · 2.0s LLM) · 4.5 tok/s",
+  );
+  output.value = "one two three";
+  meta.textContent = helpers.formatGenerationMeta(result);
+  helpers.syncOutputLengthMeta();
+  assert.equal(
+    meta.textContent,
+    "13 characters · 3 words · 3.0s total (1.0s load · 0.5s media · 2.0s LLM) · 4.5 tok/s",
+  );
+
+  configureI18n({ preference: "zh-CN", root });
+  assert.equal(helpers.promptLengthMeta("one two"), "7 字符 · 2 词");
+  assert.equal(
+    helpers.formatGenerationMeta(result),
+    "7 字符 · 2 词 · 3.0s 总计（1.0s 加载 · 0.5s 媒体 · 2.0s LLM） · 4.5 tok/s",
+  );
+  meta.textContent = helpers.formatGenerationMeta(result);
+  helpers.syncOutputLengthMeta();
+  assert.equal(
+    meta.textContent,
+    "13 字符 · 3 词 · 3.0s 总计（1.0s 加载 · 0.5s 媒体 · 2.0s LLM） · 4.5 tok/s",
+  );
+  const actions = splitMenuMarkup(() => "", {
+    label: "Actions",
+    primary: "",
+    toggle: "",
+    menu: "",
+    contents: "",
+    ariaLabelKey: "workspace.media_actions",
+  });
+  assert.match(actions, /aria-label="媒体操作" data-i18n-aria-label="workspace\.media_actions"/);
+
+  assert.match(mainSource, /data-i18n="header\.official_guides"/);
+  assert.match(mainSource, /data-i18n="workspace\.creative_brief"/);
+  assert.match(mainSource, /titleKey: "mode\.T2VA\.title"/);
+  assert.match(mainSource, /t\("workspace\.generated_caption"\)/);
+  configureI18n({ preference: "en", root, navigatorLanguage: "en-US" });
+});
+
+test("duration label stays localized after a locale refresh", () => {
+  const window = new Window();
+  const root = window.document.createElement("div");
+  const label = window.document.createElement("b");
+  label.dataset.durationLabel = "";
+  root.append(label);
+  window.document.body.append(root);
+  const studio = { root, durationSeconds: 7 };
+  const start = mainSource.indexOf("function syncDurationLabel(");
+  const end = mainSource.indexOf("\nfunction ", start + 1);
+  const syncDurationLabel = new Function(
+    "studio",
+    "t",
+    `${mainSource.slice(start, end)};return syncDurationLabel;`,
+  )(studio, t);
+
+  configureI18n({ preference: "en", root, navigatorLanguage: "en-US" });
+  syncDurationLabel();
+  assert.equal(label.textContent, "7 seconds");
+
+  configureI18n({ preference: "zh-CN", root });
+  syncDurationLabel();
+  assert.equal(label.textContent, "7 秒");
+
+  configureI18n({ preference: "en", root, navigatorLanguage: "en-US" });
+  syncDurationLabel();
+  assert.equal(label.textContent, "7 seconds");
+
+  const refreshStart = mainSource.indexOf("const refreshLocalizedUi =");
+  const refreshEnd = mainSource.indexOf("onLocaleChange", refreshStart);
+  assert.match(mainSource.slice(refreshStart, refreshEnd), /syncDurationLabel\(\);/);
+  assert.equal(mainSource.match(/syncDurationLabel\(\);/g)?.length, 3);
+});
+
+test("draft-default confirm label keeps its i18n key while armed", () => {
+  const window = new Window();
+  const root = window.document.createElement("div");
+  const label = window.document.createElement("span");
+  label.dataset.restoreDefaultDraftsLabel = "";
+  label.dataset.i18n = "settings.restore_drafts";
+  label.textContent = "Restore default drafts";
+  root.append(label);
+  const timers = [];
+  const studio = { root, draftDefaultsArmed: false, draftDefaultsTimer: null };
+  const start = mainSource.indexOf("function disarmDraftDefaults(");
+  const end = mainSource.indexOf("function hideToast(", start);
+  assert.ok(start >= 0 && end > start, "draft default controls must be top-level functions");
+  const draftControls = new Function(
+    "studio", "t", "msg", "showToast", "saveModeDrafts", "restoreModeDraft", "localStorage", "setTimeout", "clearTimeout",
+    `${mainSource.slice(start, end)};return { disarmDraftDefaults, restoreDefaultDrafts };`,
+  )(
+    studio, t, msg, () => {}, () => {}, () => {}, null,
+    (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    () => {},
+  );
+
+  configureI18n({ preference: "en", root });
+  draftControls.restoreDefaultDrafts({ stopPropagation() {} });
+  assert.equal(studio.draftDefaultsArmed, true);
+  assert.equal(label.dataset.i18n, "toast.drafts.confirm_label");
+  assert.equal(label.textContent, "Click again to confirm");
+  assert.deepEqual(timers.map(timer => timer.delay), [5000]);
+
+  configureI18n({ preference: "zh-CN", root });
+  assert.equal(label.dataset.i18n, "toast.drafts.confirm_label");
+  assert.equal(label.textContent, "再次点击确认");
+
+  draftControls.disarmDraftDefaults();
+  assert.equal(studio.draftDefaultsArmed, false);
+  assert.equal(label.dataset.i18n, "toast.drafts.restore_label");
+  assert.equal(label.textContent, "恢复默认草稿");
+  configureI18n({ preference: "en", root });
+});
+
+test("lyrics restore label keeps its i18n key aligned with its action", async () => {
+  const window = new Window();
+  const root = window.document.createElement("div");
+  root.innerHTML = `
+    <section data-lyrics-refine-panel>
+      <textarea data-lyrics-refine-instruction>rewrite</textarea>
+      <input type="checkbox" data-lyrics-use-brief checked>
+      <button type="button" data-lyrics-refine-submit><span data-i18n="workspace.refine">Refine</span></button>
+      <button type="button" data-lyrics-refine-restore hidden data-i18n="workspace.restore_previous">Restore previous</button>
+    </section>
+    <textarea data-music-lyrics></textarea>
+    <textarea data-music-brief>brief</textarea>`;
+  const studio = {
+    mode: "Music3",
+    selectedModel: { name: "model", runtime_ready: true },
+    root,
+    lyricsRequestBusy: false,
+    desktopNotifications: { notify() {} },
+  };
+  const start = mainSource.indexOf("async function submitLyricsRefinement(");
+  const end = mainSource.indexOf("\nasync function submitRefinement(", start);
+  assert.ok(start >= 0 && end > start, "submitLyricsRefinement must be a top-level function");
+  const submitLyricsRefinement = new Function(
+    "studio", "prepareWriterRequest", "generationModeIsAvailable", "markActiveWriterRequest", "clearActiveWriterRequest",
+    "setGenerationState", "vramHandoffCoordinator", "refine", "buildLyricsRefinePayload", "newGenerationSeed",
+    "renderPromptHighlights", "formatGenerationMeta", "syncRuntimeSummary", "syncModifiedState", "saveCurrentModeDraft",
+    "showToast", "updateMusicLyricsCount", "icon", "getStatus", "updatePromptResidency", "msg", "t", "messageText", "showErrorToast",
+    `${mainSource.slice(start, end)};return submitLyricsRefinement;`,
+  )(
+    studio, async () => true, () => true, () => {}, () => {}, () => {},
+    { trackWriterRequest: (promise) => promise },
+    async () => ({ prompt: "generated lyrics", total_seconds: 1, tokens_per_second: 2 }),
+    () => ({}), () => 1, () => {}, () => "", () => {}, () => {}, () => {}, () => {}, () => {},
+    () => "", async () => ({}), () => {}, msg, t, messageText, () => {},
+  );
+  const panel = root.querySelector("[data-lyrics-refine-panel]");
+  const submit = panel.querySelector("[data-lyrics-refine-submit]");
+  const restore = panel.querySelector("[data-lyrics-refine-restore]");
+
+  configureI18n({ preference: "en", root });
+  await submitLyricsRefinement();
+  assert.equal(restore.dataset.i18n, "toast.lyrics.remove_generated");
+  assert.equal(restore.textContent, "Remove generated");
+  assert.equal(restore.hidden, false);
+
+  configureI18n({ preference: "zh-CN", root });
+  assert.equal(restore.textContent, "移除生成内容");
+  assert.notEqual(restore.textContent, "恢复上一版");
+  const refineSpan = submit.querySelector('[data-i18n="workspace.refine"]');
+  assert.ok(refineSpan, "finally must restore the localized Refine span");
+  assert.equal(refineSpan.textContent, "优化");
+  configureI18n({ preference: "en", root });
+});
+
+test("error toasts keep a localized summary and the original English detail", () => {
+  const window = new Window();
+  const root = window.document.createElement("div");
+  const start = mainSource.indexOf("function showErrorToast(");
+  const end = mainSource.indexOf("\nfunction ", start + 1);
+  assert.ok(start >= 0 && end > start, "showErrorToast must be a top-level function");
+  const calls = [];
+  const showErrorToast = new Function(
+    "showToast", "msg", "localizedError", "console",
+    `${mainSource.slice(start, end)};return showErrorToast;`,
+  )(
+    (...args) => calls.push(args),
+    msg,
+    localizedError,
+    { error() {} },
+  );
+  configureI18n({ preference: "zh-CN", root });
+  const timeout = Object.assign(new Error("ComfyUI aborted the request"), {
+    code: "REQUEST_TIMEOUT",
+    details: { timeout: 60000 },
+  });
+  showErrorToast("toast.generation.failed.title", timeout);
+  assert.deepEqual(calls[0][0], { key: "toast.generation.failed.title", params: {} });
+  assert.deepEqual(calls[0][1], { key: "errors.REQUEST_TIMEOUT", params: {} });
+  assert.match(calls[0][2], /ComfyUI aborted the request/);
+  assert.match(calls[0][2], /"timeout": 60000/);
+
+  const unknown = Object.assign(new Error("Backend exploded"), { code: "SOMETHING_NEW" });
+  showErrorToast("toast.generation.failed.title", unknown);
+  assert.deepEqual(calls[1][1], { key: "errors.UNKNOWN", params: {} });
+  assert.match(calls[1][2], /Backend exploded/);
+  configureI18n({ preference: "en", root });
+});
+
+test("busy generation label stays on the cancel key across locale switches", () => {
+  const window = new Window();
+  const root = window.document.createElement("div");
+  root.innerHTML = `<button type="button" data-generate><span class="h3ps-spinner"></span><span data-generate-label data-i18n="generation.cancel">Cancel</span></button>`;
+  window.document.body.append(root);
+  const studio = { root, mode: "T2VA", requestBusy: true };
+  const start = mainSource.indexOf("function syncGenerateLabel(");
+  const end = mainSource.indexOf("\nfunction ", start + 1);
+  assert.ok(start >= 0 && end > start, "syncGenerateLabel must be a top-level function");
+  const syncGenerateLabel = new Function(
+    "studio", "t",
+    `${mainSource.slice(start, end)};return syncGenerateLabel;`,
+  )(studio, t);
+
+  configureI18n({ preference: "en", root, navigatorLanguage: "en-US" });
+  syncGenerateLabel();
+  const label = root.querySelector("[data-generate-label]");
+  assert.equal(label.textContent, "Cancel");
+  configureI18n({ preference: "zh-CN", root });
+  syncGenerateLabel();
+  assert.equal(label.textContent, "取消");
+  assert.equal(label.dataset.i18n, "generation.cancel");
+
+  studio.requestBusy = false;
+  syncGenerateLabel();
+  assert.equal(label.textContent, "生成提示词");
+  assert.equal(label.dataset.i18n, undefined);
+  configureI18n({ preference: "en", root, navigatorLanguage: "en-US" });
+});
+
+test("error toasts never send raw backend messages or codes as visible text", () => {
+  const systemPromptStart = mainSource.indexOf("async function syncSystemPromptEditor(");
+  const systemPromptEnd = mainSource.indexOf("\nasync function ", systemPromptStart + 1);
+  assert.ok(systemPromptStart >= 0 && systemPromptEnd > systemPromptStart);
+  const systemPromptSource = mainSource.slice(systemPromptStart, systemPromptEnd);
+  assert.match(systemPromptSource, /showErrorToast\("toast\.system_prompt\.failed\.title", error\)/);
+  assert.doesNotMatch(systemPromptSource, /showToast\(error\.(?:code|message)/);
+  assert.equal(en["toast.system_prompt.failed.title"], "System Prompt unavailable");
+
+  const queueStart = mainSource.indexOf("function showVramHandoffQueueError(");
+  const queueEnd = mainSource.indexOf("\nfunction ", queueStart + 1);
+  assert.ok(queueStart >= 0 && queueEnd > queueStart);
+  const queueSource = mainSource.slice(queueStart, queueEnd);
+  assert.match(queueSource, /const localized = localizedError\(error, "errors\.UNKNOWN"\)/);
+  assert.match(queueSource, /console\.error\([^\n]*error\?\.code/);
+  assert.match(queueSource, /showToast\(msg\("toast\.vram\.queue\.title"\), localized\.message, localized\.technical\)/);
+  assert.match(queueSource, /detail:\s*localized\.message/);
+  assert.doesNotMatch(queueSource, /error\.message \|\|/);
+
+  const retryStart = mainSource.indexOf("function showVramRetry(");
+  const retryEnd = mainSource.indexOf("\nasync function ", retryStart + 1);
+  assert.ok(retryStart >= 0 && retryEnd > retryStart);
+  const retrySource = mainSource.slice(retryStart, retryEnd);
+  assert.match(retrySource, /: localizedError\(error, "errors\.UNKNOWN"\)\.message/);
+  assert.doesNotMatch(retrySource, /: error\.message/);
+
+  const projectorStart = mainSource.indexOf("function renderProjectorChoice(");
+  const projectorEnd = mainSource.indexOf("\nfunction renderInferenceSettings(", projectorStart + 1);
+  assert.ok(projectorStart >= 0 && projectorEnd > projectorStart);
+  const projectorSource = mainSource.slice(projectorStart, projectorEnd);
+  assert.match(projectorSource, /catch \(error\) \{ showErrorToast\("models\.projector_selection", error\); \}/);
+  assert.doesNotMatch(projectorSource, /showToast\(msg\("models\.projector_selection"\), error\.message\)/);
+
+  const mediaStart = mainSource.indexOf("async function openFloatingMedia(");
+  const mediaEnd = mainSource.indexOf("\nfunction focusAvailableControl(", mediaStart + 1);
+  assert.ok(mediaStart >= 0 && mediaEnd > mediaStart);
+  const mediaSource = mainSource.slice(mediaStart, mediaEnd);
+  assert.match(mediaSource, /catch \(error\) \{ showErrorToast\("toast\.media_panel\.unavailable\.title", error\); \}/);
+  assert.doesNotMatch(mediaSource, /showToast\(msg\("toast\.media_panel\.unavailable\.title"\), error\.message\)/);
+});
+
+test("system prompt status text and i18n marker stay aligned", () => {
+  const window = new Window();
+  const status = window.document.createElement("em");
+  const summaryStatus = window.document.createElement("em");
+  const start = mainSource.indexOf("function setSystemPromptStatus(");
+  const end = mainSource.indexOf("\nfunction ", start + 1);
+  assert.ok(start >= 0 && end > start, "setSystemPromptStatus must be a top-level function");
+  const setSystemPromptStatus = new Function(
+    "t",
+    `${mainSource.slice(start, end)};return setSystemPromptStatus;`,
+  )(t);
+
+  configureI18n({ preference: "en", root: status, navigatorLanguage: "en-US" });
+  setSystemPromptStatus(status, true);
+  setSystemPromptStatus(summaryStatus, false);
+  assert.equal(status.textContent, "Custom");
+  assert.equal(status.dataset.i18n, "settings.custom");
+  assert.equal(summaryStatus.textContent, "Default");
+  assert.equal(summaryStatus.dataset.i18n, "system_prompt.status");
+
+  configureI18n({ preference: "zh-CN", root: status });
+  setSystemPromptStatus(status, true);
+  setSystemPromptStatus(summaryStatus, false);
+  assert.equal(status.textContent, "自定义");
+  assert.equal(summaryStatus.textContent, "默认");
+  configureI18n({ preference: "en", root: status, navigatorLanguage: "en-US" });
+});
+
+test("lyrics restore toast and model guidance use dictionary descriptors", () => {
+  configureI18n({ preference: "en", root: new Window().document.createElement("div"), navigatorLanguage: "en-US" });
+  assert.equal(en["toast.lyrics.previous_restored.title"], "Previous Lyrics restored");
+  assert.equal(en["toast.lyrics.generated_removed.title"], "Generated Lyrics removed");
+  assert.equal(en["toast.lyrics.restore.message"], "The AI Lyrics change was discarded.");
+  assert.equal(en["workspace.select_ready_model"], "Select a ready prompt model in Settings.");
+
+  const restoreStart = mainSource.indexOf('root.querySelector("[data-lyrics-refine-restore]").addEventListener("click"');
+  const restoreEnd = mainSource.indexOf('root.querySelector("[data-refine-restore]")', restoreStart);
+  assert.ok(restoreStart >= 0 && restoreEnd > restoreStart);
+  const restoreSource = mainSource.slice(restoreStart, restoreEnd);
+  assert.match(restoreSource, /previousLyrics\.trim\(\) \? msg\("toast\.lyrics\.previous_restored\.title"\) : msg\("toast\.lyrics\.generated_removed\.title"\)/);
+  assert.match(restoreSource, /msg\("toast\.lyrics\.restore\.message"\)/);
+  assert.doesNotMatch(restoreSource, /Previous Lyrics restored|Generated Lyrics removed|The AI Lyrics change was discarded/);
+  assert.match(mainSource, /new Error\(t\("workspace\.select_ready_model"\)\)/);
+});
+
+test("locale switches preserve inputs, outputs, node identity, and drafts", () => {
+  const window = new Window();
+  const root = window.document.createElement("div");
+  root.innerHTML = `
+    <span data-i18n="workspace.creative_brief">Creative brief</span>
+    <textarea data-video-brief>video brief</textarea>
+    <textarea data-music-lyrics>music lyrics</textarea>
+    <textarea data-output>generated output</textarea>
+    <video data-media-node></video>`;
+  window.document.body.append(root);
+  const brief = root.querySelector("[data-video-brief]");
+  const lyrics = root.querySelector("[data-music-lyrics]");
+  const output = root.querySelector("[data-output]");
+  const mediaNode = root.querySelector("[data-media-node]");
+  const draft = { brief: "video brief", lyrics: "music lyrics", prompt: "generated output" };
+  const studio = { draft, assets: [mediaNode] };
+
+  configureI18n({ preference: "en", root, navigatorLanguage: "en-US" });
+  assert.equal(root.querySelector("[data-i18n]").textContent, "Creative brief");
+
+  setLanguagePreference("zh-CN");
+  assert.equal(root.querySelector("[data-i18n]").textContent, zhCN["workspace.creative_brief"]);
+  assert.equal(brief.value, "video brief");
+  assert.equal(lyrics.value, "music lyrics");
+  assert.equal(output.value, "generated output");
+  assert.equal(root.querySelector("[data-video-brief]"), brief);
+  assert.equal(root.querySelector("[data-output]"), output);
+  assert.equal(root.querySelector("[data-media-node]"), mediaNode);
+  assert.equal(studio.draft, draft);
+  assert.equal(studio.assets[0], mediaNode);
+  assert.deepEqual(draft, { brief: "video brief", lyrics: "music lyrics", prompt: "generated output" });
+
+  setLanguagePreference("en");
+  assert.equal(root.querySelector("[data-i18n]").textContent, "Creative brief");
+  assert.equal(brief.value, "video brief");
+  assert.equal(lyrics.value, "music lyrics");
+  assert.equal(output.value, "generated output");
+  assert.equal(root.querySelector("[data-music-lyrics]"), lyrics);
+});
+
+test("floating launcher labels follow the active locale", () => {
+  const window = new Window();
+  const launcher = window.document.createElement("button");
+  launcher.dataset.h3psLauncher = "true";
+  launcher.innerHTML = `<img src="launcher.svg" alt="">`;
+  window.document.body.append(launcher);
+  const start = mainSource.indexOf("function syncLauncherLabels(");
+  const end = mainSource.indexOf("\nfunction ", start + 1);
+  assert.ok(start >= 0 && end > start, "syncLauncherLabels must be a top-level function");
+  const syncLauncherLabels = new Function(
+    "t",
+    `${mainSource.slice(start, end)};return syncLauncherLabels;`,
+  )(t);
+
+  configureI18n({ preference: "en", root: launcher, navigatorLanguage: "en-US" });
+  syncLauncherLabels(window.document);
+  assert.equal(launcher.title, en["launcher.open_title"]);
+  assert.equal(launcher.getAttribute("aria-label"), en["launcher.open"]);
+  assert.equal(launcher.querySelector("img").alt, en["launcher.alt"]);
+
+  setLanguagePreference("zh-CN");
+  syncLauncherLabels(window.document);
+  assert.equal(launcher.title, zhCN["launcher.open_title"]);
+  assert.equal(launcher.getAttribute("aria-label"), zhCN["launcher.open"]);
+  assert.equal(launcher.querySelector("img").alt, zhCN["launcher.alt"]);
+  assert.notEqual(launcher.title, en["launcher.open_title"]);
+  assert.match(mainSource, /onLocaleChange\(\(\) => syncLauncherLabels\(\)\)/);
+  assert.match(mainSource, /document\.body\.appendChild\(launcher\);[\s\S]{0,200}syncLauncherLabels\(document\)/);
+  configureI18n({ preference: "en", root: launcher, navigatorLanguage: "en-US" });
+});
+
+
+test("unmeasured VRAM toast warns once per Direct GGUF model", () => {
+  const start = mainSource.indexOf("function warnUnmeasuredVram(");
+  const end = mainSource.indexOf("\nasync function ", start + 1);
+  assert.ok(start >= 0 && end > start, "warnUnmeasuredVram must be a top-level function");
+  const calls = [];
+  const studio = { selectedModel: null, gpuMemory: { free_mb: 6144 }, vramEstimateWarnedModel: null };
+  const warnUnmeasuredVram = new Function(
+    "studio", "msg", "showToast",
+    `${mainSource.slice(start, end)};return warnUnmeasuredVram;`,
+  )(studio, msg, (...args) => calls.push(args));
+  const warn = (model) => {
+    studio.selectedModel = model;
+    warnUnmeasuredVram(studio.selectedModel);
+  };
+
+  warn({ id: "router", family: "ollama" });
+  warn({ id: "measured", family: "gguf", estimated_free_vram_mb: { standard: 9000 } });
+  assert.equal(calls.length, 0);
+
+  warn({ id: "custom-gguf", name: "Custom GGUF", family: "gguf", estimated_free_vram_mb: null });
+  warn({ id: "custom-gguf", name: "Custom GGUF", family: "gguf", estimated_free_vram_mb: null });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0][0], { key: "toast.vram.unmeasured.title", params: {} });
+  assert.deepEqual(calls[0][1], { key: "toast.vram.unmeasured.message", params: { free: "6.0" } });
+  assert.equal(calls[0][2], null);
+  assert.equal(calls[0][3], null);
+  assert.deepEqual(calls[0][4], { dismissOnWorkspaceClick: true });
+
+  studio.vramEstimateWarnedModel = null;
+  studio.gpuMemory = null;
+  warn({ id: "other-gguf", family: "gguf" });
+  assert.deepEqual(calls[1][1], { key: "toast.vram.unmeasured.unknown_free", params: {} });
 });

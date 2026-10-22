@@ -1,3 +1,5 @@
+import { onLocaleChange, t, translateDom } from "./i18n.js";
+
 const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
 const timecode = seconds => {
   const tenths=Math.round(Math.max(0,seconds||0)*10);
@@ -34,27 +36,27 @@ function markup(icon) {
   return `<section class="h3ps-media-editor" aria-hidden="true">
     <div class="h3ps-preview-backdrop" data-ed-close></div>
     <div class="h3ps-cmp-dialog h3ps-ed-dialog" role="dialog" aria-labelledby="h3ps-ed-title" tabindex="-1">
-      <header><span><small>Media Editor</small><strong id="h3ps-ed-title"></strong></span><div class="h3ps-cmp-shell-controls" data-ed-shell><button type="button" class="h3ps-icon-button" data-ed-close title="Close (Esc)" aria-label="Close editor">${icon('close',18)}</button><div class="h3ps-ed-close-popover" data-ed-close-popover hidden role="group" aria-label="Unapplied changes"><strong>Unapplied changes</strong><span><button type="button" class="h3ps-secondary-button" data-ed-keep>Keep</button><button type="button" class="h3ps-secondary-button" data-ed-discard>Discard</button></span></div></div></header>
+      <header><span><small data-i18n="media.editor.title">${t("media.editor.title")}</small><strong id="h3ps-ed-title"></strong></span><div class="h3ps-cmp-shell-controls" data-ed-shell><button type="button" class="h3ps-icon-button" data-ed-close title="${t("media.editor.close_title")}" data-i18n-title="media.editor.close_title" aria-label="${t("media.editor.close")}" data-i18n-aria-label="media.editor.close">${icon('close',18)}</button><div class="h3ps-ed-close-popover" data-ed-close-popover hidden role="group" aria-label="${t("media.editor.unapplied")}" data-i18n-aria-label="media.editor.unapplied"><strong data-i18n="media.editor.unapplied">${t("media.editor.unapplied")}</strong><span><button type="button" class="h3ps-secondary-button" data-ed-keep data-i18n="media.editor.keep">${t("media.editor.keep")}</button><button type="button" class="h3ps-secondary-button" data-ed-discard data-i18n="media.editor.discard">${t("media.editor.discard")}</button></span></div></div></header>
       <div class="h3ps-ed-body">
         <div class="h3ps-ed-workspace">
           <div class="h3ps-ed-viewport" data-ed-stage>
             <div class="h3ps-ed-frame" data-ed-frame>
-              <img data-ed-image alt="Source media" draggable="false">
+              <img data-ed-image alt="${t("media.editor.source_alt")}" draggable="false">
               <video data-ed-video playsinline preload="auto"></video>
-              <img class="h3ps-ed-decoded" data-ed-decoded alt="Decoded source frame" draggable="false" hidden>
-              <div class="h3ps-ed-crop" data-ed-crop tabindex="0" aria-label="Crop rectangle. Drag to move or use arrow keys.">
+              <img class="h3ps-ed-decoded" data-ed-decoded alt="${t("media.editor.decoded_alt")}" draggable="false" hidden>
+              <div class="h3ps-ed-crop" data-ed-crop tabindex="0" aria-label="${t("media.editor.crop_aria")}" data-i18n-aria-label="media.editor.crop_aria">
                 ${['nw','n','ne','e','se','s','sw','w'].map(dir=>`<i data-ed-handle="${dir}" class="h3ps-ed-handle is-${dir}"></i>`).join('')}
               </div>
             </div>
           </div>
           <section class="h3ps-ed-crop-tools">
-            <div class="h3ps-frame-count h3ps-ed-ratios" role="group" aria-label="Crop aspect ratio">${ratios.map(r=>`<button type="button" data-ed-ratio="${r}">${r==='free'?'Free':r==='original'?'Original':r}</button>`).join('')}</div>
-            <div class="h3ps-ed-crop-summary"><output data-ed-dimensions></output><span class="h3ps-ed-utilities"><label class="h3ps-ed-check"><input type="checkbox" data-ed-snap>Snap ×32</label><label class="h3ps-ed-check" data-ed-loop-control><input type="checkbox" data-ed-loop>Loop</label></span></div>
+            <div class="h3ps-frame-count h3ps-ed-ratios" role="group" aria-label="${t("media.editor.crop_ratio")}" data-i18n-aria-label="media.editor.crop_ratio">${ratios.map(r=>{const key=r==='free'?'media.editor.free':r==='original'?'media.editor.original':'';return `<button type="button" data-ed-ratio="${r}"${key?` data-i18n="${key}"`:''}>${key?t(key):r}</button>`}).join('')}</div>
+            <div class="h3ps-ed-crop-summary"><output data-ed-dimensions></output><span class="h3ps-ed-utilities"><label class="h3ps-ed-check"><input type="checkbox" data-ed-snap><span data-i18n="media.editor.snap">${t("media.editor.snap")}</span></label><label class="h3ps-ed-check" data-ed-loop-control><input type="checkbox" data-ed-loop><span data-i18n="media.editor.loop">${t("media.editor.loop")}</span></label></span></div>
           </section>
           <section class="h3ps-ed-timeline" data-ed-temporal>
-            <div class="h3ps-ed-playback"><button type="button" class="h3ps-icon-button" data-ed-play aria-label="Play or pause">${icon('play',20)}</button><button type="button" class="h3ps-icon-button" data-ed-step="-1" title="Previous frame" aria-label="Previous frame">${icon('chevron',20)}</button><button type="button" class="h3ps-icon-button" data-ed-step="1" title="Next frame" aria-label="Next frame">${icon('chevron',20)}</button><output data-ed-time>00:00.0 / 00:00.0</output><button type="button" class="h3ps-icon-button" data-ed-frame-download title="Download current frame with draft crop" aria-label="Download current frame">${icon('download',20)}</button><button type="button" class="h3ps-icon-button" data-ed-frame-add title="Add current frame with draft crop as Picture" aria-label="Add current frame as Picture">${icon('image',20)}${icon('plus',12)}</button><button type="button" class="h3ps-icon-button" data-ed-audio hidden title="Download audio and add to workspace (2-15 seconds). Writer does not analyze sound. Connect the WAV separately in H3 and describe its role in the Brief." aria-label="Download audio and add to workspace">${icon('audio',20)}</button><button class="h3ps-cmp-text-action" type="button" data-ed-in>Set Start</button><button class="h3ps-cmp-text-action" type="button" data-ed-out>Set End</button></div>
-            <div class="h3ps-ed-track" data-ed-track tabindex="0" role="slider" aria-label="Source playhead" aria-valuemin="0">
-              <div class="h3ps-ed-filmstrip" data-ed-filmstrip aria-hidden="true"></div><span class="h3ps-ed-dim" data-ed-dim-left></span><span class="h3ps-ed-dim" data-ed-dim-right></span><div class="h3ps-ed-trim" data-ed-trim></div><i class="h3ps-ed-playhead" data-ed-playhead></i><button type="button" data-ed-bound="start" aria-label="Drag trim start"></button><button type="button" data-ed-bound="end" aria-label="Drag trim end"></button></div>
+            <div class="h3ps-ed-playback"><button type="button" class="h3ps-icon-button" data-ed-play aria-label="${t("media.editor.play_pause")}" data-i18n-aria-label="media.editor.play_pause">${icon('play',20)}</button><button type="button" class="h3ps-icon-button" data-ed-step="-1" title="${t("media.editor.previous_frame")}" data-i18n-title="media.editor.previous_frame" aria-label="${t("media.editor.previous_frame")}" data-i18n-aria-label="media.editor.previous_frame">${icon('chevron',20)}</button><button type="button" class="h3ps-icon-button" data-ed-step="1" title="${t("media.editor.next_frame")}" data-i18n-title="media.editor.next_frame" aria-label="${t("media.editor.next_frame")}" data-i18n-aria-label="media.editor.next_frame">${icon('chevron',20)}</button><output data-ed-time>00:00.0 / 00:00.0</output><button type="button" class="h3ps-icon-button" data-ed-frame-download title="${t("media.editor.frame_download_title")}" data-i18n-title="media.editor.frame_download_title" aria-label="${t("media.editor.frame_download")}" data-i18n-aria-label="media.editor.frame_download">${icon('download',20)}</button><button type="button" class="h3ps-icon-button" data-ed-frame-add title="${t("media.editor.frame_add_title")}" data-i18n-title="media.editor.frame_add_title" aria-label="${t("media.editor.frame_add")}" data-i18n-aria-label="media.editor.frame_add">${icon('image',20)}${icon('plus',12)}</button><button type="button" class="h3ps-icon-button" data-ed-audio hidden title="${t("media.editor.audio_title")}" data-i18n-title="media.editor.audio_title" aria-label="${t("media.editor.audio")}" data-i18n-aria-label="media.editor.audio">${icon('audio',20)}</button><button class="h3ps-cmp-text-action" type="button" data-ed-in data-i18n="media.editor.set_start">${t("media.editor.set_start")}</button><button class="h3ps-cmp-text-action" type="button" data-ed-out data-i18n="media.editor.set_end">${t("media.editor.set_end")}</button></div>
+            <div class="h3ps-ed-track" data-ed-track tabindex="0" role="slider" aria-label="${t("media.editor.playhead")}" data-i18n-aria-label="media.editor.playhead" aria-valuemin="0">
+              <div class="h3ps-ed-filmstrip" data-ed-filmstrip aria-hidden="true"></div><span class="h3ps-ed-dim" data-ed-dim-left></span><span class="h3ps-ed-dim" data-ed-dim-right></span><div class="h3ps-ed-trim" data-ed-trim></div><i class="h3ps-ed-playhead" data-ed-playhead></i><button type="button" data-ed-bound="start" aria-label="${t("media.editor.drag_start")}" data-i18n-aria-label="media.editor.drag_start"></button><button type="button" data-ed-bound="end" aria-label="${t("media.editor.drag_end")}" data-i18n-aria-label="media.editor.drag_end"></button></div>
 
             <div class="h3ps-ed-ticks" data-ed-ticks aria-hidden="true"></div>
             <output class="h3ps-ed-selection" data-ed-selection></output>
@@ -64,15 +66,15 @@ function markup(icon) {
           <section class="h3ps-ed-analysis">
             <div class="h3ps-section-heading"><span><small data-ed-view-title>What the model sees</small><strong data-ed-view-subtitle>Applied media</strong></span></div>
             <div data-ed-sampling>
-              <div class="h3ps-sample-controls"><div class="h3ps-frame-count">${['auto','4','6','8'].map(n=>`<button type="button" data-ed-count="${n}">${n==='auto'?'Auto':n}</button>`).join('')}<button type="button" data-ed-custom>Custom</button></div><label class="h3ps-endpoints"><input type="checkbox" data-ed-endpoints>First + last frame</label><button type="button" class="h3ps-secondary-button" data-ed-resample title="Choose a new sampled frame set; Apply to prepare it">Resample</button></div>
-              <label class="h3ps-ed-custom" data-ed-custom-row hidden>Frames <input type="range" min="2" max="24" step="1" data-ed-custom-count aria-label="Custom frame count"><output data-ed-count-value></output></label>
+              <div class="h3ps-sample-controls"><div class="h3ps-frame-count">${['auto','4','6','8'].map(n=>`<button type="button" data-ed-count="${n}"${n==='auto'?' data-i18n="common.auto"':''}>${n==='auto'?t('common.auto'):n}</button>`).join('')}<button type="button" data-ed-custom data-i18n="common.custom">${t('common.custom')}</button></div><label class="h3ps-endpoints"><input type="checkbox" data-ed-endpoints><span data-i18n="media.editor.endpoints">${t("media.editor.endpoints")}</span></label><button type="button" class="h3ps-secondary-button" data-ed-resample title="${t("media.editor.resample_title")}" data-i18n-title="media.editor.resample_title" data-i18n="media.editor.resample">${t("media.editor.resample")}</button></div>
+              <label class="h3ps-ed-custom" data-ed-custom-row hidden><span data-i18n="media.editor.frames">${t("media.editor.frames")}</span> <input type="range" min="2" max="24" step="1" data-ed-custom-count aria-label="${t("media.editor.custom_count")}" data-i18n-aria-label="media.editor.custom_count"><output data-ed-count-value></output></label>
             </div>
             <p class="h3ps-ed-note" data-ed-analysis-state role="status"></p>
-            <div class="h3ps-ed-model-view"><img data-ed-sheet alt="Media representation" hidden></div>
+            <div class="h3ps-ed-model-view"><img data-ed-sheet alt="${t("media.editor.sheet_alt")}" hidden></div>
           </section>
         </aside>
       </div>
-      <footer><span data-ed-status role="status"></span><button type="button" class="h3ps-secondary-button" data-ed-reset>Reset edits</button><button type="button" class="h3ps-secondary-button" data-ed-download>${icon('download',14)}Download</button><button type="button" class="h3ps-primary-button" data-ed-save>Apply</button></footer>
+      <footer><span data-ed-status role="status"></span><button type="button" class="h3ps-secondary-button" data-ed-reset data-i18n="media.editor.reset">${t("media.editor.reset")}</button><button type="button" class="h3ps-secondary-button" data-ed-download>${icon('download',14)}<span data-i18n="media.editor.download">${t("media.editor.download")}</span></button><button type="button" class="h3ps-primary-button" data-ed-save>${t("media.editor.apply")}</button></footer>
     </div>
   </section>`;
 }
@@ -101,8 +103,8 @@ export function createMediaEditor({root,icon,request,onSaved,onAddFrame,onAddAud
     const control = $('[data-ed-play]');
     control.innerHTML = icon(playing ? 'pause' : 'play', 20);
     control.setAttribute('aria-pressed', String(playing));
-    control.setAttribute('aria-label', playing ? 'Pause' : 'Play');
-    control.title = playing ? 'Pause' : 'Play';
+    control.setAttribute('aria-label', playing ? t('media.editor.pause') : t('media.editor.play'));
+    control.title = playing ? t('media.editor.pause') : t('media.editor.play');
   }
   function stop() {
     video.pause();
@@ -125,30 +127,31 @@ export function createMediaEditor({root,icon,request,onSaved,onAddFrame,onAddAud
   function sync(){
     if(!asset)return;
     position();
+    image.alt=t("media.editor.source_alt");decoded.alt=t("media.editor.decoded_alt");$('[data-ed-sheet]').alt=t("media.editor.sheet_alt");
     $('[data-ed-dimensions]').textContent=`${edit.crop.w} × ${edit.crop.h} · ${(edit.crop.w*edit.crop.h/1e6).toFixed(2)} MP`;
     $$('[data-ed-ratio]').forEach(b=>{const active=b.dataset.edRatio===ratioName;b.classList.toggle('is-active',active);b.setAttribute('aria-pressed',String(active));});
     $('[data-ed-snap]').checked=snap;
     const duration=edit.end-edit.start;
-    $('[data-ed-selection]').textContent='Selected '+timecode(edit.start)+' → '+timecode(edit.end)+' · '+duration.toFixed(1)+' s';
+    $('[data-ed-selection]').textContent=t('media.editor.selected',{start:timecode(edit.start),end:timecode(edit.end),duration:duration.toFixed(1)});
     $('[data-ed-dim-left]').style.width=edit.start/(source.duration||1)*100+'%';
     $('[data-ed-dim-right]').style.left=edit.end/(source.duration||1)*100+'%';
     $('[data-ed-trim]').style.left=edit.start/(source.duration||1)*100+'%';$('[data-ed-trim]').style.width=duration/(source.duration||1)*100+'%';
     $$('[data-ed-bound]').forEach(b=>b.style.left=edit[b.dataset.edBound]/(source.duration||1)*100+'%');
     const invalid=isVideo()&&asset.mode==='Reference'&&(duration<2||duration>15.1);
-    $('[data-ed-save]').textContent=saving?'Preparing…':'Apply';
+    $('[data-ed-save]').textContent=saving?t('media.editor.preparing'):t('media.editor.apply');
     $('[data-ed-close-popover]').hidden=!confirming;
-    $('[data-ed-view-title]').textContent=asset.status==='needs_edit'?'Source preview':'What the model sees';
-    $('[data-ed-view-subtitle]').textContent=asset.status==='needs_edit'?'Not a Reference':'Applied media';
+    $('[data-ed-view-title]').textContent=t(asset.status==='needs_edit'?'media.editor.source_preview':'media.editor.view_title');
+    $('[data-ed-view-subtitle]').textContent=t(asset.status==='needs_edit'?'media.editor.not_reference':'media.editor.view_subtitle');
     $('[data-ed-save]').disabled=busy||loading||!mediaReady||!dirty();
     $('[data-ed-download]').disabled=busy||loading||!mediaReady;
     $('[data-ed-audio]').hidden=!isVideo() || !source.has_audio;
     $('[data-ed-audio]').disabled=busy||loading||!mediaReady;
-    $('[data-ed-status]').textContent=busy?'Processing media…':loading?'Loading source…':invalid?'H3 Reference requires 2–15 s. Edits can still be applied.':dirty()?'Unapplied changes':'Edits saved';
+    $('[data-ed-status]').textContent=busy?t('media.editor.processing'):loading?t('media.editor.loading'):invalid?t('media.editor.invalid'):dirty()?t('media.editor.unapplied'):t('media.editor.saved');
     $$('[data-ed-count]').forEach(b=>{const active=!customMode&&b.dataset.edCount===edit.frame_count_mode;b.classList.toggle('is-active',active);b.setAttribute('aria-pressed',String(active));});
     $('[data-ed-custom-row]').hidden=!customMode;
     $('[data-ed-custom]').classList.toggle('is-active',customMode);$('[data-ed-custom]').setAttribute('aria-pressed',String(customMode));
     if(customMode){$('[data-ed-custom-count]').value=edit.frame_count_mode;$('[data-ed-count-value]').textContent=edit.frame_count_mode;}
-    $('[data-ed-analysis-state]').textContent=dirty()?'Unapplied changes · saved preview unchanged':asset.status==='needs_edit'?'H3 Reference requires 2–15 s':isVideo()?`${asset.frames?.length||asset.frame_count||0} applied frames`:'Applied Picture';
+    $('[data-ed-analysis-state]').textContent=dirty()?t('media.editor.preview_dirty'):asset.status==='needs_edit'?t('media.editor.invalid_short'):isVideo()?t('media.editor.applied_frames',{count:asset.frames?.length||asset.frame_count||0}):t('media.editor.applied_picture');
     $('[data-ed-endpoints]').checked=edit.include_endpoints;
     syncTime();
   }
@@ -218,7 +221,7 @@ export function createMediaEditor({root,icon,request,onSaved,onAddFrame,onAddAud
   async function run(action){
     if(busy||loading||!mediaReady||!asset)return;
     if(action==='audio'&&(edit.end-edit.start<2||edit.end-edit.start>15)){
-      notify('Select 2-15 seconds on the timeline to extract an audio reference.');return;
+      notify(t('media.editor.audio_range'));return;
     }
     if(action==='save'){readSampling();if($('[data-ed-save]').disabled)return;}
     stop();saving=action==='save';setBusy(true);
@@ -226,7 +229,7 @@ export function createMediaEditor({root,icon,request,onSaved,onAddFrame,onAddAud
       const result=await serial(action,payload());
       if(action==='save'){
         const updated=result.assets.find(a=>a.id===asset.id);
-        if(!updated)throw new Error('Applied media is no longer available.');
+        if(!updated)throw new Error(t('media.editor.unavailable'));
         asset=updated;
         edit={...edit,...asset.edit,crop:{...(asset.edit?.crop||edit.crop)}};
         applied=JSON.stringify(edit);appliedView();timelineView();await onSaved(result);
@@ -275,6 +278,12 @@ export function createMediaEditor({root,icon,request,onSaved,onAddFrame,onAddAud
   const observer=new ResizeObserver(position);observer.observe(stage);
   const onKey=e=>{if(!asset)return;if(e.key==='Escape'){e.preventDefault();if(confirming){confirming=false;sync();return;}const menu=root.querySelector('[data-interface-size-menu]');if(menu&&!menu.hidden){root.querySelector('[data-interface-size-toggle]').click();return;}close();}else if(e.code==='Space'&&isVideo()&&!['INPUT','SELECT','TEXTAREA','BUTTON'].includes(document.activeElement?.tagName)){e.preventDefault();play();}};
   document.addEventListener('keydown',onKey);
+  const offLocale = onLocaleChange(() => {
+    translateDom(el);
+    syncPlaybackControl();
+    if (asset) sync();
+  });
+
   function open(current, opener) {
     if (asset) return;
     asset = current;
@@ -324,14 +333,14 @@ export function createMediaEditor({root,icon,request,onSaved,onAddFrame,onAddAud
       if (fallback) {
         loading = false;
         sync();
-        notify("The browser could not play the prepared source.");
+        notify(t("media.editor.source_failed"));
         return;
       }
       fallback = true;
       loading = true;
       sync();
       $("[data-ed-status]").textContent =
-        "Preparing browser-compatible source…";
+        t("media.editor.preparing_source");
       try {
         const result = await serial("source");
         if (!asset || e !== epoch) return;
@@ -417,5 +426,5 @@ export function createMediaEditor({root,icon,request,onSaved,onAddFrame,onAddAud
     returnTo?.focus?.({ preventScroll: true });
     return true;
   }
-  return {open,close,destroy(){close(true);observer.disconnect();document.removeEventListener('keydown',onKey);el.remove();}};
+  return {open,close,destroy(){offLocale();close(true);observer.disconnect();document.removeEventListener('keydown',onKey);el.remove();}};
 }

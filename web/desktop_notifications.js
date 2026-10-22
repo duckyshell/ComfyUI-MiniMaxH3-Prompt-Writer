@@ -1,3 +1,5 @@
+import { t } from "./i18n.js";
+
 const KEY = "h3-writer-desktop-notifications";
 
 export function createDesktopNotifications({ storage, document, window }) {
@@ -8,9 +10,9 @@ export function createDesktopNotifications({ storage, document, window }) {
   return {
     get enabled() { return enabled && supported() && API.permission === "granted"; },
     get hint() {
-      if (!supported()) return "Desktop notifications are unavailable at this browser address.";
-      if (API.permission === "denied") return "Notifications are blocked. Allow them in your browser site settings.";
-      return "Notify when generation finishes or fails while the tab is hidden.";
+      if (!supported()) return t("notifications.unavailable");
+      if (API.permission === "denied") return t("notifications.blocked");
+      return t("notifications.hint");
     },
     async setEnabled(value) {
       enabled = false;

@@ -37,6 +37,23 @@
 .h3ps-brand > span:last-child { display: flex; flex-direction: column; }
 .h3ps-brand strong { font-size: var(--h3ps-font-subheading); font-weight: 620; letter-spacing: -.2px; white-space: nowrap; }
 .h3ps-header-meta { display: flex; align-items: center; gap: calc(8px * var(--h3ps-interface-scale)); margin-left: auto; }
+.h3ps-language-select {
+  height: calc(30px * var(--h3ps-interface-scale));
+  padding: 0 calc(7px * var(--h3ps-interface-scale));
+  border: 1px solid var(--h3ps-border);
+  border-radius: var(--h3ps-radius-sm);
+  background: var(--h3ps-surface-2);
+  color: var(--h3ps-muted);
+  font: inherit;
+  font-size: var(--h3ps-font-control-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.h3ps-language-select:hover { border-color: var(--h3ps-border-button-hover); background: var(--h3ps-surface-3); color: var(--h3ps-text); }
+.h3ps-language-select:focus-visible { outline: 2px solid var(--h3ps-accent); outline-offset: 2px; }
+@media (max-width: 760px) {
+  .h3ps-language-select { width: calc(74px * var(--h3ps-interface-scale)); }
+}
 .h3ps-guide-picker { position: relative; }
 
 .h3ps-guide-button,

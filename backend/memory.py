@@ -32,6 +32,30 @@ def estimated_free_vram_mb(model_info: dict[str, Any], runtime_plan: dict[str, A
     return round(required)
 
 
+def unmeasured_vram_warning(
+    model_info: dict[str, Any],
+    runtime_plan: dict[str, Any],
+    gpu_memory: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return details when the model has no measured VRAM estimate.
+
+    Such a model is not blocked; the caller surfaces a warning so a possible
+    out-of-memory failure is visible before loading starts.
+    """
+    if not gpu_memory or estimated_free_vram_mb(model_info, runtime_plan) is not None:
+        return None
+    free_mb = gpu_memory.get("free_mb")
+    total_mb = gpu_memory.get("total_mb")
+    return {
+        "free_mb": round(free_mb) if isinstance(free_mb, (int, float)) else None,
+        "total_mb": round(total_mb) if isinstance(total_mb, (int, float)) else None,
+        "model_name": model_info.get("name") or model_info.get("id"),
+        "context_profile": runtime_plan.get("context_profile"),
+        "context_tokens": runtime_plan.get("context_tokens"),
+        "kv_cache": runtime_plan.get("kv_cache"),
+    }
+
+
 def assess_free_vram(
     model_info: dict[str, Any],
     runtime_plan: dict[str, Any],

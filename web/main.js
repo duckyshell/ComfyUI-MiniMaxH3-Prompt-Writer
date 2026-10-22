@@ -11,6 +11,22 @@ import { selectProjector, cancel, clearMedia, diagnoseGGUFRuntime, disconnectApi
 import { comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, insertReferenceAtCaret, isChoiceMenuInteraction, isGuideMenuInteraction, isRuntimeMenuInteraction, moveOntoTarget, replacementTargetForFileDrop, replaceEventListener, vramReleaseReachedTarget } from "./compat.js";
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
+  configureI18n,
+  getLanguagePreference,
+  getLocale,
+  hasTranslation,
+  messageText,
+  msg,
+  normalizeLanguagePreference,
+  onLocaleChange,
+  setLanguagePreference,
+  t,
+  translateDom,
+  localizedError,
+} from "./i18n.js";
+import { writeToastContent } from "./toast.js";
+import { writeStatusContent } from "./status.js";
+import {
   buildGeneratePayload,
   buildLyricsRefinePayload,
   buildRefinePayload,
@@ -51,35 +67,11 @@ const TROUBLESHOOTING_GUIDE_URL = "https://github.com/duckyshell/ComfyUI-MiniMax
 const MUSIC3_GUIDE_URL = "https://github.com/MiniMax-AI/MiniMax-Music3/tree/main/skills/music-caption-rewriter";
 
 const MODES = {
-  T2VA: {
-    title: "Text to video",
-    hint: "Describe the scene. No reference media is required.",
-    assets: [],
-  },
-  I2VA: {
-    title: "Image to video",
-    hint: "The opening image anchors subject, framing and visual style.",
-    assets: [],
-    limit: 1,
-  },
-  FL2VA: {
-    title: "First & last frame",
-    hint: "Define the visual transition between the opening and closing frames.",
-    assets: [],
-    limit: 2,
-  },
-  L2VA: {
-    title: "Last frame",
-    hint: "The final image defines where the generated shot must arrive.",
-    assets: [],
-    limit: 1,
-  },
-  Reference: {
-    title: "Images, video & audio",
-    tabTitle: "",
-    hint: "Add up to 9 images, 3 videos and 3 audio files.",
-    assets: [],
-  },
+  T2VA: { titleKey: "mode.T2VA.title", hintKey: "mode.T2VA.hint", assets: [] },
+  I2VA: { titleKey: "mode.I2VA.title", hintKey: "mode.I2VA.hint", assets: [], limit: 1 },
+  FL2VA: { titleKey: "mode.FL2VA.title", hintKey: "mode.FL2VA.hint", assets: [], limit: 2 },
+  L2VA: { titleKey: "mode.L2VA.title", hintKey: "mode.L2VA.hint", assets: [], limit: 1 },
+  Reference: { titleKey: "mode.Reference.title", tabTitle: "", hintKey: "mode.Reference.hint", assets: [] },
 };
 
 const MODE_DEFAULT_DRAFTS = {
@@ -205,25 +197,42 @@ function countWords(value) {
 }
 
 function promptLengthMeta(value) {
-  return `${value.length.toLocaleString()} characters · ${countWords(value).toLocaleString()} words`;
+  return t("meta.prompt_length", {
+    characters: value.length.toLocaleString(),
+    words: countWords(value).toLocaleString(),
+  });
 }
 
 function formatGenerationMeta(result) {
-  const peakVram = result.peak_vram_mb ? ` · ${(result.peak_vram_mb / 1024).toFixed(1)} GB peak` : "";
+  const peakVram = result.peak_vram_mb
+    ? ` · ${t("meta.peak_vram", { gb: (result.peak_vram_mb / 1024).toFixed(1) })}`
+    : "";
   const load = Number(result.model_load_seconds || 0).toFixed(1);
   const media = Number(result.media_processing_seconds || 0).toFixed(1);
   const llm = Number(result.generation_seconds || 0).toFixed(1);
-  const fallback = result.thinking_fallback ? " · Thinking fallback" : "";
-  const memory = result.context_tokens ? ` · ${Math.round(result.context_tokens / 1024)}K/${String(result.kv_cache).toUpperCase()}` : "";
+  const fallback = result.thinking_fallback ? ` · ${t("meta.thinking_fallback")}` : "";
+  const memory = result.context_tokens
+    ? ` · ${Math.round(result.context_tokens / 1024)}K/${String(result.kv_cache).toUpperCase()}`
+    : "";
+  const total = result.total_seconds.toFixed(1);
   const timing = result.api_provider
-    ? `${result.total_seconds.toFixed(1)}s total (${media}s media · ${llm}s provider)`
+    ? t("meta.timing.api", { total, media, llm })
     : result.external_server
-    ? `${result.total_seconds.toFixed(1)}s total (${media}s media · ${llm}s server)`
-    : `${result.total_seconds.toFixed(1)}s total (${load}s load · ${media}s media · ${llm}s LLM)`;
-  const speed = Number.isFinite(result.tokens_per_second) ? ` · ${result.tokens_per_second.toFixed(1)} tok/s` : "";
-  const apiRequests = result.api_provider ? ` · ${result.provider_request_count || 1} API request${result.provider_request_count === 1 ? "" : "s"}` : "";
-  const cost = Number.isFinite(result.provider_cost_usd) ? ` · $${result.provider_cost_usd.toFixed(4)} reported` : "";
-  const usage = result.api_provider && result.usage_source ? ` · usage ${result.usage_source}` : "";
+    ? t("meta.timing.server", { total, media, llm })
+    : t("meta.timing.local", { total, load, media, llm });
+  const speed = Number.isFinite(result.tokens_per_second)
+    ? ` · ${t("meta.tokens_per_second", { value: result.tokens_per_second.toFixed(1) })}`
+    : "";
+  const requests = result.provider_request_count || 1;
+  const apiRequests = result.api_provider
+    ? ` · ${t(requests === 1 ? "meta.api_request.one" : "meta.api_request.other", { count: requests })}`
+    : "";
+  const cost = Number.isFinite(result.provider_cost_usd)
+    ? ` · ${t("meta.cost", { value: result.provider_cost_usd.toFixed(4) })}`
+    : "";
+  const usage = result.api_provider && result.usage_source
+    ? ` · ${t("meta.usage", { source: result.usage_source })}`
+    : "";
   return `${promptLengthMeta(result.prompt)} · ${timing}${speed}${apiRequests}${cost}${usage}${peakVram}${memory}${fallback}`;
 }
 
@@ -231,7 +240,7 @@ function syncOutputLengthMeta() {
   if (!studio) return;
   const output = studio.root.querySelector("[data-output]");
   const meta = studio.root.querySelector(".h3ps-editor-meta span:last-child");
-  const suffix = meta.textContent.replace(/^[\d,.]+ (?:chars|characters)(?: · [\d,.]+ words)?(?: · )?/i, "");
+  const suffix = meta.textContent.split(" · ").slice(2).join(" · ");
   meta.textContent = `${promptLengthMeta(output.value)}${suffix ? ` · ${suffix}` : ""}`;
 }
 
@@ -251,8 +260,15 @@ function syncMusicSystemPromptSummary() {
   if (!summary) return;
   summary.textContent = Object.hasOwn(studio.customSystemPrompts, "music3")
     || Object.hasOwn(studio.customSystemPrompts, "music3_lyrics")
-    ? "Custom"
-    : "Default";
+    ? t("settings.custom")
+    : t("system_prompt.status");
+}
+
+function setSystemPromptStatus(element, custom) {
+  if (!element) return;
+  const key = custom ? "settings.custom" : "system_prompt.status";
+  element.dataset.i18n = key;
+  element.textContent = t(key);
 }
 
 async function syncSystemPromptEditor(profile) {
@@ -264,27 +280,31 @@ async function syncSystemPromptEditor(profile) {
   const reset = studio.root.querySelector(`[data-system-prompt-reset="${profile}"]`);
   const count = studio.root.querySelector(`[data-system-prompt-count="${profile}"]`);
   const requestMode = profile === "music3_lyrics" ? "Music3Lyrics" : profile === "music3" ? "Music3" : profile === "reference" ? "Reference" : "T2VA";
-  textarea.disabled = true;
   if (!studio.systemPromptDefaults[profile]) {
+    if (studio.localeRefreshing) return;
+    textarea.disabled = true;
     try {
       const result = await getSystemPrompt(requestMode);
       studio.systemPromptDefaults[result.profile] = result.system_prompt;
     } catch (error) {
       textarea.value = "";
-      if (status) status.textContent = "Unavailable";
-      if (summaryStatus) summaryStatus.textContent = "Unavailable";
-      showToast(error.code || "System Prompt unavailable", error.message, error.details);
+      if (status) status.textContent = t("system_prompt.unavailable");
+      if (summaryStatus) summaryStatus.textContent = t("system_prompt.unavailable");
+      showErrorToast("toast.system_prompt.failed.title", error);
       return;
     }
   }
   const custom = Object.hasOwn(studio.customSystemPrompts, profile);
-  textarea.value = custom ? studio.customSystemPrompts[profile] : studio.systemPromptDefaults[profile];
-  textarea.disabled = false;
-  if (status) status.textContent = custom ? "Custom" : "Default";
-  if (summaryStatus) summaryStatus.textContent = custom ? "Custom" : "Default";
+  if (!studio.localeRefreshing) {
+    textarea.value = custom ? studio.customSystemPrompts[profile] : studio.systemPromptDefaults[profile];
+    textarea.disabled = false;
+    resizeSystemPromptEditor(textarea);
+  }
+  setSystemPromptStatus(status, custom);
+  setSystemPromptStatus(summaryStatus, custom);
   reset.hidden = !custom;
-  count.textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
-  resizeSystemPromptEditor(textarea);
+  const text = custom ? studio.customSystemPrompts[profile] : studio.systemPromptDefaults[profile] || "";
+  count.textContent = `${text.length.toLocaleString()} / 8,000`;
   syncMusicSystemPromptSummary();
 }
 
@@ -393,6 +413,7 @@ function icon(name, size = 16) {
     grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
     download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/>',
     crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2"/>',
+    chat: '<path d="M20 12a8 8 0 0 1-8 8H4l2-3.2A8 8 0 1 1 20 12Z"/><path d="M8 11h8m-8 3h5"/>',
   };
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" style="--h3ps-icon-size:${size}px" aria-hidden="true">${paths[name] || paths.info}</svg>`;
 }
@@ -401,6 +422,7 @@ function renderAsset(asset, index) {
   const destructiveDisabled = studio.requestBusy ? "disabled" : "";
   const tagDisabled = studio.requestBusy ? "disabled" : "";
   const draggable = studio.requestBusy ? "false" : "true";
+  const assetName = escapeHtml(asset.reference || asset.filename);
   const visual = asset.type === "audio"
     ? `<div class="h3ps-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`
     : asset.preview_url
@@ -409,15 +431,15 @@ function renderAsset(asset, index) {
   const overlay = asset.type === "video" ? `<span class="h3ps-play">${icon("play", 18)}</span>` : "";
   const duration = formatDuration(asset.duration);
   return `
-    <div class="h3ps-asset" tabindex="0" role="group" aria-label="Media inspector" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}" data-replace-label="Replace ${escapeHtml(asset.reference || asset.filename)}">
+    <div class="h3ps-asset" tabindex="0" role="group" aria-label="${t("media.inspector")}" draggable="${draggable}" data-asset-index="${index}" data-asset-id="${asset.id}" data-replace-label="${t("media.replace", { name: assetName })}">
       <span class="h3ps-asset-preview h3ps-${asset.type}">${visual}${overlay}</span>
       <span class="h3ps-asset-copy">
-        <strong>${asset.reference ? `<button type="button" class="h3ps-media-tag is-${asset.type}" data-media-tag="${escapeHtml(asset.reference)}" ${tagDisabled} title="Insert reference at text cursor">${escapeHtml(asset.reference || asset.filename)}</button>` : "Trim required"}</strong>
+        <strong>${asset.reference ? `<button type="button" class="h3ps-media-tag is-${asset.type}" data-media-tag="${escapeHtml(asset.reference)}" ${tagDisabled} title="${t("media.insert_reference")}" data-i18n-title="media.insert_reference">${escapeHtml(asset.reference || asset.filename)}</button>` : t("media.trim_required")}</strong>
         <small>${escapeHtml(asset.filename)}</small>
       </span>
       ${duration ? `<span class="h3ps-duration">${duration}</span>` : ""}
-      <button class="h3ps-replace-asset" type="button" data-replace-asset="${asset.id}" title="Replace ${escapeHtml(asset.reference || asset.filename)}" aria-label="Replace ${escapeHtml(asset.reference || asset.filename)}" ${destructiveDisabled}>${icon("refresh", 12)}</button>
-      <button class="h3ps-remove-asset" type="button" data-remove-asset="${asset.id}" title="Remove ${escapeHtml(asset.reference || asset.filename)}" aria-label="Remove ${escapeHtml(asset.reference || asset.filename)}" ${destructiveDisabled}>${icon("close", 12)}</button>
+      <button class="h3ps-replace-asset" type="button" data-replace-asset="${asset.id}" title="${t("media.replace", { name: assetName })}" aria-label="${t("media.replace", { name: assetName })}" ${destructiveDisabled}>${icon("refresh", 12)}</button>
+      <button class="h3ps-remove-asset" type="button" data-remove-asset="${asset.id}" title="${t("media.remove", { name: assetName })}" aria-label="${t("media.remove", { name: assetName })}" ${destructiveDisabled}>${icon("close", 12)}</button>
     </div>`;
 }
 
@@ -428,9 +450,9 @@ function referenceComposerAssets() {
 function composerAddState() {
   const assets = studio.assets.filter((asset) => asset.mode === "Reference");
   const pictureCount = assets.filter((asset) => asset.type === "image").length;
-  if (studio.requestBusy) return { allowed: false, message: "Wait for the current Writer request to finish." };
-  if (pictureCount >= 9) return { allowed: false, message: "Remove a Picture before adding the composition." };
-  if (assets.length >= 12) return { allowed: false, message: "Remove a reference before adding the composition." };
+  if (studio.requestBusy) return { allowed: false, message: t("composer.wait_request") };
+  if (pictureCount >= 9) return { allowed: false, message: t("composer.remove_picture") };
+  if (assets.length >= 12) return { allowed: false, message: t("composer.remove_reference") };
   return { allowed: true, reference: `<Picture ${pictureCount + 1}>` };
 }
 
@@ -438,16 +460,16 @@ function syncComposerControl(mode = studio.mode) {
   const panel = studio.root.querySelector("[data-media-panel-action]");
   if (panel) {
     panel.disabled = !studio.assets.some(asset => ["image", "video", "audio"].includes(asset.type) && asset.content_url);
-    panel.title = panel.disabled ? "Add media first" : "Open Media panel";
+    panel.title = panel.disabled ? t("media.add_first") : t("media.open_panel");
   }
   const button = studio.root.querySelector("[data-open-composer]");
   if (!button) return;
   const sources = mode === "Reference" ? referenceComposerAssets() : [];
   button.disabled = studio.requestBusy || !sources.length;
-  button.title = mode !== "Reference" ? "Switch to Reference mode"
-    : studio.requestBusy ? "Wait for the current request to finish"
-    : sources.length ? `Compose a new Picture from ${sources.length} media source${sources.length === 1 ? "" : "s"}`
-    : "Add a Picture or Video first";
+  button.title = mode !== "Reference" ? t("media.switch_reference")
+    : studio.requestBusy ? t("media.wait_request")
+    : sources.length ? t(sources.length === 1 ? "media.compose_sources.one" : "media.compose_sources.other", { count: sources.length })
+    : t("media.add_picture_or_video");
 }
 
 async function addComposedPicture({ blob, width, height, mimeType, filename, sources }) {
@@ -459,8 +481,12 @@ async function addComposedPicture({ blob, width, height, mimeType, filename, sou
   renderMedia("Reference");
   const added = result.assets[0];
   showToast(
-    `${added.reference} added`,
-    `Composed from ${sources.length} source${sources.length === 1 ? "" : "s"} · ${width}×${height} PNG.`,
+    msg("toast.media.composed.title", { reference: added.reference }),
+    msg(sources.length === 1 ? "toast.media.composed.one" : "toast.media.composed.other", {
+      count: sources.length,
+      width,
+      height,
+    }),
   );
 }
 
@@ -479,9 +505,9 @@ function notifyMediaCompatibility() {
   if(signature===studio.mediaCompatibilityNotice)return;
   studio.mediaCompatibilityNotice=signature;
   const messages=[];
-  if(pending.length)messages.push("Trim the video source to 2–15 seconds and Apply to use it as a reference.");
-  if(total>15)messages.push("Reference videos exceed 15 seconds in total. Prompt generation is still available; check H3 compatibility.");
-  if(messages.length)showToast("Reference media",messages.join(" "),null,null,{dismissOnWorkspaceClick:true});
+  if(pending.length)messages.push(t("toast.media.trim_hint"));
+  if(total>15)messages.push(t("toast.media.total_hint"));
+  if(messages.length)showToast(msg("toast.media.compatibility.title"),messages.join(" "),null,null,{dismissOnWorkspaceClick:true});
 }
 
 function renderMedia(mode) {
@@ -496,8 +522,8 @@ function renderMedia(mode) {
   const data = MODES[mode];
   const assets = studio.assets.filter((asset) => asset.mode === mode);
   const media = studio.root.querySelector("[data-h3ps-media]");
-  studio.root.querySelector("[data-h3ps-mode-title]").textContent = data.title;
-  studio.root.querySelector("[data-h3ps-mode-hint]").textContent = data.hint;
+  studio.root.querySelector("[data-h3ps-mode-title]").textContent = t(data.titleKey);
+  studio.root.querySelector("[data-h3ps-mode-hint]").textContent = t(data.hintKey);
   studio.root.querySelectorAll("[data-mode]").forEach((button) => {
     const active = button.dataset.mode === mode;
     button.classList.toggle("is-active", active);
@@ -508,8 +534,8 @@ function renderMedia(mode) {
     media.innerHTML = `
       <div class="h3ps-empty-drop is-static">
         <span class="h3ps-empty-icon">${icon("spark", 20)}</span>
-        <strong>Start from a text description</strong>
-        <small>T2VA does not use reference media</small>
+        <strong data-i18n="media.empty_t2va_title">${t("media.empty_t2va_title")}</strong>
+        <small data-i18n="media.empty_t2va_hint">${t("media.empty_t2va_hint")}</small>
       </div>`;
   } else {
     const isReference = mode === "Reference";
@@ -517,18 +543,20 @@ function renderMedia(mode) {
     const visibleAssets = filter === "all" ? assets : assets.filter((asset) => asset.type === filter);
     const counts = assets.reduce((result, asset) => ({ ...result, [asset.type]: (result[asset.type] || 0) + 1 }), {});
     const filters = isReference ? `
-      <div class="h3ps-media-filters" aria-label="Reference type">
-        <button type="button" data-media-filter="all" class="${filter === "all" ? "is-active" : ""}">All <b>${assets.length}/12</b></button>
-        <button type="button" data-media-filter="image" class="${filter === "image" ? "is-active" : ""}">${icon("image", 13)} Images <b>${counts.image || 0}/9</b></button>
-        <button type="button" data-media-filter="video" class="${filter === "video" ? "is-active" : ""}">${icon("video", 13)} Video <b>${counts.video || 0}/3</b></button>
-        <button type="button" data-media-filter="audio" class="${filter === "audio" ? "is-active" : ""}">${icon("audio", 13)} Audio <b>${counts.audio || 0}/3</b></button>
+      <div class="h3ps-media-filters" aria-label="${t("media.reference_type")}" data-i18n-aria-label="media.reference_type">
+        <button type="button" data-media-filter="all" class="${filter === "all" ? "is-active" : ""}"><span data-i18n="media.filter_all">${t("media.filter_all")}</span> <b>${assets.length}/12</b></button>
+        <button type="button" data-media-filter="image" class="${filter === "image" ? "is-active" : ""}">${icon("image", 13)} <span data-i18n="media.filter_images">${t("media.filter_images")}</span> <b>${counts.image || 0}/9</b></button>
+        <button type="button" data-media-filter="video" class="${filter === "video" ? "is-active" : ""}">${icon("video", 13)} <span data-i18n="media.filter_video">${t("media.filter_video")}</span> <b>${counts.video || 0}/3</b></button>
+        <button type="button" data-media-filter="audio" class="${filter === "audio" ? "is-active" : ""}">${icon("audio", 13)} <span data-i18n="media.filter_audio">${t("media.filter_audio")}</span> <b>${counts.audio || 0}/3</b></button>
       </div>` : "";
-    const addLabel = !isReference || filter === "image" ? "Add image" : filter === "video" ? "Add video" : filter === "audio" ? "Add audio" : "Add media";
+    const addLabelKey = !isReference || filter === "image"
+      ? "media.add_image"
+      : filter === "video" ? "media.add_video" : filter === "audio" ? "media.add_audio" : "media.add_media";
     const canAdd = isReference || assets.length < data.limit;
     media.innerHTML = `
       ${filters}
       <div class="h3ps-assets ${isReference ? "is-reference" : ""}">${visibleAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
-        ${canAdd ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 18)}<span>${addLabel}</span><small>Drop files here</small></button>` : ""}
+        ${canAdd ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 18)}<span data-i18n="${addLabelKey}">${t(addLabelKey)}</span><small data-i18n="media.drop_files">${t("media.drop_files")}</small></button>` : ""}
       </div>`;
   }
   notifyMediaCompatibility();
@@ -613,7 +641,7 @@ function acceptMediaAssets(assets) {
     updateBriefLayout(); renderPromptHighlights(); syncModifiedState(); saveCurrentModeDraft();
   } else saveModeDrafts(localStorage, studio.modeDrafts);
   studio.assets = assets;
-  if (missing) showToast("Reference removed", "Missing media tags are marked in your Single text. Replace or remove them before Generate or Refine.");
+  if (missing) showToast(msg("toast.media.reference_removed.title"), msg("toast.media.reference_removed.message"));
 }
 
 function bindMediaActions(mode) {
@@ -654,7 +682,7 @@ function bindMediaActions(mode) {
         acceptMediaAssets(result.assets);
         renderMedia(studio.mode);
       } catch (error) {
-        showToast(error.code || "Remove failed", error.message, error.details);
+        showErrorToast("toast.media.remove_failed.title", error);
       }
     });
   });
@@ -727,7 +755,7 @@ function bindMediaActions(mode) {
         acceptMediaAssets(result.assets);
         renderMedia(studio.mode);
       } catch (error) {
-        showToast(error.code || "Reorder failed", error.message, error.details);
+        showErrorToast("toast.media.reorder_failed.title", error);
       }
       return;
     }
@@ -738,7 +766,7 @@ function bindMediaActions(mode) {
 
 function previewAsset(asset) {
   if (!asset) return;
-  showToast(asset.reference, `${formatDuration(asset.duration)} audio reference loaded.`);
+  showToast(asset.reference, msg("toast.media.audio_loaded", { duration: formatDuration(asset.duration) }));
 }
 
 function chooseMedia(mode, replaceAssetId = null) {
@@ -754,10 +782,10 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
   if (!files.length || studio.requestBusy) return;
   const existing = studio.assets.filter((asset) => asset.mode === mode);
   if (mode !== "Reference" && !replaceAssetId && existing.length + files.length > MODES[mode].limit) {
-    showToast("Reference slot is full", "Use Replace on the existing image.");
+    showToast(msg("toast.media.slot_full.title"), msg("toast.media.slot_full.message"));
     return;
   }
-  showToast("Processing media", "Creating previews and the ordered contact sheet…");
+  showToast(msg("toast.media.processing.title"), msg("toast.media.processing.message"));
   const previousAssets = [...studio.assets];
   try {
     const result = await uploadMedia(studio.sessionId, mode, files, replaceAssetId);
@@ -767,8 +795,8 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
     else studio.assets = [...studio.assets, ...result.assets];
     if (audioWasAdded(previousAssets, studio.assets)) {
       showToast(
-        "Audio added",
-        "The prompt model can't hear audio files. Describe how the audio references should be used in the Creative Brief.",
+        msg("toast.media.audio_added.title"),
+        msg("toast.media.audio_added.message"),
         null,
         null,
         { durationMs: 6000 },
@@ -777,7 +805,7 @@ async function uploadFiles(mode, files, replaceAssetId = null) {
     renderMedia(studio.mode);
   } catch (error) {
     renderMedia(studio.mode);
-    showToast(error.code || "Upload failed", error.message, error.details);
+    showErrorToast("toast.media.upload_failed.title", error);
   }
 }
 
@@ -797,16 +825,12 @@ function showToast(title, message, details = null, action = null, options = {}) 
       studio.toastDismissOnWorkspaceClick = dismissOnWorkspaceClick;
     }
   }, 0);
-  toast.querySelector("[data-toast-title]").textContent = title;
-  toast.querySelector("[data-toast-message]").textContent = message;
+  studio.toastSnapshot = { title, message, details, action };
+  writeToastContent(toast, studio.toastSnapshot);
   const technical = toast.querySelector("[data-toast-details]");
-  technical.hidden = details == null;
   technical.open = false;
-  technical.querySelector("pre").textContent = details == null ? "" : typeof details === "string" ? details : JSON.stringify(details, null, 2);
   toast.classList.toggle("has-details", details != null);
   const actionButton = toast.querySelector("[data-toast-action]");
-  actionButton.hidden = !action;
-  actionButton.textContent = action?.label || "";
   actionButton.onclick = action ? () => { action.onClick(); hideToast(); } : null;
   toast.classList.toggle("has-action", Boolean(action));
   toast.classList.toggle("is-persistent", dismissOnWorkspaceClick);
@@ -818,6 +842,12 @@ function showToast(title, message, details = null, action = null, options = {}) 
       durationMs ?? (action ? 12000 : details == null ? 2800 : 7000),
     );
   }
+}
+
+function showErrorToast(titleKey, error, options = {}) {
+  console.error(`[H3 Writer] error code=${error?.code || "UNKNOWN"}`, error);
+  const localized = localizedError(error, "errors.UNKNOWN");
+  showToast(msg(titleKey), msg(localized.key, error?.params || {}), localized.technical, null, options);
 }
 
 function defaultModeDraft(mode) {
@@ -843,9 +873,12 @@ function currentBriefTextarea() {
 async function copyPromptText(text, music = false) {
   try {
     await navigator.clipboard.writeText(text);
-    showToast(music ? "Caption copied" : "Prompt copied", music ? "The generated Music 3 caption is on your clipboard." : "The generated H3 prompt is on your clipboard.");
+    showToast(
+      msg(music ? "toast.copy.caption.title" : "toast.copy.prompt.title"),
+      msg(music ? "toast.copy.caption.message" : "toast.copy.prompt.message"),
+    );
   } catch (error) {
-    showToast("Copy failed", "Clipboard access was denied.", error.message);
+    showToast(msg("toast.copy.failed.title"), msg("toast.copy.failed.message"), error.message);
   }
 }
 
@@ -874,9 +907,9 @@ function clearCurrentPrompts({ notify = true } = {}) {
   saveCurrentModeDraft();
   if (notify) {
     const detail = studio.mode === "Music3"
-      ? "The Music Brief and generated caption were cleared. Lyrics and media were kept."
-      : "The Creative Brief and generated prompt were cleared. Media was kept.";
-    showToast("Prompts cleared", detail);
+      ? msg("toast.clear.prompts.music")
+      : msg("toast.clear.prompts.video");
+    showToast(msg("toast.clear.prompts.title"), detail);
   }
   return true;
 }
@@ -889,10 +922,10 @@ async function clearCurrentMedia({ notify = true } = {}) {
 
 
     renderMedia(studio.mode);
-    if (notify) showToast("Media cleared", "The temporary session files were removed.");
+    if (notify) showToast(msg("toast.clear.media.title"), msg("toast.clear.media.message"));
     return true;
   } catch (error) {
-    showToast(error.code || "Clear failed", error.message, error.details);
+    showErrorToast("toast.clear.failed.title", error);
     return false;
   }
 }
@@ -903,14 +936,14 @@ async function clearEverything() {
   if (!await clearCurrentMedia({ notify: false })) return;
   const currentDraft = currentDraftFields();
   if (studio.mode !== mode || currentDraft.brief !== submittedDraft.brief || currentDraft.prompt !== submittedDraft.prompt) {
-    showToast("Media cleared", "Your current prompts were kept because the workspace changed.");
+    showToast(msg("toast.clear.media.title"), msg("toast.clear.media_workspace_changed.message"));
     return;
   }
   clearCurrentPrompts({ notify: false });
   const detail = studio.mode === "Music3"
-    ? "Media, Music Brief and generated caption were removed. Lyrics were kept."
-    : "Media, Creative Brief and generated prompt were removed.";
-  showToast("Everything cleared", detail);
+    ? msg("toast.clear.all.music")
+    : msg("toast.clear.all.video");
+  showToast(msg("toast.clear.all.title"), detail);
 }
 
 function saveCurrentModeDraft() {
@@ -949,7 +982,7 @@ function saveTextDraft() {
     const url = URL.createObjectURL(blob), link = document.createElement("a");
     link.href=url; link.download=draftFilename(value.kind); link.click();
     setTimeout(()=>URL.revokeObjectURL(url), 1000);
-  } catch(error) { showToast("Save draft", error.message); }
+  } catch(error) { showErrorToast("toast.draft.save_failed.title", error); }
 }
 
 async function loadTextDraft(value) {
@@ -957,7 +990,7 @@ async function loadTextDraft(value) {
   const owner = studio;
   let loaded = false;
   const mode = value.kind === "sequence" ? "Reference" : value.content.mode;
-  setGenerationState("busy", "Loading draft", "");
+  setGenerationState("busy", msg("status.loading_draft"), "");
   try {
     // Remove this mode's old references so identical labels cannot bind to unrelated media.
     const result = await clearMedia(studio.sessionId, mode);
@@ -983,8 +1016,8 @@ async function loadTextDraft(value) {
     }
     renderMedia(studio.mode);
     loaded = true;
-    showToast("Draft loaded", "Media is not included. Reattach and assign the original references before generating.", value.media.length ? {references:value.media} : null);
-  } catch(error) { showToast("Load draft",error.message); }
+    showToast(msg("toast.draft.loaded.title"), msg("toast.draft.loaded.message"), value.media.length ? {references:value.media} : null);
+  } catch(error) { showErrorToast("toast.draft.load_failed.title", error); }
   finally {
     if (studio === owner) {
       setGenerationState("idle", "", "");
@@ -1000,7 +1033,9 @@ function updateBriefLayout() {
   const largeCanvas = window.innerWidth >= 3000 && window.innerHeight >= 1600;
   const minimumHeight = compactHeight ? 80 : largeCanvas ? 125 : 105;
   const counter = brief.closest(".h3ps-brief").querySelector(".h3ps-char-count");
-  counter.textContent = `${brief.value.length.toLocaleString()}${studio.mode === "Music3" ? " / 2,000" : " characters"}`;
+  counter.textContent = studio.mode === "Music3"
+    ? t("workspace.character_count_limit", { count: brief.value.length.toLocaleString(), limit: "2,000" })
+    : t("workspace.character_count", { count: brief.value.length.toLocaleString() });
   fitTextarea(brief, minimumHeight, 2);
   brief.style.overflowY = "hidden";
 }
@@ -1008,7 +1043,8 @@ function updateBriefLayout() {
 function updateMusicLyricsCount() {
   if (!studio) return;
   const lyrics = studio.root.querySelector("[data-music-lyrics]");
-  lyrics.closest(".h3ps-brief").querySelector(".h3ps-char-count").textContent = `${lyrics.value.length.toLocaleString()} / 4,000`;
+  lyrics.closest(".h3ps-brief").querySelector(".h3ps-char-count").textContent =
+    t("workspace.character_count_limit", { count: lyrics.value.length.toLocaleString(), limit: "4,000" });
 }
 
 function restoreModeDraft(mode) {
@@ -1031,30 +1067,45 @@ function restoreModeDraft(mode) {
   syncModifiedState();
 }
 
+function syncGenerateLabel() {
+  if (!studio) return;
+  const label = studio.root.querySelector("[data-generate-label]");
+  if (!label) return;
+  // While a request runs, generationButtonMarkup + translateDom own the cancel
+  // label and its data-i18n marker; rewriting them here desynchronizes the two.
+  if (studio.requestBusy) return;
+  delete label.dataset.i18n;
+  label.textContent = studio.mode === "Music3" ? t("generation.generate_caption") : t("generation.generate_prompt");
+}
+
 function syncWorkspace() {
   if (!studio) return;
-  const music = studio.mode === "Music3";
+  const chat = Boolean(studio.chatOpen);
+  const music = !chat && studio.mode === "Music3";
+  studio.root.classList.toggle("is-chat", chat);
   studio.root.classList.toggle("is-music", music);
   studio.root.querySelectorAll("[data-workspace]").forEach((button) => {
-    const selected = button.dataset.workspace === (music ? "music" : "video");
+    const selected = button.dataset.workspace === (chat ? "chat" : music ? "music" : "video");
     button.classList.toggle("is-active", selected);
     button.setAttribute("aria-pressed", String(selected));
   });
+  const chatView = studio.root.querySelector("[data-chat-view]");
+  if (chatView) chatView.hidden = !chat || studio.root.classList.contains("is-settings-open");
   studio.root.querySelector("[data-video-modes]").hidden = music;
   studio.root.querySelector("[data-video-inputs]").hidden = music;
   studio.root.querySelector("[data-music-inputs]").hidden = !music;
-  const outputLabel = music ? "Generated caption" : "Generated prompt";
+  const outputLabel = music ? t("workspace.generated_caption") : t("workspace.generated_prompt");
   studio.root.querySelector("[data-output-label]").textContent = outputLabel;
   studio.root.querySelector("[data-output-mobile-label]").textContent = outputLabel;
   studio.root.querySelector("[data-output]").setAttribute("aria-label", outputLabel);
-  studio.root.querySelector("[data-copy-label]").textContent = music ? "Copy caption" : "Copy prompt";
-  studio.root.querySelector("[data-generate-label]").textContent = music ? "Generate caption" : "Generate prompt";
-  studio.root.querySelector("[data-refine-media-note]").textContent = music ? "Lyrics stay separate" : "No media re-upload";
-  studio.root.querySelector("[data-refine-title]").textContent = music ? "Refine caption" : "Refine prompt";
-  studio.root.querySelector("[data-refine-helper]").textContent = music ? "Describe the musical change" : "Describe only what should change";
+  studio.root.querySelector("[data-copy-label]").textContent = music ? t("workspace.copy_caption") : t("workspace.copy_prompt");
+  syncGenerateLabel();
+  studio.root.querySelector("[data-refine-media-note]").textContent = music ? t("workspace.lyrics_stay_separate") : t("workspace.no_media_reupload");
+  studio.root.querySelector("[data-refine-title]").textContent = music ? t("workspace.refine_caption") : t("workspace.refine_prompt");
+  studio.root.querySelector("[data-refine-helper]").textContent = music ? t("workspace.describe_musical_change") : t("workspace.describe_change");
   studio.root.querySelector("[data-refine-instruction]").placeholder = music
-    ? "For example: keep the verses sparse and let the final chorus open wider."
-    : "For example: make the camera movement slower and keep the ending more ambiguous.";
+    ? t("workspace.lyrics_refine_placeholder_example")
+    : t("workspace.refine_placeholder");
   if (studio.mode !== "Music3") rememberReferenceInsertTarget(studio.root.querySelector("[data-output]"));
   else referenceInsertTarget = null;
 
@@ -1076,22 +1127,20 @@ function syncModeAvailability() {
     control.disabled = studio.requestBusy || unavailable;
     control.setAttribute("aria-disabled", String(control.disabled));
     control.title = unavailable && textOnlyDirect
-      ? "This Direct GGUF is text-only. Add its matching mmproj to enable visual modes."
+      ? t("workspace.text_only_mode_title")
       : "";
   });
   studio.root.querySelectorAll("[data-workspace]").forEach((control) => {
-    control.disabled = studio.requestBusy;
+    const chatTab = control.dataset.workspace === "chat";
+    control.disabled = !chatTab && studio.requestBusy;
     control.setAttribute("aria-disabled", String(control.disabled));
-    control.title = "";
+    if (!chatTab) control.title = "";
   });
 }
 
 function generationModeIsAvailable() {
   if (isGenerationModeAvailable(studio.selectedModel, studio.mode)) return true;
-  showToast(
-    "Text-only Direct GGUF",
-    "Use T2VA or Music3, or add the matching mmproj to enable visual modes.",
-  );
+  showToast(msg("toast.generation.text_only.title"), msg("toast.generation.text_only.message"));
   return false;
 }
 
@@ -1100,14 +1149,19 @@ function disarmDraftDefaults() {
   clearTimeout(studio.draftDefaultsTimer);
   studio.draftDefaultsArmed = false;
   const label = studio.root.querySelector("[data-restore-default-drafts-label]");
-  if (label) label.textContent = "Restore default drafts";
+  if (label) {
+    label.dataset.i18n = "toast.drafts.restore_label";
+    label.textContent = t("toast.drafts.restore_label");
+  }
 }
 
 function restoreDefaultDrafts(event) {
   event.stopPropagation();
   if (!studio.draftDefaultsArmed) {
     studio.draftDefaultsArmed = true;
-    studio.root.querySelector("[data-restore-default-drafts-label]").textContent = "Click again to confirm";
+    const label = studio.root.querySelector("[data-restore-default-drafts-label]");
+    label.dataset.i18n = "toast.drafts.confirm_label";
+    label.textContent = t("toast.drafts.confirm_label");
     clearTimeout(studio.draftDefaultsTimer);
     studio.draftDefaultsTimer = setTimeout(disarmDraftDefaults, 5000);
     return;
@@ -1116,7 +1170,7 @@ function restoreDefaultDrafts(event) {
   studio.modeDrafts = {};
   saveModeDrafts(localStorage, studio.modeDrafts);
   restoreModeDraft(studio.mode);
-  showToast("Default drafts restored", "Saved mode drafts were removed.");
+  showToast(msg("toast.drafts.restored.title"), msg("toast.drafts.restored.message"));
 }
 
 function hideToast() {
@@ -1128,24 +1182,20 @@ function hideToast() {
   actionButton.onclick = null;
   actionButton.textContent = "";
   actionButton.hidden = true;
+  studio.toastSnapshot = null;
   toast.classList.remove("is-visible", "is-persistent", "has-action");
 }
 
-function thinkingFallbackMessage(result, outputLabel) {
-  if (
-    result.thinking_budget_reduced
+function thinkingFallbackMessage(result, output) {
+  const contextBound = result.thinking_budget_reduced
     && studio.selectedModel?.family === "gguf"
-    && Number(result.context_tokens || 0) < 24_576
-  ) {
-    return `Thinking used all the space available in the selected context. The ${outputLabel} was completed in standard mode. A larger Context setting can give Thinking more room.`;
-  }
-  return `Thinking used its full token budget. The ${outputLabel} was completed in standard mode.`;
+    && Number(result.context_tokens || 0) < 24_576;
+  return msg(`thinking.fallback.${contextBound ? "context" : "budget"}.${output}`);
 }
 
 function setGenerationState(state, label, detail) {
   const button = studio.root.querySelector("[data-generate]");
   const status = studio.root.querySelector("[data-status]");
-  const statusDetail = studio.root.querySelector("[data-status-detail]");
   const busy = state === "busy";
   const wasBusy = studio.requestBusy;
   studio.requestBusy = busy;
@@ -1156,25 +1206,26 @@ function setGenerationState(state, label, detail) {
   const comfyMemory = studio.root.querySelector("[data-comfy-memory-action]");
   comfyMemory.disabled = busy || !HOST_CAPABILITIES.comfyMemory;
   comfyMemory.title = busy
-    ? "Available after the active Writer request finishes"
-    : "Unload models held by ComfyUI without clearing cached workflow results";
+    ? t("generation.free_vram_busy")
+    : t("generation.free_vram_tooltip");
   button.classList.toggle("is-cancel", busy);
-  if (!busy || !wasBusy) button.innerHTML = generationButtonMarkup(icon, busy, studio.mode === "Music3" ? "Generate caption" : "Generate prompt");
+  if (!busy || !wasBusy) button.innerHTML = generationButtonMarkup(icon, busy, msg(studio.mode === "Music3" ? "generation.generate_caption" : "generation.generate_prompt"));
   renderMedia(studio.mode);
   syncLifecycleActions();
   status.hidden = !busy;
   status.classList.toggle("is-busy", busy);
   if (busy) {
-    if (label === "Generating") {
+    const generating = typeof label === "object" ? label?.key === "status.generating" : label === "Generating";
+    if (generating) {
       studio.generationDotCount = ((studio.generationDotCount || 0) % 3) + 1;
-      status.querySelector("strong").textContent = `${label}${".".repeat(studio.generationDotCount)}`;
     } else {
       studio.generationDotCount = 0;
-      status.querySelector("strong").textContent = label;
     }
-    statusDetail.textContent = detail;
+    studio.generationSnapshot = { state, label, detail, dots: studio.generationDotCount };
+    writeStatusContent(status, studio.generationSnapshot);
   } else {
     studio.generationDotCount = 0;
+    studio.generationSnapshot = null;
   }
 }
 
@@ -1198,7 +1249,7 @@ function vramHandoffIsEnabled() {
   if (!VRAM_HANDOFF_SUPPORTED) return false;
   if (studio) return studio.vramHandoff;
   const preferences = loadUserPreferences(localStorage);
-  return preferences?.vram_handoff === true;
+  return preferences?.vram_handoff !== false;
 }
 
 function vramHandoffOllamaHost() {
@@ -1216,7 +1267,7 @@ function writerAttemptIsCurrent(token) {
 async function prepareWriterVram(token) {
   if (token == null) return true;
   studio.vramHandoffInFlight = true;
-  setGenerationState("busy", "Freeing VRAM", "Preparing ComfyUI memory for the prompt model");
+  setGenerationState("busy", msg("status.freeing_vram"), msg("status.detail.freeing_vram"));
   try {
     await releaseComfyVramWhenIdle({
       getStatus,
@@ -1231,7 +1282,7 @@ async function prepareWriterVram(token) {
     return writerAttemptIsCurrent(token);
   } catch (error) {
     if (error.code !== "WRITER_PREPARATION_CANCELLED") {
-      showToast("Auto VRAM could not prepare memory", error.message, error.details);
+      showErrorToast("toast.vram.preparing_failed.title", error);
     }
     setGenerationState("idle", "", "");
     return false;
@@ -1244,7 +1295,10 @@ async function prepareWriterRequest() {
   const token = writerAutoVramApplies() ? vramHandoffCoordinator.beginWriterAttempt() : null;
   if (!await inspectDirectRuntime() || !writerAttemptIsCurrent(token)) return false;
   if (!await prepareWriterVram(token)) return false;
-  if (writerAttemptIsCurrent(token)) return true;
+  if (writerAttemptIsCurrent(token)) {
+    warnUnmeasuredVram(studio.selectedModel);
+    return true;
+  }
   setGenerationState("idle", "", "");
   return false;
 }
@@ -1293,11 +1347,12 @@ async function unloadWriterModelsBeforeQueue(signal) {
 }
 
 function showVramHandoffQueueError(error) {
-  const message = error.message || "Prompt Writer could not release its local model.";
+  console.error(`[H3 Writer] error code=${error?.code || "UNKNOWN"}`, error);
+  const localized = localizedError(error, "errors.UNKNOWN");
   if (studio?.root.classList.contains("is-open")) {
-    showToast("Queue continuing without VRAM release", message, error.details);
+    showToast(msg("toast.vram.queue.title"), localized.message, localized.technical);
   } else {
-    app.extensionManager?.toast?.add({severity:"warn", summary:"Auto VRAM: Queue continuing", detail:message, life:8000});
+    app.extensionManager?.toast?.add({severity:"warn", summary:t("toast.vram.queue.comfy_summary"), detail:localized.message, life:8000});
   }
 }
 
@@ -1317,11 +1372,18 @@ function lifecycleTargets() {
 function lifecycleButtonMarkup(target, { stop = false } = {}) {
   const provider = target.family === "external" ? "external" : target.family === "ollama" ? "ollama" : "direct";
   const disabled = target.family === "external" && (["loading","unloading","unloaded"].includes(target.state) || (target.state === "unknown" && !target.writerOwned));
-  const label = target.state === "unloading" ? "Unloading…" : target.state === "loading" ? "Loading…" : stop ? "Stop & unload" : target.family === "external" ? "Unload" : target.family === "ollama" ? "Unload Ollama" : "Unload Direct";
+  const label = target.state === "unloading" ? msg("lifecycle.unloading")
+    : target.state === "loading" ? msg("lifecycle.loading")
+    : stop ? msg("lifecycle.stop_unload")
+    : target.family === "external" ? msg("lifecycle.unload")
+    : target.family === "ollama" ? msg("lifecycle.unload_ollama")
+    : msg("lifecycle.unload_direct");
   const title = stop
-    ? "Cancel the active request and unload its prompt model"
-    : `Unload ${target.modelId || (target.family === "ollama" ? "the Ollama model" : "the Direct model")}`;
-  return `<button class="h3ps-memory-action h3ps-prompt-lifecycle-action" type="button" data-lifecycle-family="${target.family}" ${disabled ? "disabled" : ""} ${target.modelId ? `data-lifecycle-model="${escapeHtml(target.modelId)}"` : ""} data-lifecycle-stop="${stop}" title="${escapeHtml(title)}"><span class="h3ps-provider-icon" data-provider-icon="${provider}" aria-hidden="true"></span>${label}</button>`;
+    ? msg("lifecycle.stop_title")
+    : msg("lifecycle.unload_title", {
+        model: target.modelId || t(target.family === "ollama" ? "lifecycle.ollama_model" : "lifecycle.direct_model"),
+      });
+  return `<button class="h3ps-memory-action h3ps-prompt-lifecycle-action" type="button" data-lifecycle-family="${target.family}" ${disabled ? "disabled" : ""} ${target.modelId ? `data-lifecycle-model="${escapeHtml(target.modelId)}"` : ""} data-lifecycle-stop="${stop}" title="${escapeHtml(messageText(title))}"><span class="h3ps-provider-icon" data-provider-icon="${provider}" aria-hidden="true"></span>${escapeHtml(messageText(label))}</button>`;
 }
 
 function syncLifecycleActions() {
@@ -1337,7 +1399,7 @@ function syncLifecycleActions() {
     return target.family !== activeTarget.family || target.modelId !== activeTarget.modelId;
   });
   const backgroundMarkup = background.length > 1
-    ? `<details class="h3ps-prompt-models-menu"><summary class="h3ps-memory-action">${icon("memory", 15)}Prompt models · ${background.length}</summary><span>${background.map((target) => lifecycleButtonMarkup(target)).join("")}</span></details>`
+    ? `<details class="h3ps-prompt-models-menu"><summary class="h3ps-memory-action">${icon("memory", 15)}${t("lifecycle.prompt_models", { count: background.length })}</summary><span>${background.map((target) => lifecycleButtonMarkup(target)).join("")}</span></details>`
     : background.map((target) => lifecycleButtonMarkup(target)).join("");
   slot.innerHTML = `${activeTarget ? lifecycleButtonMarkup(activeTarget, { stop: true }) : ""}${backgroundMarkup}`;
   slot.querySelectorAll("[data-lifecycle-family]").forEach((button) => button.addEventListener("click", runLifecycleAction));
@@ -1350,14 +1412,14 @@ async function releaseComfyVram({ retry = null, requiredFreeMb = null } = {}) {
   let shouldRetry = false;
   studio.comfyVramReleaseInFlight = true;
   button.disabled = true;
-  button.innerHTML = `<span class="h3ps-spinner"></span>Releasing…`;
+  button.innerHTML = `<span class="h3ps-spinner"></span>${t("vram.releasing")}`;
   try {
     const before = await getStatus(studio.ollamaHost);
     const beforeFree = Number(before.gpu_memory?.free_mb);
     const requiredFree = requiredFreeMb == null ? null : Number(requiredFreeMb);
     if (typeof retry !== "function" && requiredFree == null && comfyVramIsAlreadyEmpty(before)) {
       studio.gpuMemory = before.gpu_memory || studio.gpuMemory;
-      showToast("No ComfyUI models loaded", "VRAM is already free for Prompt Writer.");
+      showToast(msg("toast.vram.already_free.title"), msg("toast.vram.already_free.message"));
       return;
     }
     await freeComfyVram();
@@ -1376,21 +1438,26 @@ async function releaseComfyVram({ retry = null, requiredFreeMb = null } = {}) {
     if (typeof retry === "function") {
       shouldRetry = targetReached;
       if (!targetReached) {
-        const freeText = Number.isFinite(afterFree) ? `${(afterFree / 1024).toFixed(1)} GB is free.` : "Free VRAM could not be measured.";
-        const requiredText = Number.isFinite(requiredFree) ? ` About ${(requiredFree / 1024).toFixed(1)} GB is required.` : "";
-        showToast("VRAM release is still completing", `${freeText}${requiredText} Generate again after ComfyUI finishes unloading.`);
+        const freeGbText = (afterFree / 1024).toFixed(1);
+        const requiredGbText = (requiredFree / 1024).toFixed(1);
+        const message = Number.isFinite(afterFree) && Number.isFinite(requiredFree)
+          ? msg("toast.vram.still_releasing.measured", { free: freeGbText, required: requiredGbText })
+          : Number.isFinite(afterFree)
+          ? msg("toast.vram.still_releasing.free_only", { free: freeGbText })
+          : msg("toast.vram.still_releasing.unknown");
+        showToast(msg("toast.vram.still_releasing.title"), message);
       }
     } else if (releasedMb >= 64) {
-      showToast("ComfyUI VRAM released", `${(releasedMb / 1024).toFixed(1)} GB freed. Workflow and cached node results were kept.`);
+      showToast(msg("toast.vram.released.title"), msg("toast.vram.released.message", { gb: (releasedMb / 1024).toFixed(1) }));
     } else {
-      showToast("ComfyUI VRAM release requested", "No immediate VRAM change was detected. No workflow model may be loaded, or an active workflow must finish first.");
+      showToast(msg("toast.vram.requested.title"), msg("toast.vram.requested.message"));
     }
   } catch (error) {
-    showToast("VRAM release failed", error.message);
+    showErrorToast("toast.vram.failed.title", error);
   } finally {
     studio.comfyVramReleaseInFlight = false;
     button.disabled = false;
-    button.innerHTML = `${icon("memory", 15)}Free ComfyUI VRAM`;
+    button.innerHTML = `${icon("memory", 15)}<span data-i18n="workspace.free_comfy_vram">${t("workspace.free_comfy_vram")}</span>`;
     syncLifecycleActions();
   }
   if (shouldRetry) await retry();
@@ -1400,12 +1467,23 @@ function showVramRetry(error, retry) {
   const freeGb = Number(error.details?.free_mb) / 1024;
   const requiredGb = Number(error.details?.required_free_mb) / 1024;
   const message = Number.isFinite(freeGb) && Number.isFinite(requiredGb)
-    ? `${freeGb.toFixed(1)} GB is free; this runtime needs about ${requiredGb.toFixed(1)} GB.`
-    : error.message;
+    ? msg("toast.vram.retry.message", { free: freeGb.toFixed(1), required: requiredGb.toFixed(1) })
+    : localizedError(error, "errors.UNKNOWN").message;
   const action = !HOST_CAPABILITIES.comfyMemory || writerAutoVramApplies()
     ? null
-    : { label: "Free ComfyUI VRAM & retry", onClick: () => releaseComfyVram({ retry, requiredFreeMb: error.details?.required_free_mb }) };
-  showToast("Not enough free VRAM", message, null, action);
+    : { label: msg("toast.vram.retry.action"), onClick: () => releaseComfyVram({ retry, requiredFreeMb: error.details?.required_free_mb }) };
+  showToast(msg("toast.vram.retry.title"), message, null, action);
+}
+
+function warnUnmeasuredVram(model) {
+  if (!model || model.family !== "gguf" || model.estimated_free_vram_mb) return;
+  if (studio.vramEstimateWarnedModel === model.id) return;
+  studio.vramEstimateWarnedModel = model.id;
+  const freeMb = Number(studio.gpuMemory?.free_mb);
+  const message = Number.isFinite(freeMb)
+    ? msg("toast.vram.unmeasured.message", { free: (freeMb / 1024).toFixed(1) })
+    : msg("toast.vram.unmeasured.unknown_free");
+  showToast(msg("toast.vram.unmeasured.title"), message, null, null, { dismissOnWorkspaceClick: true });
 }
 
 async function runLifecycleAction(event) {
@@ -1414,12 +1492,12 @@ async function runLifecycleAction(event) {
   const family = button.dataset.lifecycleFamily;
   const modelId = button.dataset.lifecycleModel || null;
   const stop = button.dataset.lifecycleStop === "true";
-  if (stop) setGenerationState("busy", "Stopping & unloading", "Cancelling the request and unloading its prompt model");
+  if (stop) setGenerationState("busy", msg("status.stopping_unloading"), msg("status.detail.stopping_unloading"));
   button.disabled = true;
   if (family === "external") {
     const target = studio.promptResidency.external?.find(t => t.model_id === modelId);
     if (target) target.state = "unloading";
-    button.textContent = "Unloading…";
+    button.textContent = t("lifecycle.unloading");
   }
   try {
     await unloadModel({ family, model_id: modelId, ollama_host: family === "ollama" ? studio.ollamaHost : null });
@@ -1427,15 +1505,15 @@ async function runLifecycleAction(event) {
     else if(family === "external" && !stop) studio.promptResidency.external = (studio.promptResidency.external||[]).map(t=>t.model_id===modelId ? {...t,state:"unloaded",writer_owned:false} : t);
     else if(family === "ollama") studio.promptResidency.ollama = studio.promptResidency.ollama.filter((name) => name !== modelId);
     showToast(
-      stop ? "Stop & unload requested" : family === "external" ? "External model unloaded" : family === "ollama" ? "Ollama model unloaded" : "Direct model unloaded",
-      stop ? "The request will stop and release its model at the next safe point." : "GPU memory used by the prompt model was released.",
+      msg(stop ? "toast.lifecycle.stopped.title" : family === "external" ? "toast.lifecycle.external.title" : family === "ollama" ? "toast.lifecycle.ollama.title" : "toast.lifecycle.direct.title"),
+      msg(stop ? "toast.lifecycle.stopped.message" : "toast.lifecycle.unloaded.message"),
     );
   } catch (error) {
     if (family === "external") {
       const target = studio.promptResidency.external?.find(t => t.model_id === modelId);
       if (target) target.state = "unknown";
     }
-    showToast(error.code || "Unload failed", error.message, error.details);
+    showErrorToast("toast.lifecycle.failed.title", error);
   } finally {
     button.disabled = false;
     syncLifecycleActions();
@@ -1445,16 +1523,20 @@ async function runLifecycleAction(event) {
 async function startGenerationPreview() {
   if (studio.vramHandoffInFlight) return;
   if (studio.requestBusy) {
-    setGenerationState("busy", "Cancelling", "Stopping after the current token");
+    setGenerationState("busy", msg("status.cancelling"), msg("status.detail.cancel_token"));
     await cancel();
     return;
   }
   if (!studio.selectedModel) {
-    showToast("No prompt model selected", "Choose a local model, connect llama.cpp, or configure an API provider.");
+    showToast(msg("toast.generation.no_model.title"), msg("toast.generation.no_model.message"));
     return;
   }
   if (!studio.selectedModel.runtime_ready) {
-    showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}. Open the model menu to finish setup.`);
+    showToast(
+      msg("toast.generation.setup_incomplete.title"),
+      studio.selectedModel.setup_message
+        || msg("toast.generation.setup_incomplete.message", { missing: studio.selectedModel.missing_dependencies.join(", ") }),
+    );
     return;
   }
   if (!generationModeIsAvailable()) return;
@@ -1464,14 +1546,21 @@ async function startGenerationPreview() {
   const apiProvider = studio.selectedModel.family === "api";
   const remote = external || apiProvider;
   markActiveWriterRequest();
-  const generationDetail = external ? `${modelName} · the server may load its model if idle` : apiProvider ? `${modelName} · ${studio.selectedModel.api_preset}` : modelName;
-  setGenerationState("busy", remote ? "Contacting provider" : "Loading model", generationDetail);
+  const generationDetail = external
+    ? msg("status.detail.external_idle", { model: modelName })
+    : apiProvider ? msg("status.detail.api", { model: modelName, preset: studio.selectedModel.api_preset }) : modelName;
+  setGenerationState("busy", remote ? msg("status.contacting_provider") : msg("status.loading_model"), generationDetail);
   let pollingActive = true;
   studio.statusTimer = setInterval(async () => {
     try {
       const status = await getStatus(studio.ollamaHost);
       if (!pollingActive) return;
-      const labels = { loading_model: remote ? "Contacting provider" : "Loading model", processing_media: "Processing references", generating: "Generating", cancelling: "Cancelling" };
+      const labels = {
+        loading_model: remote ? msg("status.contacting_provider") : msg("status.loading_model"),
+        processing_media: msg("status.processing_references"),
+        generating: msg("status.generating"),
+        cancelling: msg("status.cancelling"),
+      };
       if (labels[status.phase]) setGenerationState("busy", labels[status.phase], generationDetail);
     } catch {}
   }, 650);
@@ -1493,40 +1582,65 @@ async function startGenerationPreview() {
     studio.refineRestore = null;
     studio.root.querySelector("[data-refine-restore]").hidden = true;
     if (result.thinking_fallback) {
-      showToast("Prompt completed", thinkingFallbackMessage(result, "final prompt"), null, null, { dismissOnWorkspaceClick: true });
+      showToast(msg("toast.generation.completed.title"), thinkingFallbackMessage(result, "final_prompt"), null, null, { dismissOnWorkspaceClick: true });
     } else if (result.format_repair_applied) {
       const repairDetail = result.format_repair_multimodal
         ? "the existing uploaded references were checked again and the prompt was corrected"
         : `${result.format_repair_method} corrected it without re-uploading media`;
-      showToast("Prompt generated", `The first draft failed ${result.format_repair_reason}; ${repairDetail}.`, null, null, { dismissOnWorkspaceClick: true });
+      showToast(
+        msg("toast.generation.prompt_generated.title"),
+        msg("toast.generation.repair_applied.message"),
+        `The first draft failed ${result.format_repair_reason}; ${repairDetail}.`,
+        null,
+        { dismissOnWorkspaceClick: true },
+      );
     } else if (result.format_repair_failure) {
-      showToast("Prompt generated with a format warning", `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`, null, null, { dismissOnWorkspaceClick: true });
+      showToast(
+        msg("toast.generation.format_warning.title"),
+        msg("toast.generation.repair_failed.message"),
+        `The first draft failed ${result.format_repair_reason}; the safe repair was rejected because ${result.format_repair_failure}.`,
+        null,
+        { dismissOnWorkspaceClick: true },
+      );
     } else {
+      const metrics = msg("toast.generation.metrics", {
+        total: result.total_seconds.toFixed(1),
+        tps: result.tokens_per_second.toFixed(1),
+      });
       const details = [
-        `${result.total_seconds.toFixed(1)}s`,
-        `${result.tokens_per_second.toFixed(1)} tok/s`,
-        result.api_provider ? "Reasoning provider managed" : external ? null : `Thinking ${result.thinking ? "on" : "off"}`,
-      ];
-      showToast(studio.mode === "Music3" ? "Caption generated" : "Prompt generated", details.filter(Boolean).join(" · "));
+        metrics,
+        result.api_provider
+          ? msg("toast.generation.reasoning_managed")
+          : external ? null : msg("toast.generation.thinking", {
+              state: t(result.thinking ? "toast.generation.thinking_on" : "toast.generation.thinking_off"),
+            }),
+      ].filter(Boolean);
+      showToast(
+        msg(studio.mode === "Music3" ? "toast.generation.caption_generated.title" : "toast.generation.prompt_generated.title"),
+        details.map((item) => messageText(item)).join(" · "),
+      );
     }
-    studio.desktopNotifications.notify("Generation finished. Your prompt is ready.");
-    if (result.lifecycle_warning) showToast("Model cleanup", result.lifecycle_warning, null, null, {dismissOnWorkspaceClick:true});
+    studio.desktopNotifications.notify(t("notification.generation_ready"));
+    if (result.lifecycle_warning) showToast(msg("toast.generation.cleanup.title"), result.lifecycle_warning, null, null, {dismissOnWorkspaceClick:true});
   } catch (error) {
-    if (error.code !== "GENERATION_CANCELLED") studio.desktopNotifications.notify("Generation failed. Open Writer for details.");
+    if (error.code !== "GENERATION_CANCELLED") studio.desktopNotifications.notify(t("notification.generation_failed"));
     if (error.code === "GENERATION_CANCELLED") {
-      showToast("Generation cancelled", "The active request stopped.");
+      showToast(msg("toast.generation.cancelled.title"), msg("toast.generation.cancelled.message"));
     } else if (error.code === "INSUFFICIENT_FREE_VRAM") {
       showVramRetry(error, startGenerationPreview);
     } else if (error.code === "EXTERNAL_VISION_REQUIRED") {
-      showToast("Vision model required", `${error.message} ${error.details?.suggestion || ""}`.trim());
+      showErrorToast("toast.generation.vision_required.title", error);
     } else if (error.code === "CONTEXT_BUDGET_EXCEEDED" && error.details?.suggested_context_profile && studio.selectedModel?.family === "gguf") {
       const target = error.details.suggested_context_profile;
-      const targetLabel = CONTEXT_LABELS[target] || target;
+      const targetLabel = contextLabel(target);
       showToast(
-        "More context is needed",
-        `This request needs at least ${targetLabel} context. ${CONTEXT_LABELS[studio.contextProfile]} cannot fit the current references.`,
+        msg("toast.generation.more_context.title"),
+        msg("toast.generation.more_context.message", {
+          target: targetLabel,
+          current: contextLabel(studio.contextProfile),
+        }),
         null,
-        { label: `Use ${targetLabel}`, onClick: () => {
+        { label: msg("toast.generation.more_context.action", { context: targetLabel }), onClick: () => {
           studio.contextProfile = target;
           rememberRuntimePreferences();
           saveUserPreferences(localStorage, studio);
@@ -1535,7 +1649,7 @@ async function startGenerationPreview() {
         } },
       );
     } else {
-      showToast(error.code || "Generation failed", error.message, error.details);
+      showErrorToast("toast.generation.failed.title", error);
     }
   } finally {
     pollingActive = false;
@@ -1553,11 +1667,11 @@ async function startGenerationPreview() {
 function modelVramLabel(model) {
   if (["external", "api"].includes(model?.family)) return "";
   const name = model?.name?.toLowerCase() || "";
-  if (/e4b/.test(name)) return "8 GB VRAM";
-  if (/12b/.test(name) && /q4/.test(name)) return "12 GB VRAM";
-  if (/12b/.test(name)) return "16 GB VRAM";
-  if (/26b/.test(name)) return "24 GB VRAM";
-  if (/31b/.test(name)) return "32 GB VRAM";
+  if (/e4b/.test(name)) return t("models.vram", { gb: 8 });
+  if (/12b/.test(name) && /q4/.test(name)) return t("models.vram", { gb: 12 });
+  if (/12b/.test(name)) return t("models.vram", { gb: 16 });
+  if (/26b/.test(name)) return t("models.vram", { gb: 24 });
+  if (/31b/.test(name)) return t("models.vram", { gb: 32 });
   return "";
 }
 
@@ -1575,14 +1689,14 @@ function detectedVramTier() {
 
 function renderModelSetupRows() {
   const tier = detectedVramTier();
+  const fits = t("models.fits_vram_title");
   return studio.modelSetup.map((model, index) => {
-    const modelSize = model.vram_gb ? `${model.vram_gb} GB VRAM` : "Large model · measure locally";
-    const contextLabel = ({ low: "8K", standard: "16K", extended: "24K", large: "32K", maximum: "48K" })[model.recommended_context] || "Auto";
-    const runtimeLabel = model.minimum_runtime ? ` · llama-cpp-python ${model.minimum_runtime}+` : "";
+    const modelSize = model.vram_gb ? t("models.vram", { gb: model.vram_gb }) : t("models.large_measure");
+    const runtimeLabel = model.minimum_runtime ? ` · ${t("models.minimum_runtime", { version: model.minimum_runtime })}` : "";
     return `
-    <div class="h3ps-model-setup-row ${model.vram_gb === tier ? "fits-detected-vram" : ""}" ${model.vram_gb === tier ? 'title="Fits the detected total VRAM tier"' : ""}>
-      <span><strong>${escapeHtml(model.name)}</strong><small>${modelSize} · ${contextLabel}${runtimeLabel}${model.vram_gb === tier ? " · Fits detected VRAM" : ""}</small><small class="h3ps-model-source">${escapeHtml(model.source_label)}</small></span>
-      <span class="h3ps-model-files"><button type="button" data-model-files-toggle="${index}">Files ↗</button><span data-model-files-menu="${index}" hidden><a href="${model.model_url}" target="_blank" rel="noopener noreferrer">Model file ↗</a><a href="${model.projector_url}" target="_blank" rel="noopener noreferrer">Projector file ↗</a></span></span>
+    <div class="h3ps-model-setup-row ${model.vram_gb === tier ? "fits-detected-vram" : ""}" ${model.vram_gb === tier ? `title="${escapeHtml(fits)}"` : ""}>
+      <span><strong>${escapeHtml(model.name)}</strong><small>${modelSize} · ${contextLabel(model.recommended_context)}${runtimeLabel}${model.vram_gb === tier ? ` · ${t("models.fits_vram")}` : ""}</small><small class="h3ps-model-source">${escapeHtml(model.source_label)}</small></span>
+      <span class="h3ps-model-files"><button type="button" data-model-files-toggle="${index}">${t("models.files")}</button><span data-model-files-menu="${index}" hidden><a href="${model.model_url}" target="_blank" rel="noopener noreferrer">${t("models.model_file")}</a><a href="${model.projector_url}" target="_blank" rel="noopener noreferrer">${t("models.projector_file")}</a></span></span>
     </div>`;
   }).join("");
 }
@@ -1593,28 +1707,28 @@ function modelDiscoveryDetails() {
   const lines = [];
   for (const root of roots) {
     lines.push(root.path);
-    lines.push(`  Model GGUF: ${root.model_files.length}`);
+    lines.push(`  ${t("models.scan_model_gguf", { count: root.model_files.length })}`);
     for (const path of root.model_files) lines.push(`    ${path}`);
-    lines.push(`  Vision projector GGUF: ${root.projector_files.length}`);
+    lines.push(`  ${t("models.scan_projector_gguf", { count: root.projector_files.length })}`);
     for (const path of root.projector_files) lines.push(`    ${path}`);
-    for (const issue of root.issues) lines.push(`  Issue: ${issue}`);
+    for (const issue of root.issues) lines.push(`  ${t("models.scan_issue", { issue })}`);
   }
   return lines.join("\n");
 }
 
 function renderModelScanDetails() {
   const discovery = modelDiscoveryDetails();
-  return discovery ? `<details class="h3ps-model-scan"><summary>Scan details</summary><pre>${escapeHtml(discovery)}</pre></details>` : "";
+  return discovery ? `<details class="h3ps-model-scan"><summary>${t("models.scan_details")}</summary><pre>${escapeHtml(discovery)}</pre></details>` : "";
 }
 
 function renderModelSetup() {
   const directory = studio.modelDirectory || "ComfyUI/models/LLM/";
   return `
     <div class="h3ps-model-setup h3ps-direct-model-empty">
-      <strong>No compatible local model found</strong>
-      <p>Open the two verified Hugging Face pages, download both files, then place them in:</p>
+      <strong>${t("models.none_title")}</strong>
+      <p>${t("models.none_body")}</p>
       <button type="button" class="h3ps-model-path" data-copy-model-path><code>${escapeHtml(directory)}</code>${icon("copy", 13)}</button>
-      <p>Keep compatible model GGUFs and their vision projector together. One projector can serve several quant files from the same model family.</p>
+      <p>${t("models.keep_together")}</p>
     </div>`;
 }
 
@@ -1630,14 +1744,15 @@ function directRuntimeActionCommand() {
 
 function renderDirectRuntimeCommand(command, action = "installation") {
   if (!command) return "";
-  return `<div class="h3ps-direct-runtime-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-direct-runtime-command="${escapeHtml(command)}" title="Copy ${escapeHtml(action)} command" aria-label="Copy ${escapeHtml(action)} command">${icon("copy", 13)}</button></div><small>Close ComfyUI, run this from your ComfyUI Portable folder containing <code>python_embeded</code>, then restart ComfyUI.</small>`;
+  const title = t("models.copy_command_title", { action: t(`models.action.${action}`) });
+  return `<div class="h3ps-direct-runtime-command"><code>${escapeHtml(command)}</code><button type="button" data-copy-direct-runtime-command="${escapeHtml(command)}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${icon("copy", 13)}</button></div><small>${t("models.restart_before")} <code>python_embeded</code>${t("models.restart_after")}</small>`;
 }
 
 function renderDirectRuntimeStatus() {
   const diagnostics = studio.ggufRuntimeDiagnostics;
   if (!diagnostics) {
     return studio.ggufRuntimeDiagnosticsLoading
-      ? `<section class="h3ps-direct-runtime-state is-checking"><header><span><small>Runtime</small><strong>Checking llama-cpp-python…</strong></span></header></section>`
+      ? `<section class="h3ps-direct-runtime-state is-checking"><header><span><small>${t("models.runtime")}</small><strong>${t("models.checking_runtime")}</strong></span></header></section>`
       : "";
   }
   const onboarding = diagnostics.onboarding || {};
@@ -1645,31 +1760,42 @@ function renderDirectRuntimeStatus() {
   if (onboarding.state === "missing") {
     const command = directRuntimeActionCommand();
     return `<section class="h3ps-direct-runtime-state is-missing">
-      <header><span><small>Runtime</small><strong>llama-cpp-python is not installed.</strong></span></header>
-      <p>Direct GGUF needs an additional native runtime. Ollama and API providers work without it.</p>
+      <header><span><small>${t("models.runtime")}</small><strong>${t("models.runtime_missing_title")}</strong></span></header>
+      <p>${t("models.runtime_missing_body")}</p>
       ${renderDirectRuntimeCommand(command)}
-      <div class="h3ps-direct-runtime-links"><a href="${INSTALLATION_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Installation guide ↗</a><a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Troubleshooting guide ↗</a></div>
+      <div class="h3ps-direct-runtime-links"><a href="${INSTALLATION_GUIDE_URL}" target="_blank" rel="noopener noreferrer">${t("models.installation_guide")}</a><a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">${t("models.troubleshooting_guide")}</a></div>
     </section>`;
   }
-  const version = diagnostics.package_version ? ` Version ${escapeHtml(diagnostics.package_version)} was detected.` : "";
+  const version = diagnostics.package_version ? t("models.version_detected", { version: escapeHtml(diagnostics.package_version) }) : "";
   return `<section class="h3ps-direct-runtime-state is-broken">
-    <header><span><small>Runtime</small><strong>llama-cpp-python is installed, but the runtime is not usable.</strong></span></header>
-    <p>The installed package does not match the Direct GGUF runtime requirements.${version}</p>
-    <a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Troubleshooting ↗</a>
+    <header><span><small>${t("models.runtime")}</small><strong>${t("models.runtime_broken_title")}</strong></span></header>
+    <p>${t("models.runtime_broken_body", { version })}</p>
+    <a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">${t("models.troubleshooting")}</a>
   </section>`;
 }
 
 function localRuntimeLabel() {
   const diagnostics = studio?.ggufRuntimeDiagnostics;
-  if (!diagnostics) return "Local GGUF · llama-cpp-python";
-  if (diagnostics.status !== "ok") return "Runtime could not be inspected";
-  const offload = diagnostics.gpu_offload === true
-    ? "GPU offload available"
+  if (!diagnostics) return t("settings.local_runtime");
+  if (diagnostics.status !== "ok") return t("models.runtime_inspect_failed");
+  const runtime = diagnostics.gpu_offload === true
+    ? t("models.gpu_offload_available")
     : diagnostics.gpu_offload === false
-      ? "GPU offload unavailable"
-      : "Runtime detected";
+      ? t("models.gpu_offload_unavailable")
+      : t("models.runtime_detected");
   const version = diagnostics.package_version ? ` ${diagnostics.package_version}` : "";
-  return `${offload === "Runtime detected" ? `Runtime${version} detected` : `${offload}${version}`}${diagnostics.backend ? ` · ${diagnostics.backend}` : ""}`;
+  const base = diagnostics.gpu_offload == null
+    ? t("models.runtime_version_detected", { version })
+    : `${runtime}${version}`;
+  return `${base}${diagnostics.backend ? ` · ${diagnostics.backend}` : ""}`;
+}
+
+function selectedModelCategoryLabel(model) {
+  if (model?.family === "gguf") return t("settings.direct");
+  if (model?.family === "external") return t("settings.external");
+  if (model?.family === "ollama") return t("settings.ollama");
+  if (model?.family === "api") return t("models.api_provider", { preset: model.api_preset });
+  return t("models.no_model");
 }
 
 function syncSelectedModelSourceLabel() {
@@ -1677,16 +1803,8 @@ function syncSelectedModelSourceLabel() {
   const localModel = studio.selectedModel?.family === "gguf"
     ? studio.selectedModel
     : studio.models.find((model) => model.family === "gguf" && model.runtime_ready) || studio.models.find((model) => model.family === "gguf");
-  studio.root.querySelector("[data-model-source-label]").textContent = localModel ? localRuntimeLabel() : "No compatible Direct GGUF model";
-  studio.root.querySelector("[data-active-model-source]").textContent = studio.selectedModel?.family === "external"
-    ? "External server"
-    : studio.selectedModel?.family === "ollama"
-      ? "Ollama · local service"
-      : studio.selectedModel?.family === "api"
-        ? `${studio.selectedModel.api_preset} · API provider`
-      : studio.selectedModel
-        ? localRuntimeLabel()
-        : "No prompt model";
+  studio.root.querySelector("[data-model-source-label]").textContent = localModel ? localRuntimeLabel() : t("models.no_direct_model");
+  studio.root.querySelector("[data-active-model-source]").textContent = selectedModelCategoryLabel(studio.selectedModel);
 }
 
 function syncActiveModelSummary(runtimeSummary = null) {
@@ -1702,14 +1820,8 @@ function syncActiveModelSummary(runtimeSummary = null) {
         : "direct";
   modelIcon.textContent = "";
   modelIcon.dataset.providerIcon = providerIcon;
-  studio.root.querySelector("[data-active-model-name]").textContent = model ? model.name.split("/").pop() : "No compatible prompt model";
-  studio.root.querySelector("[data-active-model-source]").textContent = model?.family === "external"
-    ? "External server"
-    : model?.family === "ollama"
-      ? "Ollama · local service"
-      : model?.family === "api"
-        ? `${model.api_preset} · API provider`
-      : model ? localRuntimeLabel() : "Open Settings to configure";
+  studio.root.querySelector("[data-active-model-name]").textContent = model ? model.name.split("/").pop() : t("models.no_prompt_model");
+  studio.root.querySelector("[data-active-model-source]").textContent = selectedModelCategoryLabel(model);
   if (runtimeSummary != null) studio.root.querySelector("[data-active-runtime-summary]").textContent = runtimeSummary;
 }
 
@@ -1719,7 +1831,7 @@ async function inspectDirectRuntime() {
     try {
       await loadGGUFRuntimeDiagnostics();
     } catch (error) {
-      showToast("Runtime could not be inspected", "The package preflight was unavailable. Generation will continue with the existing runtime behavior.", error.details || error.message);
+      showToast(msg("models.runtime_inspect_failed"), msg("models.preflight_unavailable"), error.details || error.message);
       return true;
     }
     syncSelectedModelSourceLabel();
@@ -1730,7 +1842,7 @@ async function inspectDirectRuntime() {
   if (blocking) {
     const warning = diagnostics.warnings?.[0];
     showToast(
-      warning ? "Native runtime configuration issue" : "Native runtime compatibility check failed",
+      msg(warning ? "models.runtime_config_issue" : "models.runtime_check_failed"),
       warning?.message || diagnostics.message,
       diagnostics,
     );
@@ -1738,10 +1850,10 @@ async function inspectDirectRuntime() {
   }
   if (diagnostics.status !== "ok" && !studio.runtimeWarningShown) {
     studio.runtimeWarningShown = true;
-    showToast("Runtime could not be inspected", diagnostics.message, diagnostics);
+    showToast(msg("models.runtime_inspect_failed"), diagnostics.message, diagnostics);
   } else if (diagnostics.gpu_offload === false && !studio.runtimeWarningShown) {
     studio.runtimeWarningShown = true;
-    showToast("GPU offload unavailable", "This llama.cpp build may generate on CPU and can be much slower. Install a GPU-enabled wheel that matches ComfyUI's Python and runtime.", diagnostics);
+    showToast(msg("models.gpu_offload_title"), msg("models.gpu_offload_body"), diagnostics);
   }
   return true;
 }
@@ -1749,35 +1861,38 @@ async function inspectDirectRuntime() {
 function renderOtherModelsTrigger() {
   return `
     <button class="h3ps-other-models-trigger" type="button" data-other-models-toggle aria-expanded="false">
-      <span><strong>Browse verified models</strong><small>Model and projector download pairs</small></span>${icon("chevron", 14)}
+      <span><strong>${t("models.browse_verified")}</strong><small>${t("models.browse_verified_subtitle")}</small></span>${icon("chevron", 14)}
     </button>`;
 }
 
 function renderExternalServerControl() {
   const connected = studio.externalModel;
   const config = studio.externalServerConfig || { url: "http://127.0.0.1:8080", model: "" };
-  const title = connected ? connected.name.split("/").pop() : "External llama.cpp server";
-  const contextLabel = connected?.context_verified !== false && Number.isFinite(connected?.server_context_tokens)
-    ? ` · ${Math.round(connected.server_context_tokens / 1024)}K context`
+  const title = connected ? connected.name.split("/").pop() : t("providers.external.title");
+  const contextSuffix = connected?.context_verified !== false && Number.isFinite(connected?.server_context_tokens)
+    ? ` · ${t("providers.external.context", { tokens: Math.round(connected.server_context_tokens / 1024) })}`
     : "";
   const state = connected
-    ? `${connected.endpoint}${contextLabel}`
+    ? `${connected.endpoint}${contextSuffix}`
     : studio.externalServerError
-      ? "Saved server is offline"
-      : "Connect to a model already running in llama-server";
+      ? t("providers.external.offline_saved")
+      : t("providers.external.connect_hint");
+  const statusKey = connected
+    ? "providers.status.connected"
+    : studio.externalServerError ? "providers.status.offline" : "providers.status.not_connected";
   return `
     <div class="h3ps-external-connection ${connected ? "is-connected" : ""}">
       <div class="h3ps-external-connection-status">
         <span class="h3ps-provider-icon" data-provider-icon="external" aria-hidden="true"></span>
-        <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(state)}</small></span>
-        <em>${connected ? "Connected" : studio.externalServerError ? "Offline" : "Not connected"}</em>
+        <span><strong${connected ? "" : ' data-i18n="providers.external.title"'}>${escapeHtml(title)}</strong><small data-provider-dynamic="external-state">${escapeHtml(state)}</small></span>
+        <em data-external-server-status data-i18n="${statusKey}">${t(statusKey)}</em>
       </div>
       <form data-external-server-form>
-        <label><span>Server URL</span><input name="url" type="url" value="${escapeHtml(config.url)}" placeholder="http://127.0.0.1:8080" required></label>
-        <label><span>Model ID <em>optional</em></span><input name="model" type="text" value="${escapeHtml(config.model)}" placeholder="Required when the server lists multiple models"></label>
-        <label><span>API key <em>optional</em></span><input name="api_key" type="password" autocomplete="off" placeholder="Blank reuses the key held in server memory"></label>
-        <small>Localhost only. Context and KV cache stay server-managed. Model lifecycle controls require a llama.cpp router.</small>
-        <div><button type="button" data-external-server-disconnect ${connected || studio.externalServerConfig ? "" : "hidden"}>Disconnect</button><span></span><button type="submit">${connected ? "Reconnect" : "Connect"}</button></div>
+        <label><span data-i18n="providers.external.url">${t("providers.external.url")}</span><input name="url" type="url" value="${escapeHtml(config.url)}" placeholder="http://127.0.0.1:8080" required></label>
+        <label><span><span data-i18n="providers.external.model_id">${t("providers.external.model_id")}</span> <em data-i18n="providers.optional">${t("providers.optional")}</em></span><input name="model" type="text" value="${escapeHtml(config.model)}" placeholder="${escapeHtml(t("providers.external.model_placeholder"))}" data-i18n-placeholder="providers.external.model_placeholder"></label>
+        <label><span><span data-i18n="providers.external.api_key">${t("providers.external.api_key")}</span> <em data-i18n="providers.optional">${t("providers.optional")}</em></span><input name="api_key" type="password" autocomplete="off" placeholder="${escapeHtml(t("providers.external.key_placeholder"))}" data-i18n-placeholder="providers.external.key_placeholder"></label>
+        <small data-i18n="providers.external.note">${t("providers.external.note")}</small>
+        <div><button type="button" data-external-server-disconnect ${connected || studio.externalServerConfig ? "" : "hidden"} data-i18n="providers.external.disconnect">${t("providers.external.disconnect")}</button><span></span><button type="submit" data-i18n="${connected ? "providers.external.reconnect" : "providers.external.connect"}">${connected ? t("providers.external.reconnect") : t("providers.external.connect")}</button></div>
       </form>
     </div>`;
 }
@@ -1796,21 +1911,24 @@ function ollamaModelForSettings() {
 
 function ollamaHostControlMarkup(hostValue = studio.ollamaHost) {
   const custom = studio.ollamaHost !== DEFAULT_OLLAMA_HOST;
+  const summary = custom
+    ? t("providers.ollama.remote_host", { host: escapeHtml(studio.ollamaHost) })
+    : t("providers.ollama.use_remote");
   return `<details class="h3ps-ollama-host-settings" data-ollama-host-settings ${studio.ollamaHostSettingsOpen ? "open" : ""}>
-    <summary>${custom ? `Remote host · ${escapeHtml(studio.ollamaHost)}` : "Use Ollama on another computer"}</summary>
+    <summary data-provider-dynamic="ollama-host-summary">${summary}</summary>
     <form data-ollama-host-form>
-      <label><span>Host URL</span><input name="host" type="url" value="${escapeHtml(hostValue)}" placeholder="${DEFAULT_OLLAMA_HOST}" required></label>
-      <button type="submit">Apply</button>
+      <label><span data-i18n="providers.ollama.host_url">${t("providers.ollama.host_url")}</span><input name="host" type="url" value="${escapeHtml(hostValue)}" placeholder="${DEFAULT_OLLAMA_HOST}" required></label>
+      <button type="submit" data-i18n="providers.ollama.apply">${t("providers.ollama.apply")}</button>
     </form>
-    <small>Keep the default URL for Ollama on this computer. Remote hosts must allow connections from this machine.</small>
+    <small data-i18n="providers.ollama.host_note">${t("providers.ollama.host_note")}</small>
   </details>`;
 }
 
 function ollamaJourneyMarkup(step) {
-  const steps = [["service", "Ollama"], ["model", "Prompt model"], ["ready", "Ready"]];
+  const steps = [["service", "providers.ollama.title"], ["model", "models.prompt_model"], ["ready", "providers.ollama.step_ready"]];
   const current = steps.findIndex(([name]) => name === step);
-  return `<ol class="h3ps-ollama-journey">${steps.map(([name, label], index) => `
-    <li class="${index < current ? "is-complete" : index === current ? "is-current" : ""}"><span>${index + 1}</span><em>${label}</em></li>`).join("")}</ol>`;
+  return `<ol class="h3ps-ollama-journey">${steps.map(([name, key], index) => `
+    <li class="${index < current ? "is-complete" : index === current ? "is-current" : ""}"><span>${index + 1}</span><em data-i18n="${key}">${t(key)}</em></li>`).join("")}</ol>`;
 }
 
 function ollamaDetectedTier() {
@@ -1829,8 +1947,8 @@ function renderOllamaModelTiers(status) {
     return `<div class="h3ps-ollama-tier-row ${isDetected ? "is-detected" : ""}">
       <span class="h3ps-ollama-tier-vram">${escapeHtml(tier.label)}</span>
       <code>${escapeHtml(command)}</code>
-      ${isDetected ? "<em>Detected</em>" : "<span></span>"}
-      <button type="button" data-copy-ollama-command="${escapeHtml(command)}" title="Copy ${escapeHtml(command)}" aria-label="Copy ${escapeHtml(command)}">${icon("copy", 13)}</button>
+      ${isDetected ? `<em data-i18n="providers.ollama.detected">${t("providers.ollama.detected")}</em>` : "<span></span>"}
+      <button type="button" data-copy-ollama-command="${escapeHtml(command)}" data-provider-dynamic="ollama-copy-command" data-command="${escapeHtml(command)}" title="${escapeHtml(t("providers.ollama.copy_command_title", { command }))}" aria-label="${escapeHtml(t("providers.ollama.copy_command_title", { command }))}">${icon("copy", 13)}</button>
     </div>`;
   }).join("")}</div>`;
 }
@@ -1839,66 +1957,70 @@ function renderOllamaProviderControl(hostValue) {
   const status = studio.ollamaStatus;
   const hostControl = ollamaHostControlMarkup(hostValue);
   const remoteHost = studio.ollamaHost !== DEFAULT_OLLAMA_HOST;
-  const serviceLabel = remoteHost ? "Remote service" : "Local service";
+  const serviceKey = remoteHost ? "providers.ollama.remote_service" : "providers.ollama.local_service";
+  const serviceLabel = t(serviceKey);
   if (!status) {
-    return `<header class="h3ps-settings-section-heading"><span><small>${serviceLabel}</small><strong>Ollama</strong></span></header>
-      ${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state"><span class="h3ps-spinner"></span><span class="h3ps-ollama-state-copy"><strong>Checking Ollama…</strong><p>${remoteHost ? "Looking for the selected service and installed models." : "Looking for the local service and installed models."}</p></span></div>${hostControl}`;
+    return `<header class="h3ps-settings-section-heading"><span><small data-i18n="${serviceKey}">${serviceLabel}</small><strong data-i18n="providers.ollama.title">${t("providers.ollama.title")}</strong></span></header>
+      ${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state"><span class="h3ps-spinner"></span><span class="h3ps-ollama-state-copy"><strong data-i18n="providers.ollama.checking">${t("providers.ollama.checking")}</strong><p data-i18n="${remoteHost ? "providers.ollama.looking_remote" : "providers.ollama.looking_local"}">${remoteHost ? t("providers.ollama.looking_remote") : t("providers.ollama.looking_local")}</p></span></div>${hostControl}`;
   }
   const ready = status.state === "ready";
-  const refresh = ready ? `<button type="button" data-ollama-refresh>${icon("refresh", 13)} Refresh</button>` : "";
-  const header = `<header class="h3ps-settings-section-heading"><span><small>${serviceLabel}</small><strong>Ollama</strong></span>${refresh}</header>`;
+  const refresh = ready ? `<button type="button" data-ollama-refresh>${icon("refresh", 13)} <span data-i18n="providers.ollama.refresh">${t("providers.ollama.refresh")}</span></button>` : "";
+  const header = `<header class="h3ps-settings-section-heading"><span><small data-i18n="${serviceKey}">${serviceLabel}</small><strong data-i18n="providers.ollama.title">${t("providers.ollama.title")}</strong></span>${refresh}</header>`;
   if (status.state === "not_installed") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state">
-      <span class="h3ps-ollama-state-icon">1</span><span class="h3ps-ollama-state-copy"><strong>Get Ollama</strong>
-      <p>Install the official Ollama app, open it once, then return here. This page will detect it automatically.</p></span>
-      <a class="h3ps-ollama-primary" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Official download ↗</a>
+      <span class="h3ps-ollama-state-icon">1</span><span class="h3ps-ollama-state-copy"><strong data-i18n="providers.ollama.get_title">${t("providers.ollama.get_title")}</strong>
+      <p data-i18n="providers.ollama.get_body">${t("providers.ollama.get_body")}</p></span>
+      <a class="h3ps-ollama-primary" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer" data-i18n="providers.ollama.official_download">${t("providers.ollama.official_download")}</a>
     </div>${hostControl}`;
   }
   if (status.state === "not_running") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state">
-      <span class="h3ps-ollama-state-icon">1</span><span class="h3ps-ollama-state-copy"><strong>Start Ollama</strong>
-      <p>${remoteHost ? `The Ollama service at ${escapeHtml(studio.ollamaHost)} is not responding.` : "Ollama is installed, but its local service is not responding. Open the Ollama app; this page checks automatically."}</p></span>
-      <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Check now</button>
+      <span class="h3ps-ollama-state-icon">1</span><span class="h3ps-ollama-state-copy"><strong data-i18n="providers.ollama.start_title">${t("providers.ollama.start_title")}</strong>
+      <p ${remoteHost ? 'data-provider-dynamic="ollama-remote-not-responding"' : 'data-i18n="providers.ollama.not_responding"'}>${remoteHost ? t("providers.ollama.remote_not_responding", { host: escapeHtml(studio.ollamaHost) }) : t("providers.ollama.not_responding")}</p></span>
+      <button class="h3ps-ollama-primary" type="button" data-ollama-refresh data-i18n="providers.ollama.check_now">${t("providers.ollama.check_now")}</button>
     </div>${hostControl}`;
   }
   if (status.state === "error") {
     return `${header}${ollamaJourneyMarkup("service")}<div class="h3ps-ollama-state is-error">
-      <span class="h3ps-ollama-state-icon">!</span><span class="h3ps-ollama-state-copy"><strong>Ollama could not be inspected</strong>
-      <p>${escapeHtml(status.error?.message || "The service returned an unexpected response.")}</p></span>
-      <button class="h3ps-ollama-primary" type="button" data-ollama-refresh>Try again</button>
+      <span class="h3ps-ollama-state-icon">!</span><span class="h3ps-ollama-state-copy"><strong data-i18n="providers.ollama.inspect_failed">${t("providers.ollama.inspect_failed")}</strong>
+      <p data-provider-dynamic="ollama-error-message">${escapeHtml(status.error?.message || t("providers.ollama.unexpected"))}</p></span>
+      <button class="h3ps-ollama-primary" type="button" data-ollama-refresh data-i18n="providers.ollama.try_again">${t("providers.ollama.try_again")}</button>
     </div>${hostControl}`;
   }
   const models = ollamaModels();
   if (!models.length) {
     return `${header}${ollamaJourneyMarkup("model")}<div class="h3ps-ollama-state h3ps-ollama-model-state">
-      <span class="h3ps-ollama-state-copy"><strong>Add a compatible prompt model</strong>
-      <p>Ollama is running, but no installed model reports both vision and text generation support.</p>
-      <div class="h3ps-ollama-tier-heading">Choose a model for your GPU</div>
+      <span class="h3ps-ollama-state-copy"><strong data-i18n="providers.ollama.add_title">${t("providers.ollama.add_title")}</strong>
+      <p data-i18n="providers.ollama.add_body">${t("providers.ollama.add_body")}</p>
+      <div class="h3ps-ollama-tier-heading" data-i18n="providers.ollama.choose_gpu">${t("providers.ollama.choose_gpu")}</div>
       ${renderOllamaModelTiers(status)}
-      <small>Copy a command and run it in Terminal or PowerShell. This page detects the model automatically.</small>
-      <details class="h3ps-ollama-storage-help" data-ollama-storage-help ${studio.ollamaStorageHelpOpen ? "open" : ""}><summary>Need models on another drive?</summary><p>Ollama manages one global model store. Set <code>OLLAMA_MODELS</code> before pulling a model, then restart Ollama. <a href="https://docs.ollama.com/windows#changing-model-location" target="_blank" rel="noopener noreferrer">Official instructions ↗</a></p></details></span>
+      <small data-i18n="providers.ollama.copy_hint">${t("providers.ollama.copy_hint")}</small>
+      <details class="h3ps-ollama-storage-help" data-ollama-storage-help ${studio.ollamaStorageHelpOpen ? "open" : ""}><summary data-i18n="providers.ollama.storage_title">${t("providers.ollama.storage_title")}</summary><p><span data-i18n="providers.ollama.storage_before">${t("providers.ollama.storage_before")}</span> <code>OLLAMA_MODELS</code><span data-i18n="providers.ollama.storage_after">${t("providers.ollama.storage_after")}</span> <a href="https://docs.ollama.com/windows#changing-model-location" target="_blank" rel="noopener noreferrer" data-i18n="providers.ollama.official_instructions">${t("providers.ollama.official_instructions")}</a></p></details></span>
     </div>${hostControl}`;
   }
   const selected = ollamaModelForSettings();
   const tested = selected?.tested_for_h3 === true;
   const addModelOpen = studio.ollamaAddModelOpen === true;
   return `${header}${ollamaJourneyMarkup("ready")}<div class="h3ps-ollama-ready">
-    <div class="h3ps-ollama-ready-heading"><span class="h3ps-provider-icon" data-provider-icon="ollama" aria-hidden="true"></span><span><strong>Ollama is ready</strong><small>Version ${escapeHtml(status.version || "unknown")} · ${remoteHost ? escapeHtml(studio.ollamaHost) : "local service"}</small></span><em>Running</em></div>
-    <div class="h3ps-ollama-model-heading"><span>Prompt model</span><button class="h3ps-ollama-add-model-toggle" type="button" data-ollama-add-model aria-expanded="${String(addModelOpen)}">${addModelOpen ? "− Hide models" : "+ Add model"}</button></div>
+    <div class="h3ps-ollama-ready-heading"><span class="h3ps-provider-icon" data-provider-icon="ollama" aria-hidden="true"></span><span><strong data-i18n="providers.ollama.ready">${t("providers.ollama.ready")}</strong><small data-provider-dynamic="ollama-version">${t("providers.ollama.version", { version: escapeHtml(status.version || t("models.unknown")), host: remoteHost ? escapeHtml(studio.ollamaHost) : t("providers.ollama.local_service_lower") })}</small></span><em data-i18n="providers.ollama.running">${t("providers.ollama.running")}</em></div>
+    <div class="h3ps-ollama-model-heading"><span data-i18n="models.prompt_model">${t("models.prompt_model")}</span><button class="h3ps-ollama-add-model-toggle" type="button" data-ollama-add-model aria-expanded="${String(addModelOpen)}" data-i18n="${addModelOpen ? "providers.ollama.hide_models" : "providers.ollama.add_model"}">${addModelOpen ? t("providers.ollama.hide_models") : t("providers.ollama.add_model")}</button></div>
     <label class="h3ps-ollama-model-select"><select data-ollama-model>${models.map((model) => `<option value="${escapeHtml(model.remote_model)}" ${model.remote_model === selected?.remote_model ? "selected" : ""}>${escapeHtml(model.name)}${model.parameter_size ? ` · ${escapeHtml(model.parameter_size)}` : ""}${model.quantization_level ? ` · ${escapeHtml(model.quantization_level)}` : ""}</option>`).join("")}</select></label>
-    ${addModelOpen ? `<div class="h3ps-ollama-add-model"><strong>Choose another tested model</strong>${renderOllamaModelTiers(status)}<small>Copy a command and run it in Terminal or PowerShell. Select Refresh after the pull completes.</small></div>` : ""}
-    <div class="h3ps-ollama-badges"><span>Vision</span><span>${selected?.thinking_detected ? "Thinking detected" : "Standard generation"}</span><span class="${tested ? "is-tested" : ""}">${tested ? "Tested for H3" : "Compatible · not yet H3-tested"}</span></div>
-    <p>${tested ? "This exact Ollama tag passed the focused H3 Generate and Refine smoke test." : "Compatibility comes from Ollama model metadata. It is not a quality guarantee for H3 prompts."}</p>
-    <small>Use “Keep model loaded” on the Generate page to control whether Ollama retains this model after each request.</small>
+    ${addModelOpen ? `<div class="h3ps-ollama-add-model"><strong data-i18n="providers.ollama.choose_another">${t("providers.ollama.choose_another")}</strong>${renderOllamaModelTiers(status)}<small data-i18n="providers.ollama.copy_after">${t("providers.ollama.copy_after")}</small></div>` : ""}
+    <div class="h3ps-ollama-badges"><span data-i18n="providers.ollama.vision">${t("providers.ollama.vision")}</span><span data-i18n="${selected?.thinking_detected ? "providers.ollama.thinking_detected" : "providers.ollama.standard"}">${selected?.thinking_detected ? t("providers.ollama.thinking_detected") : t("providers.ollama.standard")}</span><span class="${tested ? "is-tested" : ""}" data-i18n="${tested ? "providers.ollama.tested" : "providers.ollama.not_tested"}">${tested ? t("providers.ollama.tested") : t("providers.ollama.not_tested")}</span></div>
+    <p data-i18n="${tested ? "providers.ollama.tested_body" : "providers.ollama.untested_body"}">${tested ? t("providers.ollama.tested_body") : t("providers.ollama.untested_body")}</p>
+    <small data-i18n="providers.ollama.keep_loaded">${t("providers.ollama.keep_loaded")}</small>
   </div>${hostControl}`;
 }
 
 const API_PROVIDER_UI = {
-  gemini: { name: "Gemini", icon: "api-gemini", note: "Google API", keyUrl: "https://aistudio.google.com/api-keys" },
-  openai: { name: "OpenAI", icon: "api-openai", note: "OpenAI API", keyUrl: "https://platform.openai.com/api-keys" },
-  openrouter: { name: "OpenRouter", icon: "api-openrouter", note: "Multi-provider gateway", keyUrl: "https://openrouter.ai/settings/keys" },
-  custom: { name: "Custom", icon: "api-custom", note: "Generic OpenAI-compatible", keyUrl: null },
+  gemini: { name: "Gemini", icon: "api-gemini", noteKey: "providers.api.note.gemini", keyUrl: "https://aistudio.google.com/api-keys" },
+  openai: { name: "OpenAI", icon: "api-openai", noteKey: "providers.api.note.openai", keyUrl: "https://platform.openai.com/api-keys" },
+  openrouter: { name: "OpenRouter", icon: "api-openrouter", noteKey: "providers.api.note.openrouter", keyUrl: "https://openrouter.ai/settings/keys" },
+  custom: { nameKey: "providers.api.name.custom", icon: "api-custom", noteKey: "providers.api.note.custom", keyUrl: null },
 };
+function apiProviderName(provider) {
+  return provider.nameKey ? t(provider.nameKey) : provider.name;
+}
 
 function apiProviderModelForSettings() {
   if (studio.selectedModel?.family === "api") {
@@ -1911,6 +2033,12 @@ function apiProviderModelForSettings() {
     || null;
 }
 
+function renderApiProviderError() {
+  const error = studio.apiProviderError;
+  if (!error) return "";
+  return `<div class="h3ps-api-error"><strong ${error.code ? "" : 'data-provider-dynamic="api-error-code"'}>${escapeHtml(error.code || t("providers.api.connection_failed"))}</strong><span>${escapeHtml(error.message)}</span></div>`;
+}
+
 function renderApiProviderControl() {
   const config = studio.apiProviderConfig;
   const selectedPreset = API_PROVIDER_UI[config.preset] || API_PROVIDER_UI.gemini;
@@ -1919,13 +2047,13 @@ function renderApiProviderControl() {
   const model = apiProviderModelForSettings();
   const providerChoices = Object.entries(API_PROVIDER_UI).map(([id, provider]) => `
     <button type="button" class="h3ps-api-preset ${id === config.preset ? "is-selected" : ""}" data-api-preset="${id}">
-      <span class="h3ps-provider-icon" data-provider-icon="${provider.icon}" aria-hidden="true"></span><span><strong>${provider.name}</strong><small>${provider.note}</small></span>${icon("check", 13)}
+      <span class="h3ps-provider-icon" data-provider-icon="${provider.icon}" aria-hidden="true"></span><span><strong${provider.nameKey ? ` data-i18n="${provider.nameKey}"` : ""}>${apiProviderName(provider)}</strong><small data-i18n="${provider.noteKey}">${t(provider.noteKey)}</small></span>${icon("check", 13)}
     </button>`).join("");
-  const header = `<header class="h3ps-settings-section-heading"><span><small>OpenAI-compatible</small><strong>API providers</strong></span></header>`;
-  const disclosure = `<div class="h3ps-api-disclosure"><strong>What leaves this computer</strong><p>The provider receives your brief, H3 instructions, prepared images and one derived contact sheet per video in the current manifest. Original videos and audio bytes are not uploaded.</p>${config.preset === "openrouter" ? "<small>OpenRouter forwards the request to an upstream model provider with its own data policy.</small>" : ""}</div>`;
+  const header = `<header class="h3ps-settings-section-heading"><span><small data-i18n="providers.api.kicker">${t("providers.api.kicker")}</small><strong data-i18n="settings.api">${t("settings.api")}</strong></span></header>`;
+  const disclosure = `<div class="h3ps-api-disclosure"><strong data-i18n="providers.api.disclosure_title">${t("providers.api.disclosure_title")}</strong><p data-i18n="providers.api.disclosure_body">${t("providers.api.disclosure_body")}</p>${config.preset === "openrouter" ? `<small data-i18n="providers.api.disclosure_openrouter">${t("providers.api.disclosure_openrouter")}</small>` : ""}</div>`;
   const policyLinks = [
-    providerMetadata.pricing_url ? `<a href="${escapeHtml(providerMetadata.pricing_url)}" target="_blank" rel="noopener noreferrer">Pricing ↗</a>` : "",
-    providerMetadata.privacy_url ? `<a href="${escapeHtml(providerMetadata.privacy_url)}" target="_blank" rel="noopener noreferrer">Data policy ↗</a>` : "",
+    providerMetadata.pricing_url ? `<a href="${escapeHtml(providerMetadata.pricing_url)}" target="_blank" rel="noopener noreferrer" data-i18n="providers.api.pricing">${t("providers.api.pricing")}</a>` : "",
+    providerMetadata.privacy_url ? `<a href="${escapeHtml(providerMetadata.privacy_url)}" target="_blank" rel="noopener noreferrer" data-i18n="providers.api.privacy">${t("providers.api.privacy")}</a>` : "",
   ].filter(Boolean).join("");
   if (connection) {
     const models = studio.apiProviderModels.length ? studio.apiProviderModels : model ? [model] : [];
@@ -1934,31 +2062,82 @@ function renderApiProviderControl() {
       <div class="h3ps-api-setup">
         <div class="h3ps-api-connected">
           <span class="h3ps-provider-icon" data-provider-icon="${selectedPreset.icon}" aria-hidden="true"></span>
-          <span><strong>${escapeHtml(connection.provider_name)}</strong><small>${escapeHtml(connection.base_url)} · ${escapeHtml(connection.key_hint || "no key")}${connection.compatibility_profile === "lm_studio" ? " · LM Studio detected" : ""}</small></span>
-          <em>${connection.connection_verified ? "Connected" : "Configured"}</em>
+          <span><strong>${escapeHtml(connection.provider_name)}</strong><small data-provider-dynamic="api-connected-meta">${escapeHtml(connection.base_url)} · ${escapeHtml(connection.key_hint || t("providers.api.no_key"))}${connection.compatibility_profile === "lm_studio" ? ` · ${t("providers.api.lm_studio")}` : ""}</small></span>
+          <em data-i18n="${connection.connection_verified ? "providers.status.connected" : "providers.api.configured"}">${connection.connection_verified ? t("providers.status.connected") : t("providers.api.configured")}</em>
         </div>
-        <label class="h3ps-api-model-select"><span>Model</span><select data-api-model>${models.map((item) => `<option value="${escapeHtml(item.remote_model)}" ${item.remote_model === model?.remote_model ? "selected" : ""}>${escapeHtml(item.name)}${item.model_context_limit ? ` · ${Math.round(item.model_context_limit / 1024)}K` : ""}</option>`).join("")}</select></label>
-        <div class="h3ps-api-badges"><span class="${model?.capabilities?.images ? "is-ready" : ""}">${model?.capabilities?.images ? "Vision" : "Text only / unknown"}</span><span>${config.preset === "gemini" ? `Thinking ${escapeHtml(connection.reasoning_effort || "minimal")}` : "Reasoning provider managed"}</span><span>Provider managed</span></div>
-        <div class="h3ps-api-actions"><span>${policyLinks}</span><button type="button" data-api-model-refresh>${icon("refresh", 13)} Refresh models</button><button type="button" data-api-disconnect>Disconnect</button></div>
+        <label class="h3ps-api-model-select"><span data-i18n="settings.model">${t("settings.model")}</span><select data-api-model>${models.map((item) => `<option value="${escapeHtml(item.remote_model)}" ${item.remote_model === model?.remote_model ? "selected" : ""}>${escapeHtml(item.name)}${item.model_context_limit ? ` · ${Math.round(item.model_context_limit / 1024)}K` : ""}</option>`).join("")}</select></label>
+        <div class="h3ps-api-badges"><span class="${model?.capabilities?.images ? "is-ready" : ""}" data-i18n="${model?.capabilities?.images ? "providers.ollama.vision" : "providers.api.text_unknown"}">${model?.capabilities?.images ? t("providers.ollama.vision") : t("providers.api.text_unknown")}</span><span data-provider-dynamic="api-thinking">${config.preset === "gemini" ? t("providers.api.thinking", { level: escapeHtml(connection.reasoning_effort || "minimal") }) : t("toast.generation.reasoning_managed")}</span><span data-i18n="providers.api.provider_managed">${t("providers.api.provider_managed")}</span></div>
+        <div class="h3ps-api-actions"><span>${policyLinks}</span><button type="button" data-api-model-refresh>${icon("refresh", 13)} <span data-i18n="providers.api.refresh_models">${t("providers.api.refresh_models")}</span></button><button type="button" data-api-disconnect data-i18n="providers.external.disconnect">${t("providers.external.disconnect")}</button></div>
         ${disclosure}
-        <p class="h3ps-api-cancel-note">Stop aborts H3's connection. The remote provider may continue processing or billing.</p>
+        <p class="h3ps-api-cancel-note" data-i18n="providers.api.stop_note">${t("providers.api.stop_note")}</p>
       </div>
     </div>`;
   }
   return `${header}<div class="h3ps-api-layout">
     <div class="h3ps-api-preset-list">${providerChoices}</div>
     <form class="h3ps-api-setup" data-api-provider-form>
-      <div class="h3ps-api-intro"><strong>Connect ${selectedPreset.name}</strong><p>One shared Chat Completions backend. Provider-specific fields are applied by the selected preset.</p></div>
-      ${config.preset === "custom" ? `<label><span>API base URL</span><input name="base_url" type="url" value="${escapeHtml(config.base_url)}" placeholder="https://host.example/v1 or http://localhost:8000/v1" required><small>Public endpoints require HTTPS; loopback and private LAN addresses may use HTTP.</small></label>` : ""}
-      <label><span>API key ${config.preset === "custom" ? "<em>optional</em>" : ""}</span><input name="api_key" type="password" value="" placeholder="Paste key for this session" autocomplete="off" spellcheck="false" ${config.preset === "custom" ? "" : "required"}><small>The key is sent once to the local H3 backend, kept only in memory, and never saved in localStorage.</small></label>
-      <label><span>Model ID <em>optional before connect</em></span><input name="model_id" type="text" value="${escapeHtml(config.model_id)}" placeholder="Choose from provider list or enter an exact ID" spellcheck="false"></label>
-      ${config.preset === "gemini" ? `<label><span>Thinking level</span><select name="gemini_reasoning_effort"><option value="minimal" ${config.gemini_reasoning_effort === "minimal" ? "selected" : ""}>Minimal</option><option value="low" ${config.gemini_reasoning_effort === "low" ? "selected" : ""}>Low</option><option value="medium" ${config.gemini_reasoning_effort === "medium" ? "selected" : ""}>Medium</option><option value="high" ${config.gemini_reasoning_effort === "high" ? "selected" : ""}>High</option></select><small>Gemini manages the reasoning and output budget. Higher levels can use more tokens and take longer.</small></label>` : ""}
-      ${config.preset === "custom" ? `<div class="h3ps-api-custom-options"><label><input name="custom_images" type="checkbox" ${config.custom_images ? "checked" : ""}><span>Endpoint accepts image_url inputs</span></label><label><span>Known context <em>optional</em></span><input name="custom_context_tokens" type="number" min="4096" step="1024" value="${config.custom_context_tokens || ""}" placeholder="32768"></label></div>` : ""}
-      ${studio.apiProviderError ? `<div class="h3ps-api-error"><strong>${escapeHtml(studio.apiProviderError.code || "Connection failed")}</strong><span>${escapeHtml(studio.apiProviderError.message)}</span></div>` : ""}
+      <div class="h3ps-api-intro"><strong data-provider-dynamic="api-connect-title">${t("providers.api.connect_title", { provider: apiProviderName(selectedPreset) })}</strong><p data-i18n="providers.api.intro">${t("providers.api.intro")}</p></div>
+      ${config.preset === "custom" ? `<label><span data-i18n="providers.api.base_url">${t("providers.api.base_url")}</span><input name="base_url" type="url" value="${escapeHtml(config.base_url)}" placeholder="${escapeHtml(t("providers.api.base_placeholder"))}" data-i18n-placeholder="providers.api.base_placeholder" required><small data-i18n="providers.api.base_hint">${t("providers.api.base_hint")}</small></label>` : ""}
+      <label><span><span data-i18n="providers.api.key">${t("providers.api.key")}</span> ${config.preset === "custom" ? `<em data-i18n="providers.optional">${t("providers.optional")}</em>` : ""}</span><input name="api_key" type="password" value="" placeholder="${escapeHtml(t("providers.api.key_placeholder"))}" data-i18n-placeholder="providers.api.key_placeholder" autocomplete="off" spellcheck="false" ${config.preset === "custom" ? "" : "required"}><small data-i18n="providers.api.key_hint">${t("providers.api.key_hint")}</small></label>
+      <label><span><span data-i18n="providers.api.model_id">${t("providers.api.model_id")}</span> <em data-i18n="providers.api.optional_before_connect">${t("providers.api.optional_before_connect")}</em></span><input name="model_id" type="text" value="${escapeHtml(config.model_id)}" placeholder="${escapeHtml(t("providers.api.model_placeholder"))}" data-i18n-placeholder="providers.api.model_placeholder" spellcheck="false"></label>
+      ${config.preset === "gemini" ? `<label><span data-i18n="providers.api.thinking_level">${t("providers.api.thinking_level")}</span><select name="gemini_reasoning_effort"><option value="minimal" ${config.gemini_reasoning_effort === "minimal" ? "selected" : ""} data-i18n="providers.api.thinking_minimal">${t("providers.api.thinking_minimal")}</option><option value="low" ${config.gemini_reasoning_effort === "low" ? "selected" : ""} data-i18n="runtime.reasoning.low">${reasoningLabel("low")}</option><option value="medium" ${config.gemini_reasoning_effort === "medium" ? "selected" : ""} data-i18n="runtime.reasoning.medium">${reasoningLabel("medium")}</option><option value="high" ${config.gemini_reasoning_effort === "high" ? "selected" : ""} data-i18n="runtime.reasoning.high">${reasoningLabel("high")}</option></select><small data-i18n="providers.api.thinking_hint">${t("providers.api.thinking_hint")}</small></label>` : ""}
+      ${config.preset === "custom" ? `<div class="h3ps-api-custom-options"><label><input name="custom_images" type="checkbox" ${config.custom_images ? "checked" : ""}><span data-i18n="providers.api.images_option">${t("providers.api.images_option")}</span></label><label><span><span data-i18n="providers.api.known_context">${t("providers.api.known_context")}</span> <em data-i18n="providers.optional">${t("providers.optional")}</em></span><input name="custom_context_tokens" type="number" min="4096" step="1024" value="${config.custom_context_tokens || ""}" placeholder="32768"></label></div>` : ""}
+      <div data-api-provider-error>${renderApiProviderError()}</div>
       ${disclosure}
-      <div class="h3ps-api-actions"><span>${selectedPreset.keyUrl ? `<a href="${selectedPreset.keyUrl}" target="_blank" rel="noopener noreferrer">Create or manage key ↗</a>` : ""}${policyLinks}</span><button class="h3ps-api-primary" type="submit">Connect &amp; test</button></div>
+      <div class="h3ps-api-actions"><span>${selectedPreset.keyUrl ? `<a href="${selectedPreset.keyUrl}" target="_blank" rel="noopener noreferrer" data-i18n="providers.api.manage_key">${t("providers.api.manage_key")}</a>` : ""}${policyLinks}</span><button class="h3ps-api-primary" type="submit" data-i18n="providers.api.connect_test">${t("providers.api.connect_test")}</button></div>
     </form>
   </div>`;
+}
+
+function syncProviderPanelCopy(root = studio.root) {
+  if (!root) return;
+  root.querySelectorAll("[data-provider-dynamic]").forEach((element) => {
+    const kind = element.dataset.providerDynamic;
+    if (kind === "external-state") {
+      const connected = studio.externalModel;
+      const contextSuffix = connected?.context_verified !== false && Number.isFinite(connected?.server_context_tokens)
+        ? ` · ${t("providers.external.context", { tokens: Math.round(connected.server_context_tokens / 1024) })}`
+        : "";
+      element.textContent = connected
+        ? `${connected.endpoint}${contextSuffix}`
+        : studio.externalServerError
+          ? t("providers.external.offline_saved")
+          : t("providers.external.connect_hint");
+    } else if (kind === "ollama-host-summary") {
+      element.textContent = studio.ollamaHost !== DEFAULT_OLLAMA_HOST
+        ? t("providers.ollama.remote_host", { host: studio.ollamaHost })
+        : t("providers.ollama.use_remote");
+    } else if (kind === "ollama-copy-command") {
+      const command = element.dataset.command || "";
+      const label = t("providers.ollama.copy_command_title", { command });
+      element.title = label;
+      element.setAttribute("aria-label", label);
+    } else if (kind === "ollama-version") {
+      if (!studio.ollamaStatus) return;
+      element.textContent = t("providers.ollama.version", {
+        version: studio.ollamaStatus.version || t("models.unknown"),
+        host: studio.ollamaHost !== DEFAULT_OLLAMA_HOST ? studio.ollamaHost : t("providers.ollama.local_service_lower"),
+      });
+    } else if (kind === "ollama-remote-not-responding") {
+      element.textContent = t("providers.ollama.remote_not_responding", { host: studio.ollamaHost });
+    } else if (kind === "ollama-error-message") {
+      if (!studio.ollamaStatus?.error?.message) element.textContent = t("providers.ollama.unexpected");
+    } else if (kind === "api-connect-title") {
+      const preset = API_PROVIDER_UI[studio.apiProviderConfig?.preset] || API_PROVIDER_UI.gemini;
+      element.textContent = t("providers.api.connect_title", { provider: apiProviderName(preset) });
+    } else if (kind === "api-connected-meta") {
+      const connection = studio.apiProviderConnection;
+      if (!connection) return;
+      element.textContent = `${connection.base_url} · ${connection.key_hint || t("providers.api.no_key")}${connection.compatibility_profile === "lm_studio" ? ` · ${t("providers.api.lm_studio")}` : ""}`;
+    } else if (kind === "api-thinking") {
+      if (!studio.apiProviderConnection) return;
+      element.textContent = studio.apiProviderConfig?.preset === "gemini"
+        ? t("providers.api.thinking", { level: studio.apiProviderConnection.reasoning_effort || "minimal" })
+        : t("toast.generation.reasoning_managed");
+    } else if (kind === "api-error-code") {
+      if (!studio.apiProviderError?.code) element.textContent = t("providers.api.connection_failed");
+    }
+  });
 }
 
 function setOtherModelsPopover(open) {
@@ -2006,30 +2185,30 @@ function syncProviderSettings() {
   runtimeSettings.querySelector('[data-runtime-toggle="context"]').closest(".h3ps-runtime-control").hidden = provider !== "direct";
   runtimeSettings.querySelector('[data-runtime-toggle="kv"]').closest(".h3ps-runtime-control").hidden = provider !== "direct";
   runtimeSettings.querySelector("[data-runtime-management]").textContent = provider === "ollama"
-    ? "Ollama context is planned automatically. Generation budget applies to the next request, including thinking."
-    : "Direct GGUF runtime settings are applied to the next request.";
+    ? t("models.ollama_context_note")
+    : t("settings.runtime_note");
 }
 
 function directModelRuntimeSuffix(model) {
   const requirement = model.runtime_requirement || {};
   if (requirement.state === "update_required") {
-    return `Runtime ${requirement.minimum_version}+ required`;
+    return t("models.update_suffix", { version: requirement.minimum_version });
   }
-  if (requirement.state === "missing") return "Runtime required";
-  if (requirement.state === "incompatible") return "Runtime incompatible";
+  if (requirement.state === "missing") return t("models.runtime_required");
+  if (requirement.state === "incompatible") return t("models.runtime_incompatible");
   return "";
 }
 
 function renderDirectModelRuntimeUpdate(model) {
   const requirement = model.runtime_requirement || {};
-  const installed = requirement.installed_version || studio.ggufRuntimeDiagnostics?.package_version || "unknown";
-  const minimum = requirement.minimum_version || "a newer version";
+  const installed = requirement.installed_version || studio.ggufRuntimeDiagnostics?.package_version || t("models.unknown");
+  const minimum = requirement.minimum_version || t("models.newer");
   const command = directRuntimeActionCommand();
   return `<section class="h3ps-direct-runtime-state is-missing">
-    <header><span><small>Runtime</small><strong>Runtime update required</strong></span></header>
-    <p>Installed llama-cpp-python ${escapeHtml(installed)}. ${escapeHtml(model.name)} requires ${escapeHtml(minimum)} or newer.</p>
+    <header><span><small>${t("models.runtime")}</small><strong>${t("models.runtime_update_required")}</strong></span></header>
+    <p>${t("models.installed_requires", { installed: escapeHtml(installed), model: escapeHtml(model.name), minimum: escapeHtml(minimum) })}</p>
     ${renderDirectRuntimeCommand(command, "update")}
-    ${command ? "" : `<div class="h3ps-direct-runtime-links"><a href="${INSTALLATION_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Installation guide ↗</a><a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">Troubleshooting guide ↗</a></div>`}
+    ${command ? "" : `<div class="h3ps-direct-runtime-links"><a href="${INSTALLATION_GUIDE_URL}" target="_blank" rel="noopener noreferrer">${t("models.installation_guide")}</a><a href="${TROUBLESHOOTING_GUIDE_URL}" target="_blank" rel="noopener noreferrer">${t("models.troubleshooting_guide")}</a></div>`}
   </section>`;
 }
 
@@ -2045,7 +2224,7 @@ function renderProjectorChoice(model) {
   const choices = model?.projector_candidates || [];
   slot.replaceChildren();
   if (choices.length < 2) return;
-  slot.innerHTML = `<label class="h3ps-field"><span>Vision projector</span><select aria-label="Vision projector"><option value="">Choose a compatible projector…</option>${choices.map(path => `<option value="${escapeHtml(path)}" ${path === model.selected_projector ? "selected" : ""}>${escapeHtml(path.split(/[\\/]/).pop())}</option>`).join("")}</select></label><p class="h3ps-direct-model-note">Several projectors match this model. Choose the intended file.</p>`;
+  slot.innerHTML = `<label class="h3ps-field"><span>${t("models.vision_projector")}</span><select aria-label="${t("models.vision_projector")}"><option value="">${t("models.choose_projector")}</option>${choices.map(path => `<option value="${escapeHtml(path)}" ${path === model.selected_projector ? "selected" : ""}>${escapeHtml(path.split(/[\\/]/).pop())}</option>`).join("")}</select></label><p class="h3ps-direct-model-note">${t("models.multiple_projectors")}</p>`;
   const select = slot.querySelector("select");
   select.addEventListener("change", async () => {
     const revision = studio.modelSelectionRevision;
@@ -2059,7 +2238,7 @@ function renderProjectorChoice(model) {
       localStorage.setItem("h3-writer-projectors", JSON.stringify(saved));
       studio.models = studio.models.map(m => m.id === model.id ? result.model : m);
       selectModel(result.model);
-    } catch (error) { showToast("Projector selection", error.message); }
+    } catch (error) { showErrorToast("models.projector_selection", error); }
     finally { if (select.isConnected) select.disabled = false; }
   });
 }
@@ -2077,13 +2256,13 @@ function renderInferenceSettings() {
       const suffix = [
         modelVramLabel(model),
         model.format,
-        modelFileNeedsSetup ? "Needs setup" : "",
+        modelFileNeedsSetup ? t("models.needs_setup") : "",
         directModelRuntimeSuffix(model),
-        isTextOnlyDirectModel(model) ? "Text only" : "",
+        isTextOnlyDirectModel(model) ? t("models.text_only") : "",
       ].filter(Boolean).join(" · ");
       return `<option value="${escapeHtml(model.id)}" ${model.id === directModel?.id ? "selected" : ""}>${escapeHtml(model.name.split("/").pop())}${suffix ? ` — ${escapeHtml(suffix)}` : ""}</option>`;
     }).join("")
-    : "<option>No compatible model found</option>";
+    : `<option>${t("models.none_found")}</option>`;
   studio.root.querySelector("[data-direct-runtime-status]").innerHTML = renderDirectRuntimeStatus();
   const directStatus = studio.root.querySelector("[data-direct-model-status]");
   if (!models.length) {
@@ -2091,11 +2270,11 @@ function renderInferenceSettings() {
   } else if (directModel) {
     const runtimeRequirement = directModel.runtime_requirement || {};
     directStatus.innerHTML = directModel.model_ready === false
-      ? `<div class="h3ps-direct-model-warning"><strong>Model needs attention</strong><span>${escapeHtml(directModel.setup_message || "The GGUF metadata or architecture is not supported.")}</span></div>`
+      ? `<div class="h3ps-direct-model-warning"><strong>${t("models.needs_attention")}</strong><span>${escapeHtml(directModel.setup_message || t("models.unsupported"))}</span></div>`
       : runtimeRequirement.state === "update_required"
         ? renderDirectModelRuntimeUpdate(directModel)
         : isTextOnlyDirectModel(directModel)
-          ? `<div class="h3ps-direct-model-note"><strong>Text-only model · T2VA and Music3 available</strong><span>${escapeHtml(directModel.capability_message || "No compatible vision projector is active.")}</span></div>`
+          ? `<div class="h3ps-direct-model-note"><strong>${t("models.text_only_note")}</strong><span>${escapeHtml(directModel.capability_message || t("models.no_projector"))}</span></div>`
           : "";
   } else {
     directStatus.innerHTML = "";
@@ -2204,7 +2383,6 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
     }
   }
   if (model?.family === "gguf") studio.preferredDirectModelId = model.id;
-  const remote = ["external", "api"].includes(model?.family);
   if (model?.family !== "gguf") {
     studio.contextProfile = "auto";
     studio.kvCache = "auto";
@@ -2224,8 +2402,8 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
   const keepLoadedControl = studio.root.querySelector("[data-keep-loaded-control]");
   const vramHandoff = studio.root.querySelector("[data-vram-handoff]");
   const vramHandoffControl = studio.root.querySelector("[data-vram-handoff-control]");
-  keepLoadedControl.hidden = remote && !model?.lifecycle_supported;
-  keepLoaded.checked = studio.keepModelLoaded;
+  keepLoadedControl.hidden = model?.family !== "gguf";
+  keepLoaded.checked = model?.family === "gguf" && studio.keepModelLoaded;
   if (vramHandoffControl && vramHandoff) {
     vramHandoffControl.hidden = !selectedModelSupportsVramHandoff();
     vramHandoff.checked = studio.vramHandoff;
@@ -2238,8 +2416,8 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
   saveUserPreferences(localStorage, studio);
   if (switchedToT2VA && !studio.preferencesRestoring) {
     showToast(
-      "Switched to T2VA",
-      model?.capability_message || "The selected Direct GGUF has no compatible vision projector.",
+      msg("toast.mode.switched_t2va.title"),
+      model?.capability_message || msg("toast.mode.switched_t2va.message"),
     );
   }
 }
@@ -2277,6 +2455,22 @@ function applyRuntimePreferences(provider) {
   }
 }
 
+const CONTEXT_LABELS = { auto: "settings.auto", low: "8K", standard: "16K", extended: "24K", large: "32K", maximum: "48K", custom: "settings.custom" };
+const KV_LABELS = { auto: "settings.auto", q8: "Q8", f16: "F16" };
+const BUDGET_LABELS = { auto: "settings.auto", 2048: "2K", 4096: "4K", 8192: "8K", custom: "settings.custom" };
+const labelText = (value) => String(value).startsWith("settings.") ? t(value) : String(value);
+function contextLabel(value) {
+  return labelText(CONTEXT_LABELS[value] ?? (value || "settings.auto"));
+}
+const kvLabel = (value) => labelText(KV_LABELS[value] ?? value);
+const budgetLabel = (value) => labelText(BUDGET_LABELS[value] ?? value);
+function reasoningLabel(value) {
+  if (value === "auto") return t("settings.auto");
+  return hasTranslation(`runtime.reasoning.${value}`)
+    ? t(`runtime.reasoning.${value}`)
+    : value[0].toUpperCase() + value.slice(1);
+}
+
 function syncThinkingAvailability() {
   if (!studio) return;
   const apiManaged = studio.selectedModel?.family === "api";
@@ -2296,15 +2490,11 @@ function syncThinkingAvailability() {
   label.hidden = apiManaged;
   label.classList.toggle("is-disabled", disabled);
   label.title = externalManaged
-    ? "Thinking is controlled by the external llama.cpp server. Start it with --reasoning on --reasoning-effort low to enable, or --reasoning off to disable."
+    ? t("runtime.thinking_external")
     : unsupported
-    ? "This provider model does not report thinking controls."
-    : disabled ? "Thinking needs 16K or larger Context." : "";
+    ? t("runtime.thinking_unsupported")
+    : disabled ? t("runtime.thinking_needs_context") : "";
 }
-
-const CONTEXT_LABELS = { auto: "Auto", low: "8K", standard: "16K", extended: "24K", large: "32K", maximum: "48K", custom: "Custom" };
-const KV_LABELS = { auto: "Auto", q8: "Q8", f16: "F16" };
-const BUDGET_LABELS = { auto: "Auto", 2048: "2K", 4096: "4K", 8192: "8K", custom: "Custom" };
 
 function syncContextAvailability() {
   const profiles = studio.selectedModel?.family === "gguf"
@@ -2317,7 +2507,7 @@ function syncContextAvailability() {
       && !profiles.includes(button.dataset.value);
     button.disabled = unavailable;
     button.setAttribute("aria-disabled", String(unavailable));
-    button.title = unavailable ? "This Context tier is not available for the selected Direct model." : "";
+    button.title = unavailable ? t("runtime.context_unavailable") : "";
   });
 }
 
@@ -2329,14 +2519,18 @@ function syncAdvancedRuntimeControls() {
   const customContext = studio.root.querySelector("[data-custom-context]");
   customContext.hidden = !direct || studio.contextProfile !== "custom";
   const contextInput = studio.root.querySelector("[data-custom-context-input]");
-  contextInput.value = studio.contextTokens || "";
+  if (!studio.localeRefreshing) {
+    contextInput.value = studio.contextTokens || "";
+  }
   const nativeContext = studio.selectedModel?.native_context_tokens;
   if (Number.isInteger(nativeContext) && nativeContext > 0) contextInput.max = String(nativeContext);
   else contextInput.removeAttribute("max");
 
   const customBudget = studio.root.querySelector("[data-custom-generation-budget]");
   customBudget.hidden = (!direct && !ollama) || studio.generationBudget !== "custom";
-  studio.root.querySelector("[data-custom-generation-budget-input]").value = studio.generationBudgetTokens || "";
+  if (!studio.localeRefreshing) {
+    studio.root.querySelector("[data-custom-generation-budget-input]").value = studio.generationBudgetTokens || "";
+  }
 
   const values = direct ? (studio.selectedModel?.reasoning_effort_values || []) : [];
   if (studio.reasoningEffort !== "auto" && !values.includes(studio.reasoningEffort)) {
@@ -2352,10 +2546,10 @@ function syncAdvancedRuntimeControls() {
     + Number(generationBudgetOverride)
     + Number(studio.reasoningEffort !== "auto" && values.includes(studio.reasoningEffort));
   studio.root.querySelector("[data-direct-advanced-summary]").textContent = overrideCount
-    ? `${overrideCount} override${overrideCount === 1 ? "" : "s"}`
-    : "Auto";
+    ? t(overrideCount === 1 ? "runtime.overrides.one" : "runtime.overrides.other", { count: overrideCount })
+    : t("settings.auto");
   const menu = studio.root.querySelector('[data-runtime-menu="reasoning"]');
-  menu.innerHTML = ["auto", ...values].map((value) => `<button type="button" data-runtime-option="reasoning" data-value="${escapeHtml(value)}">${value === "auto" ? "Auto" : escapeHtml(value[0].toUpperCase() + value.slice(1))}</button>`).join("");
+  menu.innerHTML = ["auto", ...values].map((value) => `<button type="button" data-runtime-option="reasoning" data-value="${escapeHtml(value)}">${reasoningLabel(value)}</button>`).join("");
   menu.querySelectorAll('[data-runtime-option="reasoning"]').forEach((button) => button.addEventListener("click", (event) => applyRuntimeOption(button, event)));
 }
 
@@ -2389,33 +2583,184 @@ function applyRuntimeOption(button, event) {
   saveUserPreferences(localStorage, studio);
 }
 
+function syncChatLauncher() {
+  if (!studio) return;
+  const tab = studio.root.querySelector('[data-workspace="chat"]');
+  if (!tab) return;
+  const configured = Boolean(studio.externalServerConfig?.url);
+  const activated = Boolean(studio.externalModel);
+  const available = configured && activated;
+  if (tab.hidden === available) {
+    console.log(
+      `[H3 Writer chat] chat tab ${available ? "shown" : "hidden"} ` +
+      `configured=${configured} activated=${activated} ` +
+      `error=${studio.externalServerError?.code || "none"}`,
+    );
+  }
+  tab.hidden = !available;
+  if (!available && studio.chatOpen) {
+    console.log(
+      `[H3 Writer chat] leaving the chat tab because llama.cpp is not active ` +
+      `configured=${configured} activated=${activated}`,
+    );
+    studio.chatOpen = false;
+    syncWorkspace();
+  }
+}
+
+function releaseComfyResources(reason) {
+  console.log(`[H3 Writer] releasing ComfyUI models and memory reason=${reason}`);
+  freeComfyVram({ freeMemory: true })
+    .then(() => {
+      console.log(`[H3 Writer] ComfyUI models and memory released reason=${reason}`);
+    })
+    .catch((error) => {
+      console.warn(
+        `[H3 Writer] ComfyUI models and memory release failed reason=${reason} ` +
+        `code=${error?.code || ""} message=${error?.message || error}`,
+      );
+    });
+}
+
+let llamaReleaseInFlight = false;
+
+async function releaseLlamaResources(reason) {
+  const config = studio?.externalServerConfig;
+  if (!config?.url) {
+    console.log(`[H3 Writer] llama cleanup skipped reason=${reason} configured=false`);
+    return;
+  }
+  if (llamaReleaseInFlight) {
+    console.log(`[H3 Writer] llama cleanup skipped reason=${reason} already_running=true`);
+    return;
+  }
+  llamaReleaseInFlight = true;
+  const endpoint = config.url;
+  const requestedModel = config.model || "";
+  console.log(
+    `[H3 Writer] checking llama server for cleanup reason=${reason} ` +
+    `endpoint=${endpoint} model=${requestedModel || "(any)"}`,
+  );
+  try {
+    let model = null;
+    try {
+      const result = await probeExternalServer(config);
+      model = result?.model || null;
+    } catch (error) {
+      const offline = error?.code === "EXTERNAL_SERVER_UNAVAILABLE";
+      console.warn(
+        `[H3 Writer] llama cleanup skipped reason=${reason} ` +
+        `${offline ? "online=false" : "probe_failed=true"} ` +
+        `endpoint=${endpoint} code=${error?.code || ""} message=${error?.message || error}`,
+      );
+      return;
+    }
+    console.log(
+      `[H3 Writer] llama server online reason=${reason} endpoint=${endpoint} ` +
+      `model=${model?.remote_model || ""} lifecycle_supported=${Boolean(model?.lifecycle_supported)}`,
+    );
+    if (!model?.lifecycle_supported || !model?.id) {
+      console.warn(
+        `[H3 Writer] llama cleanup skipped reason=${reason} lifecycle_supported=false ` +
+        `endpoint=${endpoint}; this llama.cpp server manages its own model lifecycle`,
+      );
+      return;
+    }
+    try {
+      const result = await unloadModel({ family: "external", model_id: model.id });
+      console.log(
+        `[H3 Writer] llama model unload requested reason=${reason} model=${model.id} ` +
+        `deferred=${result?.deferred === true}`,
+      );
+    } catch (error) {
+      console.warn(
+        `[H3 Writer] llama model unload failed reason=${reason} model=${model.id} ` +
+        `code=${error?.code || ""} message=${error?.message || error}`,
+      );
+    }
+  } finally {
+    llamaReleaseInFlight = false;
+  }
+}
+
+function releaseStudioResources(reason) {
+  releaseComfyResources(reason);
+  releaseLlamaResources(reason).catch((error) => {
+    console.warn(
+      `[H3 Writer] llama cleanup failed unexpectedly reason=${reason} ` +
+      `message=${error?.message || error}`,
+    );
+  });
+}
+
+function activateLlamaChatTab() {
+  if (!studio?.externalServerConfig?.url) return;
+  const frame = studio.root.querySelector("[data-chat-frame]");
+  if (frame && !frame.getAttribute("src")) {
+    frame.src = new URL("./llama_chat.html", import.meta.url).href;
+    console.log(`[H3 Writer chat] mounted ${frame.src}`);
+  }
+  if (studio.chatOpen) return;
+  studio.chatOpen = true;
+  syncWorkspace();
+  console.log("[H3 Writer chat] chat tab activated");
+}
+
+function postLocaleToChat() {
+  const frame = studio?.root?.querySelector("[data-chat-frame]");
+  if (!frame?.contentWindow) return;
+  const locale = getLocale();
+  try {
+    frame.contentWindow.postMessage({ type: "h3ps-locale", locale }, window.location.origin);
+    console.log(`[H3 Writer chat] sent locale=${locale} to the chat tab`);
+  } catch (error) {
+    console.warn(`[H3 Writer chat] could not send the locale to the chat tab: ${error?.message || error}`);
+  }
+}
+
+function postThemeToChat() {
+  const frame = studio?.root?.querySelector("[data-chat-frame]");
+  if (!frame?.contentWindow) return;
+  const theme = studio.theme === "light" ? "light" : "dark";
+  try {
+    frame.contentWindow.postMessage({ type: "h3ps-theme", theme }, window.location.origin);
+    console.log(`[H3 Writer chat] sent theme=${theme} to the chat tab`);
+  } catch (error) {
+    console.warn(`[H3 Writer chat] could not send the theme to the chat tab: ${error?.message || error}`);
+  }
+}
+
+function syncChatFramePreferences() {
+  postLocaleToChat();
+  postThemeToChat();
+}
+
 function syncRuntimeSummary(result = null) {
   if (!studio) return;
   syncContextAvailability();
   syncAdvancedRuntimeControls();
-  const customContextLabel = studio.contextTokens ? `${Number(studio.contextTokens).toLocaleString()}` : "Custom";
-  studio.root.querySelector('[data-runtime-label="context"]').textContent = CONTEXT_LABELS[studio.contextProfile];
-  studio.root.querySelector('[data-runtime-label="kv"]').textContent = KV_LABELS[studio.kvCache];
-  studio.root.querySelector('[data-runtime-label="budget"]').textContent = BUDGET_LABELS[studio.generationBudget];
-  studio.root.querySelector('[data-runtime-label="reasoning"]').textContent = studio.reasoningEffort === "auto"
-    ? "Auto"
-    : studio.reasoningEffort[0].toUpperCase() + studio.reasoningEffort.slice(1);
+  const customContextLabel = studio.contextTokens ? `${Number(studio.contextTokens).toLocaleString()}` : t("settings.custom");
+  studio.root.querySelector('[data-runtime-label="context"]').textContent = contextLabel(studio.contextProfile);
+  studio.root.querySelector('[data-runtime-label="kv"]').textContent = kvLabel(studio.kvCache);
+  studio.root.querySelector('[data-runtime-label="budget"]').textContent = budgetLabel(studio.generationBudget);
+  studio.root.querySelector('[data-runtime-label="reasoning"]').textContent = reasoningLabel(studio.reasoningEffort);
   let activeSummary;
   if (studio.selectedModel?.family === "external") {
     const tokens = result?.context_tokens || studio.selectedModel.server_context_tokens;
-    activeSummary = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Server managed";
+    activeSummary = tokens ? t("runtime.server_context", { tokens: Math.round(tokens / 1024) }) : t("runtime.server_managed");
   } else if (studio.selectedModel?.family === "ollama") {
     const tokens = result?.context_tokens || (studio.contextProfile === "auto" ? null : ({ low: 8192, standard: 16384, extended: 24576, large: 32768, maximum: 49152 }[studio.contextProfile]));
-    activeSummary = tokens ? `Ollama · ${Math.round(tokens / 1024)}K` : "Ollama · Auto";
+    activeSummary = tokens ? t("runtime.ollama_context", { tokens: Math.round(tokens / 1024) }) : t("runtime.ollama_auto");
   } else if (studio.selectedModel?.family === "api") {
     const tokens = result?.context_limit_known ? result.context_tokens : studio.selectedModel.model_context_limit;
-    activeSummary = tokens ? `API · ${Math.round(tokens / 1024)}K` : "API · Provider managed";
+    activeSummary = tokens ? t("runtime.api_context", { tokens: Math.round(tokens / 1024) }) : t("runtime.api_managed");
   } else if (result && studio.contextProfile === "auto") {
-    activeSummary = `Auto → ${Math.round(result.context_tokens / 1024)}K · ${String(result.kv_cache).toUpperCase()}`;
+    activeSummary = t("runtime.auto_result", { tokens: Math.round(result.context_tokens / 1024), kv: String(result.kv_cache).toUpperCase() });
   } else {
-    activeSummary = studio.contextProfile === "auto" ? "Runtime · Auto" : `${studio.contextProfile === "custom" ? customContextLabel : CONTEXT_LABELS[studio.contextProfile]} · ${KV_LABELS[studio.kvCache]}`;
+    activeSummary = studio.contextProfile === "auto" ? t("models.runtime_summary") : `${studio.contextProfile === "custom" ? customContextLabel : contextLabel(studio.contextProfile)} · ${kvLabel(studio.kvCache)}`;
   }
   syncActiveModelSummary(activeSummary);
+  syncChatLauncher();
   studio.root.querySelectorAll("[data-runtime-option]").forEach((button) => {
     const selected = button.dataset.runtimeOption === "context"
       ? studio.contextProfile
@@ -2435,6 +2780,8 @@ function setSettingsOpen(open) {
   if (!open && selectedProvider) studio.settingsProvider = selectedProvider;
   studio.root.querySelector("[data-settings-view]").hidden = !open;
   studio.root.querySelectorAll("[data-generate-view]").forEach((element) => { element.hidden = open; });
+  const chatView = studio.root.querySelector("[data-chat-view]");
+  if (chatView) chatView.hidden = open || !studio.chatOpen;
   studio.root.querySelector("[data-open-settings-header]").hidden = open;
   studio.root.classList.toggle("is-settings-open", open);
   if (open) {
@@ -2458,6 +2805,24 @@ function syncOllamaAutoDetection() {
   studio.ollamaPollTimer = setTimeout(() => refreshOllama({ automatic: true }), 4000);
 }
 
+function externalConnectedContextTokens(model) {
+  return model?.context_verified !== false && Number.isFinite(model?.server_context_tokens)
+    ? Math.round(model.server_context_tokens / 1024)
+    : null;
+}
+
+function syncExternalServerStatus() {
+  const status = studio.root?.querySelector?.("[data-external-provider-control] [data-external-server-status]");
+  if (status) {
+    const statusKey = studio.externalModel
+      ? "providers.status.connected"
+      : studio.externalServerError ? "providers.status.offline" : "providers.status.not_connected";
+    status.dataset.i18n = statusKey;
+    status.textContent = t(statusKey);
+  }
+  syncProviderPanelCopy();
+}
+
 async function connectExternalServer(form) {
   studio.modelSelectionRevision = (studio.modelSelectionRevision || 0) + 1;
   const attempt = (studio.externalConnectionAttempt || 0) + 1;
@@ -2470,7 +2835,8 @@ async function connectExternalServer(form) {
     ...(form.elements.api_key.value.trim() ? {api_key:form.elements.api_key.value.trim()} : {}),
   };
   submit.disabled = true;
-  submit.textContent = "Connecting…";
+  submit.textContent = t("providers.external.connecting");
+  submit.dataset.i18n = "providers.external.connecting";
   try {
     const result = await probeExternalServer(config);
     if (studio.externalConnectionAttempt !== attempt || (studio.modelSelectionRevision || 0) !== selectionRevision) return;
@@ -2481,18 +2847,27 @@ async function connectExternalServer(form) {
     saveExternalServerConfig(localStorage, saved);
     studio.models = [...studio.models.filter((model) => model.family !== "external"), result.model];
     selectModel(result.model);
-    const context = result.model.context_verified !== false
-      ? ` · ${Math.round(result.model.server_context_tokens / 1024)}K context` : "";
-    showToast("llama.cpp connected", `${result.model.name}${context}`);
+    const connectedContextTokens = externalConnectedContextTokens(result.model);
+    showToast(
+      msg("toast.external.connected.title"),
+      connectedContextTokens !== null
+        ? msg("toast.external.connected.message_context", {
+            model: result.model.name,
+            tokens: connectedContextTokens,
+          })
+        : msg("toast.external.connected.message", { model: result.model.name }),
+    );
   } catch (error) {
     if (studio.externalConnectionAttempt !== attempt || (studio.modelSelectionRevision || 0) !== selectionRevision) return;
     studio.externalServerError = error;
-    showToast(error.code || "Connection failed", error.message, error.details);
-    renderInferenceSettings();
+    showErrorToast("toast.external.failed.title", error);
+    syncExternalServerStatus();
   } finally {
     if (studio.externalConnectionAttempt === attempt) {
+      const labelKey = studio.externalModel ? "providers.external.reconnect" : "providers.external.connect";
       submit.disabled = false;
-      submit.textContent = "Connect";
+      submit.textContent = t(labelKey);
+      submit.dataset.i18n = labelKey;
     }
   }
 }
@@ -2510,7 +2885,13 @@ function disconnectExternalServer() {
   renderInferenceSettings();
   syncRuntimeSummary();
   saveUserPreferences(localStorage, studio);
-  showToast("External server disconnected", "The llama.cpp process was left running and unchanged.");
+  showToast(msg("toast.external.disconnected.title"), msg("toast.external.disconnected.message"));
+}
+
+function syncApiProviderError() {
+  const slot = studio.root?.querySelector?.("[data-api-provider-control] [data-api-provider-error]");
+  if (slot) slot.innerHTML = renderApiProviderError();
+  syncProviderPanelCopy();
 }
 
 async function connectConfiguredApiProvider(form) {
@@ -2529,7 +2910,8 @@ async function connectConfiguredApiProvider(form) {
     custom_context_tokens: Number.isInteger(contextValue) && contextValue >= 4096 ? contextValue : null,
   };
   submit.disabled = true;
-  submit.textContent = "Connecting…";
+  submit.textContent = t("providers.external.connecting");
+  submit.dataset.i18n = "providers.external.connecting";
   try {
     const result = await probeApiProvider({
       preset: config.preset,
@@ -2569,19 +2951,23 @@ async function connectConfiguredApiProvider(form) {
       syncRuntimeSummary();
       saveUserPreferences(localStorage, studio);
     }
+    const messageKey = model
+      ? `toast.api.connected.message.${model.capabilities?.images ? "vision" : "text"}_${result.connection.connection_verified ? "verified" : "unverified"}`
+      : null;
     showToast(
-      `${result.connection.provider_name} connected`,
-      model ? `${model.name} · ${model.capabilities?.images ? "vision ready" : "text only or vision unknown"}${result.connection.connection_verified ? "" : " · endpoint unverified"}` : "Connected. Enter an exact model ID or refresh the model list.",
+      msg("toast.api.connected.title", { provider: result.connection.provider_name }),
+      messageKey ? msg(messageKey, { model: model.name }) : msg("toast.api.connected.no_model"),
     );
   } catch (error) {
     if (studio.apiConnectionAttempt !== attempt || (studio.modelSelectionRevision || 0) !== selectionRevision) return;
     studio.apiProviderError = error;
-    showToast(error.code || "API connection failed", error.message, error.details);
-    renderInferenceSettings();
+    showErrorToast("toast.api.failed.title", error);
+    syncApiProviderError();
   } finally {
     if (studio.apiConnectionAttempt === attempt) {
       submit.disabled = false;
-      submit.textContent = "Connect & test";
+      submit.textContent = t("providers.api.connect_test");
+      submit.dataset.i18n = "providers.api.connect_test";
     }
   }
 }
@@ -2599,7 +2985,7 @@ async function disconnectConfiguredApiProvider({ announce = true } = {}) {
   renderInferenceSettings();
   syncRuntimeSummary();
   saveUserPreferences(localStorage, studio);
-  if (announce) showToast("API provider disconnected", "The session credential was removed from backend memory.");
+  if (announce) showToast(msg("toast.api.disconnected.title"), msg("toast.api.disconnected.message"));
   if (connection?.id) {
     try {
       await disconnectApiProvider(connection.id);
@@ -2640,11 +3026,15 @@ async function refreshApiProviderModels() {
     const model = studio.apiProviderModels.find((item) => item.remote_model === selectedRemote) || apiProviderModelForSettings();
     if (model) selectModel(model);
     else renderInferenceSettings();
-    showToast("API models refreshed", `${studio.apiProviderModels.length} model${studio.apiProviderModels.length === 1 ? "" : "s"} reported.`);
+    const count = studio.apiProviderModels.length;
+    showToast(
+      msg("toast.api.models_refreshed.title"),
+      msg(count === 1 ? "toast.api.models_refreshed.one" : "toast.api.models_refreshed.other", { count }),
+    );
   } catch (error) {
     if (studio.apiConnectionAttempt !== attempt || (studio.modelSelectionRevision || 0) !== selectionRevision) return;
     studio.apiProviderError = error;
-    showToast(error.code || "Model refresh failed", error.message, error.details);
+    showErrorToast("toast.api.refresh_failed.title", error);
   }
 }
 
@@ -2711,7 +3101,7 @@ async function refreshModels() {
   } catch (error) {
     if (studio.modelDiscoveryAttempt !== attempt || (studio.modelSelectionRevision || 0) !== selectionRevision) return;
     studio.preferencesRestoring = false;
-    showToast(error.code || "Model scan failed", error.message, error.details);
+    showErrorToast("toast.models.scan_failed.title", error);
   } finally {
     // A newer selection can invalidate the result, but must not leave startup
     // restoration active. A newer discovery owns its own completion instead.
@@ -2725,7 +3115,8 @@ async function configureOllamaHost(form) {
   const submit = form.querySelector('[type="submit"]');
   const requestedHost = normalizeOllamaHost(form.elements.host.value);
   submit.disabled = true;
-  submit.textContent = "Checking…";
+  submit.textContent = t("providers.ollama.checking");
+  submit.dataset.i18n = "providers.ollama.checking";
   try {
     const status = await getOllamaStatus(requestedHost);
     const endpoint = normalizeOllamaHost(status.endpoint || requestedHost);
@@ -2755,15 +3146,18 @@ async function configureOllamaHost(form) {
     }
     syncOllamaAutoDetection();
     showToast(
-      changed ? "Ollama host updated" : "Ollama host checked",
-      endpoint === DEFAULT_OLLAMA_HOST ? "Using Ollama on this computer." : `Using ${endpoint}.`,
+      msg(changed ? "toast.ollama.host_updated" : "toast.ollama.host_checked"),
+      endpoint === DEFAULT_OLLAMA_HOST
+        ? msg("toast.ollama.host_local")
+        : msg("toast.ollama.host_using", { endpoint }),
     );
   } catch (error) {
-    showToast(error.code || "Invalid Ollama host", error.message, error.details);
+    showErrorToast("toast.ollama.invalid_host", error);
     renderInferenceSettings();
   } finally {
     submit.disabled = false;
-    submit.textContent = "Apply";
+    submit.textContent = t("providers.ollama.apply");
+    submit.dataset.i18n = "providers.ollama.apply";
   }
 }
 
@@ -2776,7 +3170,8 @@ async function refreshOllama({ automatic = false } = {}) {
   const refreshButton = control?.querySelector("[data-ollama-refresh]");
   if (refreshButton && !automatic) {
     refreshButton.disabled = true;
-    refreshButton.textContent = "Checking…";
+    refreshButton.textContent = t("providers.ollama.checking");
+    refreshButton.dataset.i18n = "providers.ollama.checking";
   }
   try {
     const requestedHost = studio.ollamaHost;
@@ -2789,20 +3184,21 @@ async function refreshOllama({ automatic = false } = {}) {
     if (model && studio.settingsProvider === "ollama") selectModel(model);
     else renderInferenceSettings();
     if (!automatic && status.state !== "ready") {
+      const bodyKey = studio.ollamaHost !== DEFAULT_OLLAMA_HOST
+        ? "providers.ollama.remote_not_responding"
+        : status.state === "not_installed"
+          ? "toast.ollama.install_hint"
+          : "toast.ollama.start_hint";
       showToast(
-        status.state === "not_installed" ? "Ollama is not installed" : "Ollama is not running",
-        studio.ollamaHost !== DEFAULT_OLLAMA_HOST
-          ? `The Ollama service at ${studio.ollamaHost} is not responding.`
-          : status.state === "not_installed"
-          ? "Install the official Ollama app, then return here."
-          : "Open the Ollama app, wait for its local service to start, then select Check now again.",
+        msg(status.state === "not_installed" ? "toast.ollama.not_installed" : "toast.ollama.not_running"),
+        msg(bodyKey, { host: studio.ollamaHost }),
       );
     }
   } catch (error) {
     studio.ollamaStatus = { state: "error", running: false, compatible_models: [], error: { code: error.code, message: error.message } };
     studio.ollamaError = error;
     renderInferenceSettings();
-    if (!automatic) showToast("Ollama check failed", error.message, error.details);
+    if (!automatic) showErrorToast("toast.ollama.failed.title", error);
   } finally {
     studio.ollamaRefreshBusy = false;
     syncOllamaAutoDetection();
@@ -2832,11 +3228,11 @@ async function cancelLyricsRefinement() {
     return;
   }
   const submit = studio.root.querySelector("[data-lyrics-refine-submit]");
-  submit.innerHTML = `<span class="h3ps-spinner"></span>Cancelling…`;
+  submit.innerHTML = `<span class="h3ps-spinner"></span>${t("toast.lyrics.cancelling")}`;
   try {
     await cancel();
   } catch (error) {
-    showToast(error.code || "Cancel failed", error.message, error.details);
+    showErrorToast("toast.lyrics.cancel_failed.title", error);
   }
 }
 
@@ -2850,19 +3246,22 @@ async function submitLyricsRefinement() {
   const musicBrief = studio.root.querySelector("[data-music-brief]").value.trim();
   if (submit.disabled || studio.requestBusy) return;
   if (currentLyrics.trim() && !instruction) {
-    showToast("Add a revision note", "Describe how the existing Lyrics should change.");
+    showToast(msg("toast.lyrics.add_note.title"), msg("toast.lyrics.add_note.message"));
     return;
   }
   if (!currentLyrics.trim() && !instruction && (!useMusicBrief || !musicBrief)) {
-    showToast("Describe the Lyrics", "Add an instruction or include a Music Brief to create new Lyrics.");
+    showToast(msg("toast.lyrics.describe.title"), msg("toast.lyrics.describe.message"));
     return;
   }
   if (!studio.selectedModel) {
-    showToast("No prompt model selected", "Choose a local model, connect llama.cpp, or configure an API provider.");
+    showToast(msg("toast.generation.no_model.title"), msg("toast.generation.no_model.message"));
     return;
   }
   if (!studio.selectedModel.runtime_ready) {
-    showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}.`);
+    showToast(
+      msg("toast.generation.setup_incomplete.title"),
+      studio.selectedModel.setup_message || msg("toast.generation.setup_incomplete.short", { missing: studio.selectedModel.missing_dependencies.join(", ") }),
+    );
     return;
   }
   if (!generationModeIsAvailable()) return;
@@ -2871,8 +3270,12 @@ async function submitLyricsRefinement() {
   markActiveWriterRequest();
   studio.lyricsRequestBusy = true;
   submit.disabled = true;
-  submit.innerHTML = `<span class="h3ps-spinner"></span>${currentLyrics.trim() ? "Refining…" : "Creating…"}`;
-  setGenerationState("busy", currentLyrics.trim() ? "Refining lyrics" : "Creating lyrics", studio.selectedModel.name.split("/").pop());
+  submit.innerHTML = `<span class="h3ps-spinner"></span>${t(currentLyrics.trim() ? "toast.lyrics.refining" : "toast.lyrics.creating")}`;
+  setGenerationState(
+    "busy",
+    msg(currentLyrics.trim() ? "status.refining_lyrics" : "status.creating_lyrics"),
+    studio.selectedModel.name.split("/").pop(),
+  );
   try {
     const result = await vramHandoffCoordinator.trackWriterRequest(refine(buildLyricsRefinePayload(studio, {
       currentLyrics,
@@ -2882,30 +3285,31 @@ async function submitLyricsRefinement() {
       seed: newGenerationSeed(),
     })));
     if (lyrics.value !== currentLyrics) {
-      showToast("Lyrics kept", "The rewrite was not applied because you edited the Lyrics.");
+      showToast(msg("toast.lyrics.kept.title"), msg("toast.lyrics.kept.message"));
       return;
     }
     studio.lyricsRestore = { lyrics: currentLyrics };
     lyrics.value = result.prompt;
     const restore = panel.querySelector("[data-lyrics-refine-restore]");
-    restore.textContent = currentLyrics.trim() ? "Restore previous" : "Remove generated";
+    restore.dataset.i18n = currentLyrics.trim() ? "workspace.restore_previous" : "toast.lyrics.remove_generated";
+    restore.textContent = currentLyrics.trim() ? t("toast.lyrics.restore_previous") : t("toast.lyrics.remove_generated");
     restore.hidden = false;
     updateMusicLyricsCount();
     saveCurrentModeDraft();
-    studio.desktopNotifications.notify("Lyrics request finished.");
+    studio.desktopNotifications.notify(t("toast.lyrics.finished_notification"));
     showToast(
-      currentLyrics.trim() ? "Lyrics rewritten" : "Lyrics created",
-      `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s`,
+      msg(currentLyrics.trim() ? "toast.lyrics.rewritten.title" : "toast.lyrics.created.title"),
+      msg("toast.lyrics.metrics", { total: result.total_seconds.toFixed(1), tps: result.tokens_per_second.toFixed(1) }),
     );
   } catch (error) {
-    if (error.code !== "GENERATION_CANCELLED") studio.desktopNotifications.notify("Lyrics request failed. Open Writer for details.");
-    if (error.code === "GENERATION_CANCELLED") showToast("Lyrics request cancelled", "The previous Lyrics were kept.");
+    if (error.code !== "GENERATION_CANCELLED") studio.desktopNotifications.notify(t("toast.lyrics.failed_notification"));
+    if (error.code === "GENERATION_CANCELLED") showToast(msg("toast.lyrics.cancelled.title"), msg("toast.lyrics.cancelled.message"));
     else if (error.code === "INSUFFICIENT_FREE_VRAM") showVramRetry(error, submitLyricsRefinement);
-    else showToast(error.code || "Lyrics request failed", error.message, error.details);
+    else showErrorToast("toast.lyrics.failed.title", error);
   } finally {
     studio.lyricsRequestBusy = false;
     submit.disabled = false;
-    submit.innerHTML = `${icon("spark", 13)} Refine`;
+    submit.innerHTML = `${icon("spark", 13)} <span data-i18n="workspace.refine">${t("workspace.refine")}</span>`;
     try {
       const status = await getStatus(studio.ollamaHost);
       updatePromptResidency(status);
@@ -2922,15 +3326,18 @@ async function submitRefinement() {
   const output = studio.root.querySelector("[data-output]");
   if (submit.disabled || studio.requestBusy) return;
   if (!instruction) {
-    showToast("Add a revision note", "Tell the model what should change in the current prompt.");
+    showToast(msg("toast.refine.add_note.title"), msg("toast.refine.add_note.message"));
     return;
   }
   if (!studio.selectedModel) {
-    showToast("No prompt model selected", "Choose a local model, connect llama.cpp, or configure an API provider.");
+    showToast(msg("toast.generation.no_model.title"), msg("toast.generation.no_model.message"));
     return;
   }
   if (!studio.selectedModel.runtime_ready) {
-    showToast("Model setup is incomplete", studio.selectedModel.setup_message || `Missing: ${studio.selectedModel.missing_dependencies.join(", ")}.`);
+    showToast(
+      msg("toast.generation.setup_incomplete.title"),
+      studio.selectedModel.setup_message || msg("toast.generation.setup_incomplete.short", { missing: studio.selectedModel.missing_dependencies.join(", ") }),
+    );
     return;
   }
   if (!generationModeIsAvailable()) return;
@@ -2940,8 +3347,8 @@ async function submitRefinement() {
   const previousMeta = studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent;
   markActiveWriterRequest();
   submit.disabled = true;
-  submit.innerHTML = `<span class="h3ps-spinner"></span>Refining…`;
-  setGenerationState("busy", "Refining prompt", studio.selectedModel.name.split("/").pop());
+  submit.innerHTML = `<span class="h3ps-spinner"></span>${t("toast.refine.refining")}`;
+  setGenerationState("busy", msg("status.refining_prompt"), studio.selectedModel.name.split("/").pop());
   try {
     const result = await vramHandoffCoordinator.trackWriterRequest(refine(buildRefinePayload(studio, {
       currentPrompt: previousPrompt,
@@ -2951,7 +3358,7 @@ async function submitRefinement() {
       seed: newGenerationSeed(),
     })));
     if (output.value !== previousPrompt) {
-      showToast("Prompt kept", "The rewrite was not applied because you edited the prompt.");
+      showToast(msg("toast.refine.kept.title"), msg("toast.refine.kept.message"));
       return;
     }
     studio.refineRestore = {
@@ -2972,26 +3379,31 @@ async function submitRefinement() {
     studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
     syncModifiedState();
     saveCurrentModeDraft();
-    studio.desktopNotifications.notify("Refinement finished. Your prompt is ready.");
+    studio.desktopNotifications.notify(t("toast.refine.ready_notification"));
     showToast(
-      result.thinking_fallback ? "Rewrite completed" : "Prompt rewritten",
+      msg(result.thinking_fallback ? "toast.refine.completed.title" : "toast.refine.rewritten.title"),
       result.thinking_fallback
         ? thinkingFallbackMessage(result, "rewrite")
         : result.format_repair_applied
-          ? result.format_repair_multimodal
+          ? msg("toast.refine.repair_applied.message")
+        : result.format_repair_failure
+          ? msg("toast.refine.repair_failed.message")
+        : msg("toast.refine.metrics", { total: result.total_seconds.toFixed(1), tps: result.tokens_per_second.toFixed(1) }),
+      result.format_repair_applied
+        ? (result.format_repair_multimodal
             ? `The first draft failed ${result.format_repair_reason}; the existing references were checked again and repaired once.`
-            : `The first draft failed ${result.format_repair_reason}; its format was repaired once without media.`
+            : `The first draft failed ${result.format_repair_reason}; its format was repaired once without media.`)
         : result.format_repair_failure
           ? `Format warning: ${result.format_repair_reason}; safe repair rejected because ${result.format_repair_failure}.`
-        : `${result.total_seconds.toFixed(1)}s · ${result.tokens_per_second.toFixed(1)} tok/s · no media re-upload`,
+          : null,
     );
   } catch (error) {
-    if (error.code !== "GENERATION_CANCELLED") studio.desktopNotifications.notify("Refinement failed. Open Writer for details.");
+    if (error.code !== "GENERATION_CANCELLED") studio.desktopNotifications.notify(t("toast.refine.failed_notification"));
     if (error.code === "INSUFFICIENT_FREE_VRAM") showVramRetry(error, submitRefinement);
-    else showToast(error.code || "Refinement failed", error.message, error.details);
+    else showErrorToast("toast.refine.failed.title", error);
   } finally {
     submit.disabled = false;
-    submit.innerHTML = `${icon("spark", 13)} Refine`;
+    submit.innerHTML = `${icon("spark", 13)} <span data-i18n="workspace.refine">${t("workspace.refine")}</span>`;
     try {
       const status = await getStatus(studio.ollamaHost);
       updatePromptResidency(status);
@@ -3001,17 +3413,17 @@ async function submitRefinement() {
   }
 }
 
-function musicSystemPromptPanelMarkup(profile, label, description, hidden = false) {
+function musicSystemPromptPanelMarkup(profile, labelKey, descriptionKey, hidden = false) {
   return `
     <div class="h3ps-system-prompt-panel" data-music-system-prompt-panel="${profile}" ${hidden ? "hidden" : ""}>
       <header class="h3ps-system-prompt-editor-heading">
-        <button type="button" data-music-system-prompt-back>${icon("chevron", 12)} Back</button>
-        <span><small>System prompt</small><strong>${label}</strong></span>
-        <span class="h3ps-system-prompt-panel-status"><em data-system-prompt-status="${profile}">Default</em>${icon("check", 13)}</span>
+        <button type="button" data-music-system-prompt-back>${icon("chevron", 12)} <span data-i18n="system_prompt.back">Back</span></button>
+        <span><small data-i18n="system_prompt.title">System Prompt</small><strong data-i18n="${labelKey}">${t(labelKey)}</strong></span>
+        <span class="h3ps-system-prompt-panel-status"><em data-system-prompt-status="${profile}" data-i18n="system_prompt.status">Default</em>${icon("check", 13)}</span>
       </header>
-      <p>${description}</p>
+      <p data-i18n="${descriptionKey}">${t(descriptionKey)}</p>
       <textarea data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
-      <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden>Restore default</button></footer>
+      <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden data-i18n="system_prompt.restore_default">Restore default</button></footer>
     </div>`;
 }
 
@@ -3019,9 +3431,10 @@ function syncFullscreenState() {
   if (!studio) return;
   studio.root.classList.toggle("is-fullscreen", studio.fullscreen);
   const button = studio.root.querySelector("[data-fullscreen-toggle]");
+  const label = t(studio.fullscreen ? "header.exit_fullscreen" : "header.enter_fullscreen");
   button.setAttribute("aria-pressed", String(studio.fullscreen));
-  button.setAttribute("aria-label", studio.fullscreen ? "Exit fullscreen" : "Enter fullscreen");
-  button.title = studio.fullscreen ? "Exit fullscreen" : "Enter fullscreen";
+  button.setAttribute("aria-label", label);
+  button.title = label;
   button.innerHTML = icon(studio.fullscreen ? "collapse" : "expand", 17);
 }
 
@@ -3029,13 +3442,21 @@ function syncTheme() {
   if (!studio) return;
   studio.root.dataset.theme = studio.theme;
   studio.floatingMedia?.refresh();
+  postThemeToChat();
   const button = studio.root.querySelector("[data-theme-toggle]");
   if (!button) return;
   const light = studio.theme === "light";
+  const label = t(light ? "header.theme_dark" : "header.theme_light");
   button.innerHTML = icon(light ? "moon" : "sun", 17);
-  button.setAttribute("aria-label", light ? "Switch to dark theme" : "Switch to light theme");
-  button.title = light ? "Switch to dark theme" : "Switch to light theme";
+  button.setAttribute("aria-label", label);
+  button.title = label;
   button.setAttribute("aria-pressed", String(light));
+}
+
+function syncDurationLabel() {
+  if (!studio) return;
+  const label = studio.root.querySelector("[data-duration-label]");
+  if (label) label.textContent = t("workspace.duration_seconds", { seconds: studio.durationSeconds });
 }
 
 function setTheme(theme) {
@@ -3062,8 +3483,9 @@ function syncInterfaceSize() {
   }
   if (output) output.textContent = `${size}%`;
   if (button) {
-    button.setAttribute("aria-label", `Interface size ${size}%`);
-    button.title = `Interface size ${size}%`;
+    const label = t("header.interface_size", { size });
+    button.setAttribute("aria-label", label);
+    button.title = label;
   }
 }
 
@@ -3095,6 +3517,12 @@ function setFullscreen(fullscreen) {
 function createStudio() {
   if (studio) return studio;
   injectStyles();
+  const initialPreferences = loadUserPreferences(localStorage);
+  configureI18n({
+    preference: initialPreferences?.language || "auto",
+    app,
+    navigatorLanguage: globalThis.navigator?.language || "",
+  });
   const studioBrandIcon = new URL("./assets/h3-prompt-writer-launcher.svg", import.meta.url).href;
   const root = document.createElement("div");
   root.className = "h3ps-root";
@@ -3107,61 +3535,70 @@ function createStudio() {
           <img class="h3ps-brandmark" src="${studioBrandIcon}" alt="H3 Prompt Writer">
           <span><strong>H3 Prompt Writer</strong></span>
         </div>
-        <nav class="h3ps-workspaces" aria-label="Writer workspace">
-          <button type="button" data-workspace="video">H3 Video</button>
-          <button type="button" data-workspace="music">Music 3</button>
+        <nav class="h3ps-workspaces" aria-label="${t("header.workspace_nav")}" data-i18n-aria-label="header.workspace_nav">
+          <button type="button" data-workspace="video" data-i18n="header.video_workspace">H3 Video</button>
+          <button type="button" data-workspace="music" data-i18n="header.music_workspace">Music 3</button>
+          <button type="button" data-workspace="chat" class="h3ps-chat-workspace" hidden title="${t("chat.open_title")}" data-i18n-title="chat.open_title">${icon("chat", 14)}<span data-i18n="chat.open">${t("chat.open")}</span></button>
         </nav>
         <div class="h3ps-header-meta">
           <div class="h3ps-guide-picker">
-            <button class="h3ps-guide-button" type="button" aria-expanded="false" data-guide-toggle>Official guides ${icon("chevron", 13)}</button>
-            <div class="h3ps-guide-menu" data-guide-menu hidden><span>Loading guides…</span></div>
+            <button class="h3ps-guide-button" type="button" aria-expanded="false" data-guide-toggle><span data-i18n="header.official_guides">Official guides</span> ${icon("chevron", 13)}</button>
+            <div class="h3ps-guide-menu" data-guide-menu hidden><span data-i18n="header.loading_guides">Loading guides…</span></div>
           </div>
-          <button class="h3ps-guide-button" type="button" data-open-settings-header>Settings</button>
-          ${supportsWorkflowMedia() ? `<button class="h3ps-icon-button" type="button" data-open-floating-media title="Media panel" aria-label="Media panel">${icon("grid", 17)}</button>` : ""}
+          <button class="h3ps-guide-button" type="button" data-open-settings-header data-i18n="settings.title">Settings</button>
+          ${supportsWorkflowMedia() ? `<button class="h3ps-icon-button" type="button" data-open-floating-media title="${t("header.media_panel")}" aria-label="${t("header.media_panel")}" data-i18n-title="header.media_panel" data-i18n-aria-label="header.media_panel">${icon("grid", 17)}</button>` : ""}
+          <select class="h3ps-language-select" data-language
+            title="${t("common.language")}" aria-label="${t("common.language")}"
+            data-i18n-title="common.language" data-i18n-aria-label="common.language">
+            <option value="auto">Auto</option>
+            <option value="en">English</option>
+            <option value="zh-CN">简体中文</option>
+          </select>
           <button class="h3ps-icon-button" type="button" title="Switch to light theme" aria-label="Switch to light theme" aria-pressed="false" data-theme-toggle>${icon("sun", 17)}</button>
           <div class="h3ps-interface-size-picker" data-interface-size-picker>
             <button class="h3ps-icon-button h3ps-interface-size-button" type="button" title="Interface size 100%" aria-label="Interface size 100%" aria-haspopup="true" aria-expanded="false" data-interface-size-toggle>Aa</button>
             <div class="h3ps-interface-size-menu" data-interface-size-menu hidden>
-              <header><strong>Interface Size</strong><output data-interface-size-value>100%</output></header>
-              <input type="range" min="0" max="3" step="1" value="0" aria-label="Interface size" data-interface-size-range>
+              <header><strong data-i18n="header.interface_size_title">Interface Size</strong><output data-interface-size-value>100%</output></header>
+              <input type="range" min="0" max="3" step="1" value="0" aria-label="Interface size" data-i18n-aria-label="header.interface_size_range" data-interface-size-range>
               <div class="h3ps-interface-size-marks" aria-hidden="true"><span>100%</span><span>110%</span><span>120%</span><span>125%</span></div>
             </div>
           </div>
           <button class="h3ps-icon-button" type="button" title="Enter fullscreen" aria-label="Enter fullscreen" aria-pressed="false" data-fullscreen-toggle>${icon("expand", 17)}</button>
-          <button class="h3ps-icon-button" type="button" title="Close" data-close-studio>${icon("close", 18)}</button>
+          <button class="h3ps-icon-button" type="button" title="Close" data-i18n-title="common.close" data-close-studio>${icon("close", 18)}</button>
         </div>
       </header>
 
       ${settingsMarkup(icon)}
 
       <div class="h3ps-workspace-toolbar" data-generate-view>
-        <nav class="h3ps-modes" role="tablist" aria-label="Generation mode" data-video-modes>
+        <nav class="h3ps-modes" role="tablist" aria-label="${t("workspace.mode_nav")}" data-i18n-aria-label="workspace.mode_nav" data-video-modes>
           ${Object.keys(MODES).map((mode) => `<button type="button" role="tab" data-mode="${mode}">${mode}</button>`).join("")}
         </nav>
         <div class="h3ps-output-toolbar">
           <span data-output-label>Generated prompt</span>
-          <div class="h3ps-output-badges"><button type="button" data-undo-edits hidden>Undo</button></div>
+          <div class="h3ps-output-badges"><button type="button" data-undo-edits data-i18n="workspace.undo" hidden>Undo</button></div>
         </div>
       </div>
 
       <div class="h3ps-workspace" data-generate-view>
         <section class="h3ps-input-panel">
+          ${generateModelSummaryMarkup(icon)}
           <div data-video-inputs>
           <div class="h3ps-section-heading">
-            <span><small>Media</small><strong data-h3ps-mode-title></strong></span>
+            <span><small data-i18n="workspace.media_section">Media</small><strong data-h3ps-mode-title></strong></span>
             <div class="h3ps-section-actions">
               <div class="h3ps-clear-control" data-clear-control>
-                ${splitMenuMarkup(icon, {label: "Actions", primary: "data-actions-menu-toggle", toggle: "data-clear-menu-toggle", menu: "data-clear-menu", ariaLabel: "Media actions", contents: `
-                  ${supportsWorkflowMedia() ? `<button type="button" data-open-floating-media data-media-panel-action disabled title="Add media first"><strong>Media panel</strong><small>ADD TO WORKFLOW</small></button>` : ""}
-                  <button type="button" data-open-composer disabled><strong>Compose</strong><small>Create collage</small></button>
+                ${splitMenuMarkup(icon, {label: '<span data-i18n="workspace.actions">Actions</span>', primary: "data-actions-menu-toggle", toggle: "data-clear-menu-toggle", menu: "data-clear-menu", ariaLabel: "Media actions", ariaLabelKey: "workspace.media_actions", contents: `
+                  ${supportsWorkflowMedia() ? `<button type="button" data-open-floating-media data-media-panel-action disabled title="${t("header.media_panel")}"><strong data-i18n="header.media_panel">Media panel</strong><small data-i18n="workspace.add_to_workflow">ADD TO WORKFLOW</small></button>` : ""}
+                  <button type="button" data-open-composer disabled><strong data-i18n="workspace.compose">Compose</strong><small data-i18n="workspace.create_collage">Create collage</small></button>
                   <hr data-compose-separator>
-                  <button type="button" data-draft-save><strong>Save text draft</strong><small>Download JSON</small></button>
-                  <button type="button" data-draft-load><strong>Load text draft</strong><small>Open JSON</small></button>
+                  <button type="button" data-draft-save><strong data-i18n="workspace.save_draft">Save text draft</strong><small data-i18n="workspace.download_json">Download JSON</small></button>
+                  <button type="button" data-draft-load><strong data-i18n="workspace.load_draft">Load text draft</strong><small data-i18n="workspace.open_json">Open JSON</small></button>
                   <input type="file" accept=".json,application/json" data-draft-file hidden>
                   <hr>
-                  <button type="button" data-clear-action data-clear-media><strong>Clear media</strong><small>Keep prompts</small></button>
-                  <button type="button" data-clear-action data-clear-prompts><strong>Clear prompts</strong><small>Keep media</small></button>
-                  <button class="is-destructive" type="button" data-clear-action data-clear-all><strong>Clear all</strong><small>Media and prompts</small></button>
+                  <button type="button" data-clear-action data-clear-media><strong data-i18n="workspace.clear_media">Clear media</strong><small data-i18n="workspace.keep_prompts">Keep prompts</small></button>
+                  <button type="button" data-clear-action data-clear-prompts><strong data-i18n="workspace.clear_prompts">Clear prompts</strong><small data-i18n="workspace.keep_media">Keep media</small></button>
+                  <button class="is-destructive" type="button" data-clear-action data-clear-all><strong data-i18n="workspace.clear_all">Clear all</strong><small data-i18n="workspace.clear_all_note">Media and prompts</small></button>
                 `})}
               </div>
             </div>
@@ -3170,12 +3607,12 @@ function createStudio() {
           <div class="h3ps-media" data-h3ps-media></div>
 
           <div class="h3ps-control-grid">
-            <label class="h3ps-field h3ps-duration-field"><span>Duration <b data-duration-label>10 seconds</b></span><div><input type="range" min="1" max="20" step="1" value="10" style="--h3ps-range:47.37%" data-duration-slider><i></i></div></label>
+            <label class="h3ps-field h3ps-duration-field"><span><span data-i18n="workspace.duration">Duration</span> <b data-duration-label>10 seconds</b></span><div><input type="range" min="1" max="20" step="1" value="10" style="--h3ps-range:47.37%" data-duration-slider><i></i></div></label>
             ${aspectRatioMarkup(icon)}
           </div>
 
           <label class="h3ps-brief">
-            <span><strong>Creative brief</strong><small>Describe what should happen in the video</small></span>
+            <span><strong data-i18n="workspace.creative_brief">Creative brief</strong><small data-i18n="workspace.creative_brief_hint">Describe what should happen in the video</small></span>
             <textarea spellcheck="true" data-video-brief>Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
             <small class="h3ps-char-count">0 characters</small>
           </label>
@@ -3184,59 +3621,57 @@ function createStudio() {
 
           <div class="h3ps-music-inputs" data-music-inputs hidden>
             <label class="h3ps-brief">
-              <span><strong>Music brief</strong><small>Describe the sound, vocals, mood, arrangement or production</small></span>
+              <span><strong data-i18n="workspace.music_brief">Music brief</strong><small data-i18n="workspace.music_brief_hint">Describe the sound, vocals, mood, arrangement or production</small></span>
               <textarea spellcheck="true" maxlength="2000" data-music-brief>${MUSIC3_DEFAULT_DRAFT.brief}</textarea>
               <small class="h3ps-char-count">0 / 2,000</small>
             </label>
             <label class="h3ps-brief h3ps-lyrics">
-              <span><strong>Lyrics</strong><small>Optional</small></span>
+              <span><strong data-i18n="workspace.lyrics">Lyrics</strong><small data-i18n="workspace.optional">Optional</small></span>
               <textarea spellcheck="true" maxlength="4000" data-music-lyrics placeholder="[Verse 1]&#10;...&#10;&#10;[Chorus]&#10;..."></textarea>
               <small class="h3ps-char-count">0 / 4,000</small>
             </label>
             <div class="h3ps-lyrics-refine-tools">
-              <button class="h3ps-secondary-button" type="button" title="Refine Lyrics with the selected prompt model" data-lyrics-refine-toggle>${icon("spark", 15)} Refine</button>
+              <button class="h3ps-secondary-button" type="button" title="${t("workspace.refine_lyrics_tooltip")}" data-i18n-title="workspace.refine_lyrics_tooltip" data-lyrics-refine-toggle>${icon("spark", 15)} <span data-i18n="workspace.refine">Refine</span></button>
             </div>
             <section class="h3ps-refine h3ps-lyrics-refine" data-lyrics-refine-panel hidden>
               <div class="h3ps-refine-heading">
-                <span><strong>Refine lyrics</strong><small>Create new Lyrics or rewrite the current text</small></span>
-                <label class="h3ps-lyrics-brief-option"><input type="checkbox" data-lyrics-use-brief checked>Use Music Brief</label>
+                <span><strong data-i18n="workspace.refine_lyrics">Refine lyrics</strong><small data-i18n="workspace.refine_lyrics_hint">Create new Lyrics or rewrite the current text</small></span>
+                <label class="h3ps-lyrics-brief-option"><input type="checkbox" data-lyrics-use-brief checked><span data-i18n="workspace.use_music_brief">Use Music Brief</span></label>
               </div>
-              <textarea rows="2" data-lyrics-refine-instruction placeholder="Leave Lyrics empty to create new lyrics, or describe how to rewrite the existing lyrics."></textarea>
+              <textarea rows="2" data-lyrics-refine-instruction placeholder="Leave Lyrics empty to create new lyrics, or describe how to rewrite the existing lyrics." data-i18n-placeholder="workspace.lyrics_refine_placeholder"></textarea>
               <div class="h3ps-refine-actions">
-                <button type="button" class="h3ps-text-button" data-lyrics-refine-restore hidden>Restore previous</button>
+                <button type="button" class="h3ps-text-button" data-lyrics-refine-restore hidden data-i18n="workspace.restore_previous">Restore previous</button>
                 <span></span>
-                <button type="button" class="h3ps-text-button" data-lyrics-refine-cancel>Cancel</button>
-                <button type="button" class="h3ps-refine-submit" data-lyrics-refine-submit>${icon("spark", 13)} Refine</button>
+                <button type="button" class="h3ps-text-button" data-lyrics-refine-cancel data-i18n="common.cancel">Cancel</button>
+                <button type="button" class="h3ps-refine-submit" data-lyrics-refine-submit>${icon("spark", 13)} <span data-i18n="workspace.refine">Refine</span></button>
               </div>
             </section>
             <section class="h3ps-music-system-prompt">
               <button class="h3ps-music-system-prompt-toggle" type="button" data-music-system-prompt-toggle aria-expanded="false">
-                <strong>System prompt</strong>
+                <strong data-i18n="system_prompt.title">System Prompt</strong>
                 <span><em data-music-system-prompt-summary>Default</em>${icon("chevron", 12)}</span>
               </button>
               <div data-music-system-prompt-details hidden>
                 <div class="h3ps-system-prompt-overview" data-music-system-prompt-overview>
                   <button type="button" data-music-system-prompt-profile="music3">
-                    <span><strong>Caption</strong><small>Generated Caption</small></span>
-                    <span><em data-system-prompt-summary-status="music3">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+                    <span><strong data-i18n="workspace.caption">Caption</strong><small data-i18n="workspace.generated_caption_note">Generated Caption</small></span>
+                    <span><em data-system-prompt-summary-status="music3">Default</em><b data-i18n="common.edit">Edit</b>${icon("chevron", 12)}</span>
                   </button>
                   <button type="button" data-music-system-prompt-profile="music3_lyrics">
-                    <span><strong>Lyrics</strong><small>Create and refine Lyrics</small></span>
-                    <span><em data-system-prompt-summary-status="music3_lyrics">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+                    <span><strong data-i18n="workspace.lyrics">Lyrics</strong><small data-i18n="workspace.create_refine_lyrics_note">Create and refine Lyrics</small></span>
+                    <span><em data-system-prompt-summary-status="music3_lyrics">Default</em><b data-i18n="common.edit">Edit</b>${icon("chevron", 12)}</span>
                   </button>
                 </div>
                 <div class="h3ps-system-prompt-editor" data-music-system-prompt-editor hidden>
-                  ${musicSystemPromptPanelMarkup("music3", "Caption", "Instructions used to create and refine the structured Music 3 caption.")}
-                  ${musicSystemPromptPanelMarkup("music3_lyrics", "Lyrics", "Instructions used to create new Lyrics or rewrite the current Lyrics.", true)}
+                  ${musicSystemPromptPanelMarkup("music3", "workspace.caption", "system_prompt.music3_description")}
+                  ${musicSystemPromptPanelMarkup("music3_lyrics", "workspace.lyrics", "system_prompt.music3_lyrics_description", true)}
                 </div>
               </div>
             </section>
           </div>
-
-          ${generateModelSummaryMarkup(icon)}
         </section>
 
-        <section class="h3ps-output-panel" aria-label="Generated result">
+        <section class="h3ps-output-panel" aria-label="${t("workspace.generated_result")}" data-i18n-aria-label="workspace.generated_result">
           <div class="h3ps-output-mobile-toolbar" aria-hidden="true"><span data-output-mobile-label>Generated prompt</span></div>
           <div class="h3ps-editor-wrap">
             <div class="h3ps-editor-highlight" data-prompt-highlights aria-hidden="true"></div>
@@ -3248,32 +3683,36 @@ function createStudio() {
             <div class="h3ps-refine-heading">
               <span><strong data-refine-title>Refine prompt</strong><small><span data-refine-helper>Describe only what should change</span><em data-refine-media-note>No media re-upload</em></small></span>
               <div class="h3ps-refine-heading-actions">
-                <button type="button" class="h3ps-text-button" data-refine-restore hidden>Restore original</button>
-                <button type="button" class="h3ps-text-button" data-refine-cancel>Cancel</button>
-                <button type="button" class="h3ps-refine-submit" data-refine-submit>${icon("spark", 13)} Refine</button>
+                <button type="button" class="h3ps-text-button" data-refine-restore hidden data-i18n="workspace.restore_original">Restore original</button>
+                <button type="button" class="h3ps-text-button" data-refine-cancel data-i18n="common.cancel">Cancel</button>
+                <button type="button" class="h3ps-refine-submit" data-refine-submit>${icon("spark", 13)} <span data-i18n="workspace.refine">Refine</span></button>
               </div>
             </div>
-            <textarea rows="2" data-refine-instruction placeholder="For example: make the camera movement slower and keep the ending more ambiguous."></textarea>
+            <textarea rows="2" data-refine-instruction placeholder="For example: make the camera movement slower and keep the ending more ambiguous." data-i18n-placeholder="workspace.refine_placeholder"></textarea>
           </div>
           <div class="h3ps-output-actions">
             <span class="h3ps-output-primary-actions">
-              <button class="h3ps-secondary-button" type="button" title="Refine with local LLM" data-refine-toggle>${icon("spark", 15)} Refine</button>
+              <button class="h3ps-secondary-button" type="button" title="${t("workspace.refine_tooltip")}" data-i18n-title="workspace.refine_tooltip" data-refine-toggle>${icon("spark", 15)} <span data-i18n="workspace.refine">Refine</span></button>
             </span>
             ${copyButtonMarkup(icon, "data-copy", '<span data-copy-label>Copy prompt</span>')}
           </div>
         </section>
       </div>
 
+      <div class="h3ps-chat-view" data-chat-view hidden>
+        <iframe class="h3ps-chat-frame" data-chat-frame title="${t("chat.title")}" data-i18n-title="chat.title"></iframe>
+      </div>
+
       <footer class="h3ps-footer" data-generate-view>
         <div class="h3ps-footer-memory-actions">
-          <button class="h3ps-memory-action" type="button" data-comfy-memory-action title="Unload models held by ComfyUI without clearing cached workflow results">${icon("memory", 15)}Free ComfyUI VRAM</button>
+          <button class="h3ps-memory-action" type="button" data-comfy-memory-action title="${t("generation.free_vram_tooltip")}" data-i18n-title="generation.free_vram_tooltip">${icon("memory", 15)}<span data-i18n="workspace.free_comfy_vram">Free ComfyUI VRAM</span></button>
           <span class="h3ps-prompt-lifecycle-actions" data-prompt-lifecycle-actions></span>
         </div>
         <div class="h3ps-status is-busy" role="status" aria-live="polite" aria-atomic="true" data-status hidden><span><strong></strong><small data-status-detail></small></span></div>
         <div class="h3ps-footer-actions">
           <span class="h3ps-generation-options">
             <label class="h3ps-toggle-control"><input type="checkbox" data-thinking><span></span>Thinking</label>
-            <label class="h3ps-toggle-control" data-keep-loaded-control title="Keep the prompt model in VRAM for the next prompt"><input type="checkbox" data-keep-loaded><span></span>Keep model loaded</label>
+            <label class="h3ps-toggle-control" data-keep-loaded-control title="${t("workspace.keep_model_loaded_tooltip")}" data-i18n-title="workspace.keep_model_loaded_tooltip" hidden><input type="checkbox" data-keep-loaded><span></span><span class="h3ps-toggle-label" data-i18n="workspace.keep_model_loaded">Keep model loaded</span></label>
             ${autoVramControlMarkup(VRAM_HANDOFF_SUPPORTED)}
           </span>
           <button class="h3ps-primary-button" type="button" data-generate>${icon("spark", 16)}<span data-generate-label>Generate prompt</span></button>
@@ -3282,15 +3721,22 @@ function createStudio() {
     </section>
 
     <div class="h3ps-other-models-backdrop" aria-hidden="true" data-other-models-backdrop hidden></div>
-    <section class="h3ps-other-models-popover" role="dialog" aria-label="Other verified models" data-other-models-popover hidden>
-      <header><span><strong>Other verified models</strong><small>Recommended GGUF and projector pairs</small></span><button class="h3ps-icon-button" type="button" aria-label="Close verified models" data-other-models-close>${icon("close", 16)}</button></header>
+    <section class="h3ps-other-models-popover" role="dialog" aria-label="${t("workspace.other_models")}" data-i18n-aria-label="workspace.other_models" data-other-models-popover hidden>
+      <header><span><strong data-i18n="workspace.other_models">Other verified models</strong><small data-i18n="workspace.recommended_pairs">Recommended GGUF and projector pairs</small></span><button class="h3ps-icon-button" type="button" aria-label="${t("workspace.close_other_models")}" data-i18n-aria-label="workspace.close_other_models" data-other-models-close>${icon("close", 16)}</button></header>
       <div class="h3ps-other-models-catalog" data-other-models-catalog></div>
     </section>
 
-    <div class="h3ps-toast" role="status" aria-live="polite" aria-atomic="true" data-h3ps-toast><span class="h3ps-toast-icon">${icon("info", 17)}</span><span><strong data-toast-title>Notice</strong><span data-toast-message></span><button type="button" class="h3ps-toast-action" data-toast-action hidden></button><details data-toast-details hidden><summary>Technical details</summary><pre></pre></details></span></div>`;
+    <div class="h3ps-toast" role="status" aria-live="polite" aria-atomic="true" data-h3ps-toast><span class="h3ps-toast-icon">${icon("info", 17)}</span><span><strong data-toast-title>Notice</strong><span data-toast-message></span><button type="button" class="h3ps-toast-action" data-toast-action hidden></button><details data-toast-details hidden><summary data-i18n="common.technical_details">Technical details</summary><pre></pre></details></span></div>`;
   document.body.appendChild(root);
-
+  configureI18n({
+    preference: initialPreferences?.language || "auto",
+    app,
+    navigatorLanguage: globalThis.navigator?.language || "",
+    root,
+  });
+  translateDom(root);
   studio = { root, ...createStudioState({ sessionId: createSessionId(), storage: localStorage }) };
+  root.querySelector("[data-language]").value = getLanguagePreference();
   root.querySelector("[data-comfy-memory-action]").hidden = !HOST_CAPABILITIES.comfyMemory;
   if (!HOST_CAPABILITIES.windowed) {
     studio.fullscreen = true;
@@ -3302,7 +3748,7 @@ function createStudio() {
     if (open) modal.removeAttribute("aria-modal");
     else if (root.classList.contains("is-open")) modal.setAttribute("aria-modal", "true");
   };
-  const mediaToolUnavailable = (message) => showToast("Media tool unavailable", message);
+  const mediaToolUnavailable = (message) => showToast(msg("toast.media_tool.unavailable.title"), message);
   studio.mediaComposer = createLazyMediaTool(root, async () => {
     const { createMediaComposer } = await import("./media_composer.js");
     return createMediaComposer({
@@ -3310,7 +3756,7 @@ function createStudio() {
       icon,
       onAddPicture: addComposedPicture,
       getAddState: composerAddState,
-      notify: (kind, message) => showToast(kind === "error" ? "Composer failed" : "Media Composer", message),
+      notify: (kind, message) => showToast(msg(kind === "error" ? "toast.composer.failed.title" : "toast.composer.title"), message),
       onOpenChange: onMediaToolOpenChange,
     });
   }, mediaToolUnavailable);
@@ -3323,22 +3769,25 @@ function createStudio() {
         const file = new File([blob], filename, { type: "image/png" });
         const result = await uploadMedia(studio.sessionId, "Reference", [file]);
         studio.assets.push(...result.assets);
-        showToast("Picture added", result.assets[0].reference);
+        showToast(msg("toast.media.picture_added.title"), result.assets[0].reference);
         renderMedia(studio.mode);
       },
       onAddAudio: async (blob, filename) => {
         const result = await uploadMedia(studio.sessionId, "Reference", [new File([blob], filename, { type: "audio/wav" })]);
         studio.assets.push(...result.assets);
-        showToast("Audio added", `${result.assets[0].reference}. Connect the downloaded WAV separately in H3. Writer does not analyze sound; describe its role in the Brief.`);
+        showToast(
+          msg("toast.media.audio_added.title"),
+          msg("toast.media.editor_audio.message", { reference: result.assets[0].reference }),
+        );
         renderMedia(studio.mode);
       },
       request: (assetId, options) => editMedia(studio.sessionId, assetId, options),
       onSaved: (result) => {
-        showToast("Media applied", "Crop and trim applied. The original source is preserved.");
+        showToast(msg("toast.media.applied.title"), msg("toast.media.applied.message"));
         acceptMediaAssets(result.assets);
         renderMedia(studio.mode);
       },
-      notify: (message) => showToast("Media Editor", message),
+      notify: (message) => showToast(msg("toast.media_editor.title"), message),
       onOpenChange: onMediaToolOpenChange,
     });
   }, mediaToolUnavailable);
@@ -3346,7 +3795,7 @@ function createStudio() {
   const durationSlider = root.querySelector("[data-duration-slider]");
   durationSlider.value = String(studio.durationSeconds);
   durationSlider.style.setProperty("--h3ps-range", `${(studio.durationSeconds - 1) / 19 * 100}%`);
-  root.querySelector("[data-duration-label]").textContent = `${studio.durationSeconds} seconds`;
+  syncDurationLabel();
   studio.aspectControl = bindAspectRatio(root.querySelector('[data-choice-toggle="aspect"]').closest(".h3ps-choice"), studio.aspectRatio, value => {
     studio.aspectRatio = value;
     saveUserPreferences(localStorage, studio);
@@ -3356,6 +3805,14 @@ function createStudio() {
   syncFullscreenState();
   root.querySelectorAll("[data-close-studio]").forEach((el) => el.addEventListener("click", closeStudio));
   root.querySelector("[data-fullscreen-toggle]").addEventListener("click", () => setFullscreen(!studio.fullscreen));
+  root.querySelector("[data-language]").addEventListener("change", (event) => {
+    const language = normalizeLanguagePreference(event.target.value);
+    studio.language = language;
+    studio.languageChosen = true;
+    setLanguagePreference(event.target.value);
+    saveUserPreferences(localStorage, studio);
+    console.log(`[H3 Writer i18n] preference=${language} locale=${getLocale()}`);
+  });
   root.querySelector("[data-theme-toggle]").addEventListener("click", () => setTheme(studio.theme === "light" ? "dark" : "light"));
   root.querySelectorAll("[data-open-floating-media]").forEach(button => button.addEventListener("click", openFloatingMedia));
   root.querySelector("[data-open-composer]").addEventListener("click", (event) => openMediaComposer(event.currentTarget));
@@ -3386,15 +3843,25 @@ function createStudio() {
     if (!event.target.closest("[data-clear-control]")) setClearMenuOpen(false);
   });
   root.querySelectorAll("[data-workspace]").forEach((button) => button.addEventListener("click", () => {
+    if (button.dataset.workspace === "chat") {
+      activateLlamaChatTab();
+      return;
+    }
     const nextMode = button.dataset.workspace === "music" ? "Music3" : studio.lastVideoMode;
     if (!isGenerationModeAvailable(studio.selectedModel, nextMode)) return;
-    if (nextMode === studio.mode) return;
-    stashCurrentModeDraft();
-    if (studio.mode !== "Music3") studio.lastVideoMode = studio.mode;
-    studio.mode = nextMode;
+    if (nextMode === studio.mode && !studio.chatOpen) return;
+    const modeChanged = nextMode !== studio.mode;
+    if (modeChanged) {
+      stashCurrentModeDraft();
+      if (studio.mode !== "Music3") studio.lastVideoMode = studio.mode;
+      studio.mode = nextMode;
+    }
+    studio.chatOpen = false;
     syncWorkspace();
-    restoreModeDraft(studio.mode);
-    renderMedia(studio.mode);
+    if (modeChanged) {
+      restoreModeDraft(studio.mode);
+      renderMedia(studio.mode);
+    }
     syncRuntimeSummary();
     saveUserPreferences(localStorage, studio);
   }));
@@ -3413,6 +3880,37 @@ function createStudio() {
   root.querySelector("[data-open-settings-header]").addEventListener("click", () => setSettingsOpen(true));
   root.querySelector("[data-open-settings]").addEventListener("click", () => setSettingsOpen(true));
   root.querySelector("[data-close-settings]").addEventListener("click", () => setSettingsOpen(false));
+  const chatFrame = root.querySelector("[data-chat-frame]");
+  chatFrame?.addEventListener("load", () => {
+    if (studio?.chatBusy) {
+      console.log("[H3 Writer chat] chat page reloaded; clearing the stale busy flag");
+    }
+    if (studio) studio.chatBusy = false;
+    syncChatFramePreferences();
+  });
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin || !studio) return;
+    if (event.source && event.source !== chatFrame?.contentWindow) return;
+    if (event.data?.type === "h3ps-chat-busy") {
+      const busy = event.data.busy === true;
+      if (studio.chatBusy !== busy) {
+        studio.chatBusy = busy;
+        console.log(`[H3 Writer chat] reply generating=${busy} reported by the chat tab`);
+      }
+      return;
+    }
+    if (event.data?.type === "h3ps-close-chat") {
+      studio.chatOpen = false;
+      syncWorkspace();
+      console.log("[H3 Writer chat] closed from the chat tab");
+      return;
+    }
+    if (event.data?.type !== "h3ps-open-settings") return;
+    setSettingsOpen(true);
+    studio.settingsProvider = "external";
+    renderInferenceSettings();
+    window.focus();
+  });
   root.querySelector("[data-clear-media]").addEventListener("click", () => {
     setClearMenuOpen(false);
     clearCurrentMedia();
@@ -3449,11 +3947,17 @@ function createStudio() {
     const file=draftInput.files[0]; draftInput.value="";
     if(!file || studio.requestBusy) return;
     try {
-      if(file.size>2_000_000) throw Error("Draft file is too large (maximum 2 MB).");
+      if(file.size>2_000_000) {
+        throw Object.assign(Error("Draft file is too large (maximum 2 MB)."), { code: "DRAFT_TOO_LARGE" });
+      }
       const value=parseDraft(await file.text());
-      showToast("Load text draft?", "This replaces the target draft and clears its current media. Files are not included; reattach the original references after loading.",
-        value.media.length ? {references:value.media} : null, {label:"Load draft",onClick:()=>loadTextDraft(value)});
-    } catch(error) { showToast("Load draft",error.message); }
+      showToast(
+        msg("toast.draft.confirm.title"),
+        msg("toast.draft.confirm.message"),
+        value.media.length ? {references:value.media} : null,
+        {label:msg("toast.draft.confirm.action"),onClick:()=>loadTextDraft(value)},
+      );
+    } catch(error) { showErrorToast("toast.draft.load_failed.title", error); }
   };
   root.querySelector("[data-restore-default-drafts]").addEventListener("click", restoreDefaultDrafts);
   root.querySelector("[data-comfy-memory-action]").addEventListener("click", () => releaseComfyVram());
@@ -3463,7 +3967,7 @@ function createStudio() {
     root.querySelector("[data-guide-toggle]").setAttribute("aria-expanded", String(!menu.hidden));
     if (menu.hidden) return;
     if (studio.mode === "Music3") {
-      menu.innerHTML = `<a href="${MUSIC3_GUIDE_URL}" target="_blank" rel="noopener noreferrer"><strong>Music Caption Rewriter</strong><small>Official MiniMax Music 3 guide</small></a>`;
+      menu.innerHTML = `<a href="${MUSIC3_GUIDE_URL}" target="_blank" rel="noopener noreferrer"><strong>${t("guide.music.title")}</strong><small>${t("guide.music.subtitle")}</small></a>`;
       return;
     }
     try {
@@ -3473,13 +3977,13 @@ function createStudio() {
       }
       menu.innerHTML = studio.guides.map((guide) => `<a href="${escapeHtml(guide.source_url)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(guide.filename)}</strong><small>${escapeHtml(guide.modes.join(" · "))}</small></a>`).join("");
     } catch (error) {
-      showToast(error.code || "Guide unavailable", error.message, error.details);
+      showErrorToast("toast.guides.unavailable.title", error);
     }
   });
 
   root.querySelector("[data-duration-slider]").addEventListener("input", (event) => {
     studio.durationSeconds = Number(event.target.value);
-    root.querySelector("[data-duration-label]").textContent = `${studio.durationSeconds} seconds`;
+    syncDurationLabel();
     event.target.style.setProperty("--h3ps-range", `${(studio.durationSeconds - 1) / 19 * 100}%`);
     saveUserPreferences(localStorage, studio);
   });
@@ -3534,8 +4038,8 @@ function createStudio() {
     const custom = Object.hasOwn(studio.customSystemPrompts, profile);
     const status = root.querySelector(`[data-system-prompt-status="${profile}"]`);
     const summaryStatus = root.querySelector(`[data-system-prompt-summary-status="${profile}"]`);
-    if (status) status.textContent = custom ? "Custom" : "Default";
-    if (summaryStatus) summaryStatus.textContent = custom ? "Custom" : "Default";
+    setSystemPromptStatus(status, custom);
+    setSystemPromptStatus(summaryStatus, custom);
     root.querySelector(`[data-system-prompt-reset="${profile}"]`).hidden = !custom;
     root.querySelector(`[data-system-prompt-count="${profile}"]`).textContent = `${textarea.value.length.toLocaleString()} / 8,000`;
     resizeSystemPromptEditor(textarea);
@@ -3546,21 +4050,30 @@ function createStudio() {
     delete studio.customSystemPrompts[profile];
     saveCustomSystemPrompts(localStorage, studio.customSystemPrompts);
     syncSystemPromptEditor(profile);
-    showToast("System Prompt reset", profile === "music3"
-      ? "Music 3 Caption is using its built-in system prompt."
-      : profile === "music3_lyrics"
-      ? "Music 3 Lyrics is using its built-in system prompt."
-      : `H3 Prompt Writer is using its default ${profile} instructions.`);
+    showToast(
+      msg("toast.system_prompt.reset.title"),
+      msg(profile === "music3"
+        ? "toast.system_prompt.reset.music3"
+        : profile === "music3_lyrics"
+        ? "toast.system_prompt.reset.music3_lyrics"
+        : "toast.system_prompt.reset.default", { profile }),
+    );
   }));
   root.querySelector("[data-thinking]").addEventListener("change", (event) => {
     studio.thinking = event.target.checked;
     syncRuntimeSummary();
   });
   root.querySelector("[data-keep-loaded]").addEventListener("change", (event) => {
+    if (studio.selectedModel?.family !== "gguf") {
+      event.target.checked = false;
+      studio.keepModelLoaded = false;
+      return;
+    }
     studio.keepModelLoaded = event.target.checked;
   });
   root.querySelector("[data-vram-handoff]")?.addEventListener("change", (event) => {
     studio.vramHandoff = event.target.checked;
+    studio.vramHandoffChosen = true;
     saveUserPreferences(localStorage, studio);
   });
   const updateBriefCount = () => {
@@ -3583,7 +4096,10 @@ function createStudio() {
   root.querySelector("[data-model-refresh]").addEventListener("click", async () => {
     await refreshModels();
     const count = localModels().length;
-    showToast("Models refreshed", `${count} supported local model${count === 1 ? "" : "s"} found.`);
+    showToast(
+      msg("toast.models.refreshed.title"),
+      msg(count === 1 ? "models.refreshed.one" : "models.refreshed.other", { count }),
+    );
   });
   root.querySelector("[data-installed-model]").addEventListener("change", (event) => {
     selectModel(localModels().find((model) => model.id === event.target.value));
@@ -3623,7 +4139,7 @@ function createStudio() {
     if (copyOllamaCommand) {
       const command = copyOllamaCommand.dataset.copyOllamaCommand;
       navigator.clipboard.writeText(command);
-      showToast("Command copied", `${command} · paste it into Terminal or PowerShell.`);
+      showToast(msg("toast.copy.command.title"), msg("toast.copy.command.ollama", { command }));
       return;
     }
     const ollamaAddModel = event.target.closest("[data-ollama-add-model]");
@@ -3636,7 +4152,7 @@ function createStudio() {
     if (copyDirectRuntimeCommand) {
       const command = copyDirectRuntimeCommand.dataset.copyDirectRuntimeCommand;
       navigator.clipboard.writeText(command);
-      showToast("Command copied", "Paste it into PowerShell or CMD from the ComfyUI portable folder.");
+      showToast(msg("toast.copy.command.title"), msg("toast.copy.command.runtime"));
       return;
     }
     const externalDisconnect = event.target.closest("[data-external-server-disconnect]");
@@ -3660,7 +4176,7 @@ function createStudio() {
     const copyPath = event.target.closest("[data-copy-model-path]");
     if (copyPath) {
       navigator.clipboard.writeText(studio.modelDirectory || "ComfyUI/models/LLM/");
-      showToast("Model path copied", studio.modelDirectory || "ComfyUI/models/LLM/");
+      showToast(msg("toast.copy.model_path.title"), studio.modelDirectory || "ComfyUI/models/LLM/");
       return;
     }
   });
@@ -3726,8 +4242,8 @@ function createStudio() {
     updateMusicLyricsCount();
     saveCurrentModeDraft();
     showToast(
-      previousLyrics.trim() ? "Previous Lyrics restored" : "Generated Lyrics removed",
-      "The AI Lyrics change was discarded.",
+      previousLyrics.trim() ? msg("toast.lyrics.previous_restored.title") : msg("toast.lyrics.generated_removed.title"),
+      msg("toast.lyrics.restore.message"),
     );
   });
   root.querySelector("[data-refine-restore]").addEventListener("click", () => {
@@ -3742,7 +4258,7 @@ function createStudio() {
     root.querySelector("[data-refine-restore]").hidden = true;
     syncModifiedState();
     saveCurrentModeDraft();
-    showToast("Previous prompt restored", "The AI rewrite was discarded.");
+    showToast(msg("toast.refine.restored.title"), msg("toast.refine.restored.message"));
   });
   root.querySelector("[data-undo-edits]").addEventListener("click", () => {
     if (typeof studio.lastModelPrompt !== "string") return;
@@ -3752,7 +4268,7 @@ function createStudio() {
     renderPromptHighlights();
     syncModifiedState();
     saveCurrentModeDraft();
-    showToast("Edits undone", "Restored the latest AI-generated prompt.");
+    showToast(msg("toast.edits.undone.title"), msg("toast.edits.undone.message"));
   });
   root.querySelector("[data-copy]").addEventListener("click", () => copyPromptText(root.querySelector("[data-output]").value, studio.mode === "Music3"));
   root.querySelector("[data-output]").addEventListener("input", () => {
@@ -3800,7 +4316,7 @@ function createStudio() {
     root, icon, storage: localStorage, assets: () => studio.assets,
     isBusy: () => studio.requestBusy,
     snapshot: () => {
-      if (!studio.selectedModel?.runtime_ready) throw new Error("Select a ready prompt model in Settings.");
+      if (!studio.selectedModel?.runtime_ready) throw new Error(t("workspace.select_ready_model"));
       studio.modelSelectionRevision = (studio.modelSelectionRevision || 0) + 1;
       return buildGeneratePayload(studio, { creativeBrief: "", seed: newGenerationSeed() });
     },
@@ -3809,14 +4325,16 @@ function createStudio() {
     cancel: (operationId) => cancelSequence(operationId, studio.sessionId),
     busy: (busy) => {
       if (busy) markActiveWriterRequest(); else clearActiveWriterRequest();
-      setGenerationState(busy ? "busy" : "idle", "Generating sequence", "Completed prompts are kept as each chunk finishes");
+      setGenerationState(busy ? "busy" : "idle", msg("status.generating_sequence"), msg("status.detail.sequence_kept"));
       root.querySelector(".h3ps-generation-options").inert = busy;
       root.querySelector("[data-settings-view]").inert = busy;
     },
     refresh: () => { syncWorkspace(); renderMedia(studio.mode); },
     clearMedia: () => clearCurrentMedia(),
-    settled: (status) => studio.desktopNotifications.notify(status === "complete" ? "Sequence generation finished." : "Sequence needs attention. Open Writer for details."),
-    error: (error) => showToast("Sequence", error.message, error.details || null, null, sequenceNotificationOptions(error)),
+    settled: (status) => studio.desktopNotifications.notify(
+      t(status === "complete" ? "notification.sequence_done" : "notification.sequence_attention"),
+    ),
+    error: (error) => showErrorToast("toast.sequence.title", error, sequenceNotificationOptions(error)),
     copy: (text) => copyPromptText(text),
     insert: (editor, reference) => insertReferenceAtCaret(editor, reference, editor.selectionStart),
   });
@@ -3827,6 +4345,54 @@ function createStudio() {
   syncSystemPromptEditors();
   setMusicSystemPromptProfile(studio.musicSystemPromptProfile);
   refreshModels();
+  const refreshLocalizedUi = () => {
+    studio.localeRefreshing = true;
+    try {
+      syncTheme();
+      syncFullscreenState();
+      syncInterfaceSize();
+      syncDurationLabel();
+      syncWorkspace();
+      syncModeAvailability();
+      syncSelectedModelSourceLabel();
+      syncActiveModelSummary();
+      syncLifecycleActions();
+      syncProviderSettings();
+      syncProviderPanelCopy();
+      syncRuntimeSummary();
+      syncThinkingAvailability();
+      syncContextAvailability();
+      syncAdvancedRuntimeControls();
+      syncSystemPromptEditors();
+      syncMusicSystemPromptSummary();
+      syncNotifications();
+      syncOutputLengthMeta();
+      updateBriefLayout();
+      updateMusicLyricsCount();
+      const comfyMemory = root.querySelector("[data-comfy-memory-action]");
+      if (comfyMemory) {
+        comfyMemory.title = studio.requestBusy
+          ? t("generation.free_vram_busy")
+          : t("generation.free_vram_tooltip");
+      }
+      renderMedia(studio.mode);
+      if (studio.generationSnapshot) {
+        writeStatusContent(root.querySelector("[data-status]"), {
+          ...studio.generationSnapshot,
+          dots: studio.generationDotCount,
+        });
+      }
+      if (studio.toastSnapshot) writeToastContent(root.querySelector("[data-h3ps-toast]"), studio.toastSnapshot);
+      studio.sequence?.refresh();
+    } finally {
+      studio.localeRefreshing = false;
+    }
+  };
+  onLocaleChange(() => {
+    console.log(`[H3 Writer i18n] ui refreshed locale=${document.documentElement.lang}`);
+    refreshLocalizedUi();
+    postLocaleToChat();
+  });
   return studio;
 }
 
@@ -3837,8 +4403,8 @@ function supportsWorkflowMedia() {
 async function openFloatingMedia() {
   const current = createStudio();
   const hasMedia = () => current.assets.some(asset => ["image", "video", "audio"].includes(asset.type) && asset.content_url);
-  if (!hasMedia()) { openStudio(); showToast("Add media first", ""); return; }
-  if (!supportsWorkflowMedia()) { openStudio(); showToast("Workflow canvas unavailable", ""); return; }
+  if (!hasMedia()) { openStudio(); showToast(msg("media.add_first"), ""); return; }
+  if (!supportsWorkflowMedia()) { openStudio(); showToast(msg("toast.media.workflow_unavailable.title"), ""); return; }
   const request = ++mediaPanelRequest;
   try {
     if (!current.floatingMedia) {
@@ -3856,10 +4422,10 @@ async function openFloatingMedia() {
       await current.floatingMediaPending;
     }
     if (request !== mediaPanelRequest) return;
-    if (!hasMedia()) { openStudio(); showToast("Add media first", ""); return; }
+    if (!hasMedia()) { openStudio(); showToast(msg("media.add_first"), ""); return; }
     if (closeStudio() === false) return;
     current.floatingMedia.open();
-  } catch (error) { showToast("Media panel unavailable", error.message); }
+  } catch (error) { showErrorToast("toast.media_panel.unavailable.title", error); }
 }
 
 function focusAvailableControl(element) {
@@ -3906,12 +4472,26 @@ function openStudio() {
   modal.tabIndex = -1;
   updateBriefLayout();
   scheduleStudioFocus(() => modal.querySelector("button[data-close-studio]:not([hidden])") || modal);
+  releaseStudioResources("studio-opened");
 }
 
 function closeStudio() {
   if (!HOST_CAPABILITIES.windowed) return false;
   mediaPanelRequest++;
   if (!studio?.root.classList.contains("is-open")) return;
+  const writerBusy = Boolean(studio.requestBusy);
+  const chatBusy = Boolean(studio.chatBusy);
+  if (writerBusy || chatBusy) {
+    console.log(
+      `[H3 Writer] close refused while generating request_busy=${writerBusy} ` +
+      `chat_busy=${chatBusy}`,
+    );
+    const message = writerBusy && chatBusy ? "toast.close.both_busy"
+      : writerBusy ? "toast.close.writer_busy"
+        : "toast.close.chat_busy";
+    showToast(msg("toast.close.busy_title"), msg(message));
+    return false;
+  }
   const modal = studio.root.querySelector(".h3ps-modal");
   if (studio.mediaEditor?.close() === false) return false;
   if (studio.mediaComposer?.close() === false) return false;
@@ -3930,6 +4510,16 @@ function closeStudio() {
   if (studio.root.contains(document.activeElement)) document.activeElement.blur();
   if (!focusAvailableControl(studioReturnFocus)) focusAvailableControl(app.canvas?.canvas);
   studioReturnFocus = null;
+  releaseStudioResources("studio-closed");
+}
+
+function syncLauncherLabels(doc = document) {
+  const launcher = doc.querySelector("[data-h3ps-launcher]");
+  if (!launcher) return;
+  launcher.setAttribute("aria-label", t("launcher.open"));
+  launcher.title = t("launcher.open_title");
+  const image = launcher.querySelector("img");
+  if (image) image.alt = t("launcher.alt");
 }
 
 function installLauncher() {
@@ -3943,11 +4533,10 @@ function installLauncher() {
   launcher.className = "h3ps-floating-launcher";
   launcher.dataset.h3psLauncher = "true";
   launcher.dataset.h3psLauncherVersion = LAUNCHER_SCHEMA_VERSION;
-  launcher.setAttribute("aria-label", "Open H3 Prompt Writer");
-  launcher.title = "Open H3 Prompt Writer · drag to move";
   const launcherIcon = new URL("./assets/h3-prompt-writer-launcher.svg", import.meta.url).href;
-  launcher.innerHTML = `<img src="${launcherIcon}" alt="H3 Prompt Writer">`;
+  launcher.innerHTML = `<img src="${launcherIcon}" alt="">`;
   document.body.appendChild(launcher);
+  syncLauncherLabels(document);
 
   const positionKey = "h3ps-launcher-position";
   const edgeGap = 10;
@@ -4089,6 +4678,12 @@ app.registerExtension({
   menuCommands: [{ path: ["Extensions", "H3 Prompt Writer"], commands: ["h3-prompt-studio.open", "h3-prompt-studio.media"] }],
   async setup() {
     injectStyles();
+    configureI18n({
+      preference: loadUserPreferences(localStorage)?.language || "auto",
+      app,
+      navigatorLanguage: navigator.language,
+      root: null,
+    });
     installVramHandoff(app, {
       isEnabled: vramHandoffIsEnabled,
       onQueueRequested: () => vramHandoffCoordinator.invalidateWriterAttempts(),
@@ -4097,5 +4692,6 @@ app.registerExtension({
       onQueueHandoffEnd: () => vramHandoffCoordinator.finishQueueHandoff(),
     });
     installLauncher();
+    onLocaleChange(() => syncLauncherLabels());
   },
 });

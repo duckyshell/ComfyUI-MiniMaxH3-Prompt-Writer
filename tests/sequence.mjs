@@ -6,6 +6,9 @@ import vm from "node:vm";
 import { DEFAULT_SEQUENCE_INSTRUCTIONS, LEGACY_SEQUENCE_INSTRUCTIONS, newSequence, addChunk, deleteChunk, timeline, effectiveMedia, aggregate, saveSequence, loadSequence, duration, replacePrompt, revisePrompt, assignReference, removeReference, reconcileMedia, sequenceInputs } from "../web/sequence_state.js";
 import { createSequenceController } from "../web/sequence_controller.js";
 import { createSequenceWorkspace, displaySeparator, parseSeparator } from "../web/sequence_workspace.js";
+import { configureI18n, setLanguagePreference } from "../web/i18n.js";
+import { writeToastContent } from "../web/toast.js";
+import { t } from "../web/i18n.js";
 
 const deferred = () => { let resolve; const promise=new Promise(r=>resolve=r); return {promise,resolve}; };
 const main=await readFile(new URL("../web/main.js",import.meta.url),"utf8");
@@ -87,7 +90,8 @@ test("real DOM Add/Delete, shell sync and repeated workspace switches preserve D
   const root=document.createElement("div");document.body.append(root);
   root.innerHTML=`<div data-workspace="video"></div><div data-video-modes></div><div data-music-inputs></div><span data-output-label></span><span data-output-mobile-label></span><textarea data-output>Single prompt</textarea><span data-copy-label></span><span data-refine-media-note></span><span data-refine-title></span><span data-refine-helper></span><textarea data-refine-instruction></textarea><div class="h3ps-workspace"><div data-video-inputs><div class="h3ps-section-actions"></div><div data-h3ps-media><div tabindex="0" data-asset-id="a"></div><div tabindex="0" data-asset-id="b"></div></div></div></div><button data-generate><span data-generate-label>Generate prompt</span></button>`;
   const studio={root,mode:"T2VA"};
-  const context=vm.createContext({studio,rememberReferenceInsertTarget(){},toggleLyricsRefine(){},setMusicSystemPromptExpanded(){},syncModeAvailability(){}});
+  const context=vm.createContext({studio,t,rememberReferenceInsertTarget(){},toggleLyricsRefine(){},setMusicSystemPromptExpanded(){},syncModeAvailability(){},msg:(key,params)=>({key,params})});
+  vm.runInContext(main.match(/^function syncGenerateLabel\(\)[^]*?^}/m)[0],context);
   vm.runInContext(main.match(/^function syncWorkspace\([^]*?^}/m)[0],context);
   const errors=[]; let busy=false, copied="";
   const assets=[{id:"a",filename:"portrait.png",type:"image",reference:"<Picture 7>"},{id:"b",filename:"room.png",type:"image",reference:"<Picture 8>"}];
@@ -221,6 +225,8 @@ test("shared Aspect and split controls keep independent values and keyboard-faci
   bindAspectRatio(single,"16:9",v=>values.push(["single",v]));bindAspectRatio(sequence,"9:16",v=>values.push(["sequence",v]));
   sequence.querySelector("[data-choice-toggle]").click();assert.equal(sequence.querySelector("[data-choice-menu]").hidden,false);
   sequence.querySelector('[data-aspect="1:1"]').click();assert.equal(single.querySelector("[data-aspect-label]").textContent,"16:9");
+  assert.equal(sequence.querySelector("[data-aspect-description]").dataset.i18n,"aspect.square");
+  assert.equal(single.querySelector("[data-aspect-description]").dataset.i18n,"aspect.widescreen");
   assert.equal(sequence.querySelector("[data-choice-toggle]").getAttribute("aria-expanded"),"false");assert.deepEqual(values,[["sequence","1:1"]]);
   const split=root.querySelector(".h3ps-clear-control");setSplitMenuOpen(split,true);
   assert.equal(split.querySelector("[data-menu]").hidden,false);assert.ok([...split.querySelectorAll("button")].every(b=>b.getAttribute("aria-expanded")==="true"));
@@ -430,7 +436,7 @@ test("Sequence severity uses the existing persistent toast and warning timeout",
   const w=new Window(),root=w.document.createElement('div');
   root.innerHTML='<div data-h3ps-toast><strong data-toast-title></strong><span data-toast-message></span><details data-toast-details><pre></pre></details><button data-toast-action></button></div>';
   const timers=[];let hidden=0;const studio={root};
-  const context=vm.createContext({studio,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:()=>{},hideToast:()=>hidden++});
+  const context=vm.createContext({studio,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:()=>{},hideToast:()=>hidden++,writeToastContent});
   vm.runInContext(main.match(/^function showToast\([^]*?^}/m)[0],context);
   context.showToast('Sequence','Runtime failed',null,null,sequenceNotificationOptions(new Error()));
   assert.deepEqual(timers.map(t=>t.ms),[0]);timers[0].fn();assert.equal(studio.toastDismissOnWorkspaceClick,true);
@@ -584,4 +590,56 @@ test("long Sequence brief has an informational count and survives storage",async
   assert.equal(root.querySelector('[data-seq-brief-count]').textContent,`${brief.length.toLocaleString()} characters`);
   assert.equal(loadSequence(window.localStorage).brief,brief);
   await window.happyDOM.close();
+});
+
+test("sequence workspace and controller follow locale switches without rebuilding editors", async () => {
+  const { window, root, workspace, errors, requests } = await sequenceFixture();
+  const state = workspace.state;
+  addChunk(state);
+  state.chunks[0].prompt = "kept";
+  state.chunks[0].instruction = "direction";
+  workspace.refresh();
+  const editor = root.querySelectorAll("[data-seq-prompt]")[0];
+  configureI18n({ preference: "en", root, navigatorLanguage: "en-US" });
+  try {
+    setLanguagePreference("zh-CN");
+    workspace.refresh();
+    assert.equal(root.querySelector("[data-seq-selector]").textContent, "序列");
+    assert.equal(root.querySelector('[data-seq-action="add"]').textContent.trim(), "添加片段");
+    assert.equal(root.querySelector("[data-seq-brief]").placeholder, "大约 15 秒时她站起身…");
+    assert.equal(root.querySelectorAll('[data-seq-action="generate"]')[0].textContent, "重新生成");
+    assert.equal(root.querySelector('[data-seq-action="refine-open"]').textContent, "改写");
+    assert.equal(root.querySelector("[data-seq-copy-format]").getAttribute("aria-label"), "复制格式");
+    assert.equal(root.querySelectorAll("[data-seq-prompt]")[0], editor);
+    assert.equal(editor.value, "kept");
+    const newlineHint = root.querySelector('[data-i18n="sequence.copy.newline_hint"]');
+    assert.match(newlineHint.textContent, /\\n/);
+    assert.equal(newlineHint.textContent.includes("\n"), false);
+    const mediaHint = root.querySelector('[data-i18n-title="sequence.media_hint"]');
+    assert.match(mediaHint.getAttribute("title"), /<Picture N>/);
+    workspace.controller.progress.set(state.chunks[0].id, "repairing");
+    workspace.refresh();
+    assert.equal(root.querySelectorAll("[data-seq-status]")[0].textContent, "正在修复…");
+    workspace.insert("a");
+    assert.match(errors.at(-1), /请先将光标放入片段字段或创意描述/);
+
+    const pending = deferred();
+    const controller = createSequenceController({
+      state: newSequence(), snapshot: () => ({}), prepare: () => pending.promise, run: () => {}, cancel: () => {},
+    });
+    const operation = controller.start();
+    await Promise.resolve();
+    assert.equal(controller.phase, "准备中…");
+    pending.resolve(false);
+    await operation;
+
+    setLanguagePreference("en");
+    workspace.refresh();
+    assert.equal(root.querySelector("[data-seq-selector]").textContent, "Sequence");
+    assert.equal(root.querySelector("[data-seq-brief]").placeholder, "At around 15 seconds she stands up…");
+    assert.equal(requests.length, 0);
+  } finally {
+    setLanguagePreference("en");
+    await window.happyDOM.close();
+  }
 });

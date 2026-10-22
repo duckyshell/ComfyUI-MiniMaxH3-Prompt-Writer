@@ -9,6 +9,7 @@ export const USER_PREFERENCES_STORAGE_KEY = "h3ps-preferences-v1";
 export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
 export const INTERFACE_SIZES = ["100", "110", "120", "125"];
 
+const LANGUAGE_PREFERENCES = ["auto", "en", "zh-CN"];
 const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
 const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
 const PROVIDERS = ["direct", "external", "ollama", "api"];
@@ -92,6 +93,7 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
   try {
     const value = JSON.parse(storage?.getItem(USER_PREFERENCES_STORAGE_KEY) || "null");
     if (!value || value.version !== 1) return null;
+    const vramHandoffChosen = value.vram_handoff_chosen === true;
     return {
       version: 1,
       mode: MODES.includes(value.mode) ? value.mode : "Reference",
@@ -109,9 +111,11 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       direct_reasoning_effort: typeof value.direct_reasoning_effort === "string" && value.direct_reasoning_effort ? value.direct_reasoning_effort : "auto",
       music_lyrics_use_brief: value.music_lyrics_use_brief !== false,
       fullscreen: value.fullscreen === true,
-      vram_handoff: value.vram_handoff === true,
+      vram_handoff: vramHandoffChosen ? value.vram_handoff === true : true,
+      vram_handoff_chosen: vramHandoffChosen,
       theme: value.theme === "light" ? "light" : "dark",
       interface_size: INTERFACE_SIZES.includes(value.interface_size) ? value.interface_size : "100",
+      ...(LANGUAGE_PREFERENCES.includes(value.language) ? { language: value.language } : {}),
     };
   } catch {
     return null;
@@ -137,8 +141,10 @@ export function saveUserPreferences(storage, state) {
     music_lyrics_use_brief: state.musicLyricsUseBrief !== false,
     fullscreen: state.fullscreen === true,
     vram_handoff: state.vramHandoff === true,
+    vram_handoff_chosen: state.vramHandoffChosen === true,
     theme: state.theme === "light" ? "light" : "dark",
     interface_size: INTERFACE_SIZES.includes(state.interfaceSize) ? state.interfaceSize : "100",
+    ...(state.languageChosen === true && LANGUAGE_PREFERENCES.includes(state.language) ? { language: state.language } : {}),
   };
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
@@ -302,7 +308,7 @@ export function selectModelState(state, model, { preserveSettingsProvider = fals
   } else {
     state.settingsProvider = settingsProvider;
   }
-  if (["external", "api"].includes(model?.family)) {
+  if (model && model.family !== "gguf") {
     state.keepModelLoaded = false;
   }
   return state;
@@ -350,7 +356,7 @@ function sharedInferencePayload(state) {
     ...(["gguf", "ollama"].includes(state.selectedModel?.family) ? { generation_budget: generationBudget } : {}),
     ...(directRuntime && thinking ? { reasoning_effort: state.reasoningEffort || "auto" } : {}),
     system_prompt_override: currentSystemPromptOverride(state),
-    unload_after: !state.keepModelLoaded,
+    unload_after: state.selectedModel?.family === "gguf" ? !state.keepModelLoaded : true,
   };
 }
 
@@ -403,6 +409,8 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
   const preferences = loadUserPreferences(storage);
   const ollamaHost = loadOllamaHost(storage);
   return {
+    language: preferences?.language || "auto",
+    languageChosen: Boolean(preferences?.language),
     mode: preferences?.mode || "Reference",
     lastVideoMode: preferences?.mode && preferences.mode !== "Music3" ? preferences.mode : "Reference",
     mediaFilter: "all",
@@ -416,7 +424,8 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     reasoningEffort: "auto",
     thinking: false,
     keepModelLoaded: false,
-    vramHandoff: preferences?.vram_handoff === true,
+    vramHandoff: preferences?.vram_handoff !== false,
+    vramHandoffChosen: preferences?.vram_handoff_chosen === true,
     settingsProvider: preferences?.active_provider || "ollama",
     preferencesRestoring: true,
     preferredProvider: preferences?.active_provider || "ollama",
@@ -442,6 +451,8 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     activeRequestModelId: null,
     activeRequestOllamaHost: null,
     requestBusy: false,
+    // Reported by the embedded llama.cpp chat while a reply is streaming.
+    chatBusy: false,
     comfyVramReleaseInFlight: false,
     vramHandoffInFlight: false,
     lyricsRequestBusy: false,
@@ -484,6 +495,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     ggufRuntimeDiagnostics: null,
     ggufRuntimeDiagnosticsLoading: false,
     runtimeWarningShown: false,
+    vramEstimateWarnedModel: null,
     refineRestore: null,
     lyricsRestore: null,
     lastModelPrompt: null,

@@ -3,7 +3,10 @@ from __future__ import annotations
 import copy
 import importlib.metadata
 import importlib.util
+import json
+import os
 import re
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -19,6 +22,8 @@ TESTED_WINDOWS_CUDA13_INSTALL_COMMAND = (
 )
 _CACHE: dict[str, Any] | None = None
 _CACHE_LOCK = threading.Lock()
+_NATIVE_PROBE_TIMEOUT_SECONDS = 30
+_NATIVE_PROBE_SCRIPT = Path(__file__).with_name("runtime_probe.py")
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:
@@ -74,6 +79,44 @@ def _module_available() -> bool:
         return False
 
 
+def _run_native_probe() -> tuple[dict[str, Any] | None, str | None]:
+    """Run the native backend check in a child process.
+
+    The probe reports whether llama.cpp's own CUDA backend and a GPU device are
+    registered, which package metadata alone cannot tell. A child process keeps
+    the native libraries out of the ComfyUI process.
+    """
+    environment = dict(os.environ)
+    environment.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(_NATIVE_PROBE_SCRIPT)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_NATIVE_PROBE_TIMEOUT_SECONDS,
+            cwd=str(_NATIVE_PROBE_SCRIPT.parent.parent),
+            env=environment,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as error:
+        return None, f"{type(error).__name__}: {error}"
+    for line in reversed((completed.stdout or "").splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and "ok" in payload:
+            return payload, None
+    stderr_lines = [line for line in (completed.stderr or "").strip().splitlines() if line.strip()]
+    detail = stderr_lines[-1] if stderr_lines else f"probe exited with code {completed.returncode}"
+    return None, detail[-400:]
+
+
 def _run_probe() -> dict[str, Any]:
     accelerator = _host_accelerator()
     result: dict[str, Any] = {
@@ -113,10 +156,42 @@ def _run_probe() -> dict[str, Any]:
         })
         return result
 
+    native, native_error = _run_native_probe()
+    if native is None:
+        result["warnings"].append(f"Native backend check did not complete: {native_error}")
+        result.update({
+            "status": "ok",
+            "message": "The llama-cpp-python package is available, but the native backend check could not confirm GPU offload.",
+        })
+        return result
+    if not native.get("ok"):
+        result.update({
+            "error_type": "NativeBackendError",
+            "error": str(native.get("error") or "native backend initialization failed"),
+            "message": "llama-cpp-python could not initialize its native backend.",
+        })
+        return result
+
+    gpu_offload = bool(native.get("cuda")) and bool(native.get("gpu_device"))
+    backend = "CUDA" if native.get("cuda") else ("CPU" if native.get("cpu") or native.get("device_count") else None)
     result.update({
         "status": "ok",
-        "message": "The llama-cpp-python package is available. Native compatibility is checked when a Direct GGUF model loads.",
+        "gpu_offload": gpu_offload,
+        "backend": backend,
+        "native": {
+            "registries": native.get("registries"),
+            "device_count": native.get("device_count"),
+            "cuda_backend": bool(native.get("cuda")),
+            "cpu_backend": bool(native.get("cpu")),
+        },
+        "message": (
+            "llama.cpp native CUDA backend is available."
+            if gpu_offload
+            else "llama.cpp is available, but no CUDA backend was detected; Direct GGUF will use CPU."
+        ),
     })
+    if not gpu_offload:
+        result["warnings"].append("The llama.cpp build does not expose a usable CUDA backend.")
     return result
 
 

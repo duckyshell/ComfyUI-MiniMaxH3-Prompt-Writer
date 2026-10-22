@@ -1,4 +1,5 @@
 import { mediaVisualDescriptor as defaultVisualDescriptor, referenceCaption } from "./media_visual.js";
+import { onLocaleChange, t, translateDom } from "./i18n.js";
 
 const ASPECTS = [
   ["auto", "Auto"], ["1:1", "1:1 — Square"], ["2:3", "2:3 — Portrait Photo"],
@@ -22,56 +23,56 @@ function markup(icon) {
   <div class="h3ps-preview-backdrop" data-close></div>
   <div class="h3ps-cmp-dialog" role="dialog" aria-labelledby="h3ps-cmp-title" tabindex="-1">
     <header>
-      <span><small>Media Composer</small><strong id="h3ps-cmp-title">Compose a new Picture</strong></span>
-      <div class="h3ps-cmp-shell-controls" data-shell-controls><button class="h3ps-icon-button" type="button" data-close aria-label="Close composer" title="Close (Esc)">${i("close", 18)}</button></div>
+      <span><small data-i18n="media.composer.title">${t("media.composer.title")}</small><strong id="h3ps-cmp-title" data-i18n="media.composer.heading">${t("media.composer.heading")}</strong></span>
+      <div class="h3ps-cmp-shell-controls" data-shell-controls><button class="h3ps-icon-button" type="button" data-close aria-label="${t("media.composer.close")}" data-i18n-aria-label="media.composer.close" title="${t("media.composer.close_title")}" data-i18n-title="media.composer.close_title">${i("close", 18)}</button></div>
     </header>
     <div class="h3ps-cmp-body">
       <aside class="h3ps-cmp-side">
         <section class="h3ps-cmp-block">
-          <div class="h3ps-cmp-block-head"><small>Sources</small><em data-source-count></em></div>
-          <p class="h3ps-cmp-hint">Click or drag onto canvas. Pictures keep their full frame; Videos use the prepared analysis sheet.</p>
-          <div class="h3ps-cmp-sources" data-sources role="group" aria-label="Available media"></div>
+          <div class="h3ps-cmp-block-head"><small data-i18n="media.composer.sources">${t("media.composer.sources")}</small><em data-source-count></em></div>
+          <p class="h3ps-cmp-hint" data-i18n="media.composer.sources_hint">${t("media.composer.sources_hint")}</p>
+          <div class="h3ps-cmp-sources" data-sources role="group" aria-label="${t("media.composer.available")}" data-i18n-aria-label="media.composer.available"></div>
         </section>
         <section class="h3ps-cmp-block">
-          <div class="h3ps-cmp-block-head"><small>On canvas</small><button class="h3ps-cmp-text-action" type="button" data-clear>Clear</button></div>
+          <div class="h3ps-cmp-block-head"><small data-i18n="media.composer.on_canvas">${t("media.composer.on_canvas")}</small><button class="h3ps-cmp-text-action" type="button" data-clear data-i18n="media.composer.clear">${t("media.composer.clear")}</button></div>
           <div class="h3ps-cmp-strip" data-strip></div>
         </section>
         <section class="h3ps-cmp-block">
-          <div class="h3ps-cmp-block-head"><small>Arrange &amp; Canvas</small><button class="h3ps-cmp-text-action" type="button" data-reset title="Restore arrangement and media sizes; keep sources and captions">Reset layout</button></div>
-          <div class="h3ps-cmp-control"><span>Arrange</span><div class="h3ps-cmp-segment" data-layout role="group" aria-label="Auto arrange"><button type="button" data-value="auto">Auto</button><button type="button" data-value="2">2 cols</button><button type="button" data-value="3">3 cols</button><button type="button" data-value="grid">Grid</button></div></div>
-          <div class="h3ps-cmp-control h3ps-cmp-aspect-control"><label for="h3ps-cmp-aspect">Canvas</label><select class="h3ps-cmp-select" id="h3ps-cmp-aspect" data-aspect>${ASPECTS.map(([v,l]) => `<option value="${v}">${v === "auto" ? l : v}</option>`).join("")}</select></div>
-          <div class="h3ps-cmp-control h3ps-cmp-output-control"><span>Output</span><div class="h3ps-cmp-output">
-            <div class="h3ps-cmp-segment" data-output-mode><button type="button" data-value="auto">Auto</button><button type="button" data-value="custom">Custom</button></div>
+          <div class="h3ps-cmp-block-head"><small data-i18n="media.composer.arrange_canvas">${t("media.composer.arrange_canvas")}</small><button class="h3ps-cmp-text-action" type="button" data-reset title="${t("media.composer.reset_layout_title")}" data-i18n-title="media.composer.reset_layout_title" data-i18n="media.composer.reset_layout">${t("media.composer.reset_layout")}</button></div>
+          <div class="h3ps-cmp-control"><span data-i18n="media.composer.arrange">${t("media.composer.arrange")}</span><div class="h3ps-cmp-segment" data-layout role="group" aria-label="${t("media.composer.auto_arrange")}" data-i18n-aria-label="media.composer.auto_arrange"><button type="button" data-value="auto" data-i18n="common.auto">${t("common.auto")}</button><button type="button" data-value="2" data-i18n="media.composer.cols2">${t("media.composer.cols2")}</button><button type="button" data-value="3" data-i18n="media.composer.cols3">${t("media.composer.cols3")}</button><button type="button" data-value="grid" data-i18n="media.composer.grid">${t("media.composer.grid")}</button></div></div>
+          <div class="h3ps-cmp-control h3ps-cmp-aspect-control"><label for="h3ps-cmp-aspect" data-i18n="media.composer.canvas">${t("media.composer.canvas")}</label><select class="h3ps-cmp-select" id="h3ps-cmp-aspect" data-aspect>${ASPECTS.map(([v,l]) => `<option value="${v}"${v === "auto" ? ` data-i18n="common.auto"` : ""}>${v === "auto" ? t("common.auto") : v}</option>`).join("")}</select></div>
+          <div class="h3ps-cmp-control h3ps-cmp-output-control"><span data-i18n="media.composer.output">${t("media.composer.output")}</span><div class="h3ps-cmp-output">
+            <div class="h3ps-cmp-segment" data-output-mode><button type="button" data-value="auto" data-i18n="common.auto">${t("common.auto")}</button><button type="button" data-value="custom" data-i18n="common.custom">${t("common.custom")}</button></div>
             <span class="h3ps-cmp-output-readout" data-output-readout></span>
             <div class="h3ps-cmp-output-custom" data-output-custom hidden>
-              <div class="h3ps-cmp-segment" data-output-input><button type="button" data-value="mp">MP</button><button type="button" data-value="dimensions">Dimensions</button></div>
-              <div class="h3ps-cmp-output-editor" data-mp-editor><input class="h3ps-cmp-number h3ps-cmp-mp" type="number" min="0.01" step="0.01" inputmode="decimal" data-mp aria-label="Output megapixels"><span>MP</span><small data-mp-calc></small></div>
-              <div class="h3ps-cmp-output-editor" data-dims-editor hidden><div class="h3ps-cmp-dimensions"><input class="h3ps-cmp-number" type="number" min="1" step="1" inputmode="numeric" data-width aria-label="Output width"><i>×</i><input class="h3ps-cmp-number" type="number" min="1" step="1" inputmode="numeric" data-height aria-label="Output height"></div><small data-dims-calc></small></div>
+              <div class="h3ps-cmp-segment" data-output-input><button type="button" data-value="mp">MP</button><button type="button" data-value="dimensions" data-i18n="media.composer.dimensions">${t("media.composer.dimensions")}</button></div>
+              <div class="h3ps-cmp-output-editor" data-mp-editor><input class="h3ps-cmp-number h3ps-cmp-mp" type="number" min="0.01" step="0.01" inputmode="decimal" data-mp aria-label="${t("media.composer.megapixels")}" data-i18n-aria-label="media.composer.megapixels"><span>MP</span><small data-mp-calc></small></div>
+              <div class="h3ps-cmp-output-editor" data-dims-editor hidden><div class="h3ps-cmp-dimensions"><input class="h3ps-cmp-number" type="number" min="1" step="1" inputmode="numeric" data-width aria-label="${t("media.composer.width")}" data-i18n-aria-label="media.composer.width"><i>×</i><input class="h3ps-cmp-number" type="number" min="1" step="1" inputmode="numeric" data-height aria-label="${t("media.composer.height")}" data-i18n-aria-label="media.composer.height"></div><small data-dims-calc></small></div>
             </div>
           </div></div>
-          <div class="h3ps-cmp-control"><label for="h3ps-cmp-gap">Gap</label><div class="h3ps-cmp-range"><input id="h3ps-cmp-gap" type="range" min="0" max="64" step="2" data-gap><output data-gap-out></output></div></div>
-          <div class="h3ps-cmp-control"><span>Placement</span><label class="h3ps-cmp-check"><input type="checkbox" data-snap checked>Snap to edges &amp; center</label></div>
+          <div class="h3ps-cmp-control"><label for="h3ps-cmp-gap" data-i18n="media.composer.gap">${t("media.composer.gap")}</label><div class="h3ps-cmp-range"><input id="h3ps-cmp-gap" type="range" min="0" max="64" step="2" data-gap><output data-gap-out></output></div></div>
+          <div class="h3ps-cmp-control"><span data-i18n="media.composer.placement">${t("media.composer.placement")}</span><label class="h3ps-cmp-check"><input type="checkbox" data-snap checked><span data-i18n="media.composer.snap">${t("media.composer.snap")}</span></label></div>
         </section>
       </aside>
       <div class="h3ps-cmp-stage">
         <div class="h3ps-cmp-stage-canvas" data-stage>
-          <canvas data-canvas width="1600" height="900" aria-label="Collage preview" hidden></canvas>
-          <div class="h3ps-cmp-empty" data-empty><span>${i("grid", 18)}</span><strong>Canvas is empty</strong>Click or drag Pictures or Video sheets from the left.</div>
-          <button class="h3ps-cmp-caption-add" type="button" data-caption-add hidden>${i("plus", 11)}Add caption</button>
+          <canvas data-canvas width="1600" height="900" aria-label="${t("media.composer.preview")}" data-i18n-aria-label="media.composer.preview" hidden></canvas>
+          <div class="h3ps-cmp-empty" data-empty><span>${i("grid", 18)}</span><strong data-i18n="media.composer.empty">${t("media.composer.empty")}</strong><small data-i18n="media.composer.empty_hint">${t("media.composer.empty_hint")}</small></div>
+          <button class="h3ps-cmp-caption-add" type="button" data-caption-add hidden>${i("plus", 11)}<span data-i18n="media.composer.add_caption">${t("media.composer.add_caption")}</span></button>
           <div class="h3ps-cmp-caption-inline" data-caption-inline hidden>
-            <textarea data-caption-input rows="1" placeholder="Add a caption…" aria-label="Caption" spellcheck="true"></textarea>
+            <textarea data-caption-input rows="1" placeholder="${t("media.composer.caption_placeholder")}" data-i18n-placeholder="media.composer.caption_placeholder" aria-label="${t("media.composer.caption")}" data-i18n-aria-label="media.composer.caption" spellcheck="true"></textarea>
             <i class="h3ps-cmp-caption-handle" data-caption-handle="left"></i><i class="h3ps-cmp-caption-handle" data-caption-handle="right"></i><i class="h3ps-cmp-caption-handle" data-caption-handle="scale"></i>
-            <button class="h3ps-cmp-caption-remove" type="button" data-caption-remove title="Remove caption" aria-label="Remove caption">${i("close", 11)}</button>
+            <button class="h3ps-cmp-caption-remove" type="button" data-caption-remove title="${t("media.composer.remove_caption")}" data-i18n-title="media.composer.remove_caption" aria-label="${t("media.composer.remove_caption")}" data-i18n-aria-label="media.composer.remove_caption">${i("close", 11)}</button>
           </div>
         </div>
-        <div class="h3ps-cmp-meta"><span data-meta-left></span><button class="h3ps-cmp-text-action" type="button" data-view-fit title="Reset zoom to fit; wheel to zoom, middle-drag to pan">Fit</button><span data-meta-right></span></div>
+        <div class="h3ps-cmp-meta"><span data-meta-left></span><button class="h3ps-cmp-text-action" type="button" data-view-fit title="${t("media.composer.fit_title")}" data-i18n-title="media.composer.fit_title" data-i18n="media.composer.fit">${t("media.composer.fit")}</button><span data-meta-right></span></div>
       </div>
     </div>
     <footer>
       <span data-footer-note></span>
-      <button class="h3ps-icon-button h3ps-cmp-copy-button" type="button" data-copy title="Copy PNG" aria-label="Copy PNG">${i("copy", 14)}</button>
-      <button class="h3ps-secondary-button" type="button" data-download>${i("download", 13)}Download</button>
-      <button class="h3ps-primary-button" type="button" data-add>${i("plus", 13)}Add as Picture</button>
+      <button class="h3ps-icon-button h3ps-cmp-copy-button" type="button" data-copy title="${t("media.composer.copy_png")}" data-i18n-title="media.composer.copy_png" aria-label="${t("media.composer.copy_png")}" data-i18n-aria-label="media.composer.copy_png">${i("copy", 14)}</button>
+      <button class="h3ps-secondary-button" type="button" data-download>${i("download", 13)}<span data-i18n="media.composer.download">${t("media.composer.download")}</span></button>
+      <button class="h3ps-primary-button" type="button" data-add>${i("plus", 13)}<span data-i18n="media.composer.add_picture">${t("media.composer.add_picture")}</span></button>
     </footer>
   </div>
 </section>`;
@@ -81,13 +82,13 @@ function imageFrom(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`Could not load media visual: ${src}`));
+    img.onerror = () => reject(new Error(t("media.composer.visual_failed", { src })));
     img.src = src;
   });
 }
 
 function canvasBlob(canvas) {
-  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not encode composed Picture.")), "image/png"));
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error(t("media.composer.encode_failed"))), "image/png"));
 }
 
 /**
@@ -160,12 +161,12 @@ export function createMediaComposer({
 
   async function loadVisual(asset) {
     const d = descriptor(asset);
-    if (!d) throw new Error("Unsupported media source.");
+    if (!d) throw new Error(t("media.composer.unsupported_source"));
     const key=String(asset.id),revision=state.visualRevision;
     if (d.bitmap) { state.visuals.set(key, d.bitmap); return d.bitmap; }
     if (state.visuals.has(key)) return state.visuals.get(key);
     if (state.visualPromises.has(key)) return state.visualPromises.get(key);
-    if (!d.src) throw new Error(`No visual source for ${asset.reference || asset.filename || asset.id}.`);
+    if (!d.src) throw new Error(t("media.composer.no_visual", { name: asset.reference || asset.filename || asset.id }));
     const promise = imageFrom(d.src).then((img) => {
       if(revision!==state.visualRevision)return null;
       const ar=(img.naturalWidth||img.width)/(img.naturalHeight||img.height);
@@ -399,27 +400,27 @@ export function createMediaComposer({
 
   function sourceThumb(asset) { return asset.type==="video" ? asset.contact_sheet_url : asset.preview_url || asset.content_url; }
   function sourceMeta(asset) {
-    if(asset.type==="video") { const n=asset.frames?.length || asset.frame_count || ""; return {kind:n?`Sheet · ${n}`:"Sheet", detail:"analysis sheet"}; }
-    return {kind:"Picture",detail:`${asset.width||"?"}×${asset.height||"?"}`};
+    if(asset.type==="video") { const n=asset.frames?.length || asset.frame_count || ""; return {kind:n?t("media.composer.sheet_count",{count:n}):t("media.composer.sheet"), detail:t("media.composer.analysis_sheet")}; }
+    return {kind:t("media.composer.picture"),detail:`${asset.width||"?"}×${asset.height||"?"}`};
   }
 
   function renderSources() {
     const list=state.assets.filter((a)=>a.type==="image"||a.type==="video"), audio=state.assets.filter((a)=>a.type==="audio").length;
-    dom.sourceCount.textContent=`${state.items.length} on canvas${audio?` · ${audio} audio skipped`:""}`;
-    dom.sources.innerHTML=list.map((a)=>{const selected=state.items.some((it)=>it.assetId===a.id),m=sourceMeta(a);return `<button class="h3ps-asset h3ps-cmp-source ${selected?"is-selected":""}" type="button" draggable="true" data-source-id="${esc(a.id)}" aria-pressed="${selected}"><span class="h3ps-asset-preview"><span class="h3ps-thumb-backdrop" style="background-image:url(&quot;${esc(sourceThumb(a)||"")}&quot;)"></span><img class="h3ps-real-thumb" draggable="false" src="${esc(sourceThumb(a)||"")}" alt=""></span><span class="h3ps-cmp-source-kind ${a.type==="video"?"is-sheet":""}">${esc(m.kind)}</span><span class="h3ps-asset-copy"><strong>${esc(a.reference||a.filename||"Media")}</strong><small>${esc(m.detail)}</small></span></button>`}).join("");
+    dom.sourceCount.textContent=t("media.composer.on_canvas_count",{count:state.items.length})+(audio?` · ${t("media.composer.audio_skipped",{count:audio})}`:"");
+    dom.sources.innerHTML=list.map((a)=>{const selected=state.items.some((it)=>it.assetId===a.id),m=sourceMeta(a);return `<button class="h3ps-asset h3ps-cmp-source ${selected?"is-selected":""}" type="button" draggable="true" data-source-id="${esc(a.id)}" aria-pressed="${selected}"><span class="h3ps-asset-preview"><span class="h3ps-thumb-backdrop" style="background-image:url(&quot;${esc(sourceThumb(a)||"")}&quot;)"></span><img class="h3ps-real-thumb" draggable="false" src="${esc(sourceThumb(a)||"")}" alt=""></span><span class="h3ps-cmp-source-kind ${a.type==="video"?"is-sheet":""}">${esc(m.kind)}</span><span class="h3ps-asset-copy"><strong>${esc(a.reference||a.filename||t("media.composer.media"))}</strong><small>${esc(m.detail)}</small></span></button>`}).join("");
   }
 
   function renderStrip() {
     dom.clear.disabled=!state.items.length;
-    if(!state.items.length){dom.strip.innerHTML=`<span class="h3ps-cmp-strip-empty">No items on canvas.</span>`;return}
-    dom.strip.innerHTML=state.items.map((it)=>{const a=itemAsset(it),custom=Math.abs(itemWeight(it)-1)>.03;return `<div class="h3ps-cmp-pill ${it.uid===state.selectedUid?"is-active":""}" data-item-id="${it.uid}"><span>${esc(a?.reference||"Missing")}</span>${custom?`<button type="button" data-action="reset-size" title="Reset media size preference" aria-label="Reset media size preference">↺</button>`:""}<button type="button" data-action="remove" title="Remove" aria-label="Remove">×</button></div>`}).join("");
+    if(!state.items.length){dom.strip.innerHTML=`<span class="h3ps-cmp-strip-empty">${esc(t("media.composer.no_items"))}</span>`;return}
+    dom.strip.innerHTML=state.items.map((it)=>{const a=itemAsset(it),custom=Math.abs(itemWeight(it)-1)>.03;return `<div class="h3ps-cmp-pill ${it.uid===state.selectedUid?"is-active":""}" data-item-id="${it.uid}"><span>${esc(a?.reference||t("media.composer.missing"))}</span>${custom?`<button type="button" data-action="reset-size" title="${t("media.composer.reset_size")}" aria-label="${t("media.composer.reset_size")}">↺</button>`:""}<button type="button" data-action="remove" title="${t("media.composer.remove")}" aria-label="${t("media.composer.remove")}">×</button></div>`}).join("");
   }
 
   function setActive(host,value) { $$(`button[data-value]`,host).forEach((b)=>{const on=b.dataset.value===value;b.classList.toggle("is-active",on);b.setAttribute("aria-pressed",String(on))}); }
   function renderControls() {
     normalizeLayoutMode();const n=state.items.length;setActive(dom.layout,n?state.layout:null);$$(`button`,dom.layout).forEach((b)=>b.disabled=!layoutAvailable(b.dataset.value));dom.reset.disabled=!n;
     dom.aspect.value=state.aspect;dom.gap.value=state.gap;dom.gap.style.setProperty("--h3ps-range",`${state.gap/64*100}%`);dom.gapOut.textContent=`${state.gap} px`;dom.snap.checked=state.snap;
-    const r=outputResolution(),mp=r.W*r.H/1e6;setActive(dom.outputMode,state.outputMode);dom.outputReadout.innerHTML=n?`<b>${r.W} × ${r.H}</b> · ${mp.toFixed(2)} MP`:"Add media to set output";dom.outputCustom.hidden=state.outputMode!=="custom";
+    const r=outputResolution(),mp=r.W*r.H/1e6;setActive(dom.outputMode,state.outputMode);dom.outputReadout.innerHTML=n?`<b>${r.W} × ${r.H}</b> · ${mp.toFixed(2)} MP`:t("media.composer.add_media_to_set_output");dom.outputCustom.hidden=state.outputMode!=="custom";
     setActive(dom.outputInput,state.outputInput);dom.mpEditor.hidden=state.outputInput!=="mp";dom.dimsEditor.hidden=state.outputInput!=="dimensions";dom.mp.value=(state.customPixels/1e6).toFixed(2);dom.width.value=r.W;dom.height.value=r.H;dom.mpCalc.textContent=`${r.W} × ${r.H}`;dom.dimsCalc.textContent=n?`${mp.toFixed(2)} MP`:"";dom.mpCalc.textContent=n?`${r.W} × ${r.H}`:"";dom.width.disabled=dom.height.disabled=!n;if(!n){dom.width.value="";dom.height.value=""}
   }
 
@@ -444,7 +445,7 @@ export function createMediaComposer({
     state.panY=clamp(state.panY,-Math.max(0,(h-ah)/2),Math.max(0,(h-ah)/2));
     Object.assign(dom.canvas.style,{width:w+"px",height:h+"px",left:((dom.stage.clientWidth-w)/2+state.panX)+"px",top:((dom.stage.clientHeight-h)/2+state.panY)+"px"});
 
-    $("[data-view-fit]").textContent=state.zoom===1?"Fit":Math.round(state.zoom*100)+"% · Fit";
+    $("[data-view-fit]").textContent=state.zoom===1?t("media.composer.fit"):t("media.composer.fit_zoom",{percent:Math.round(state.zoom*100)});
   }
 
   function resetView(){state.zoom=1;state.panX=state.panY=0;fitPreview();positionCaptionUI();}
@@ -458,10 +459,11 @@ export function createMediaComposer({
   function renderPreview() {
     renderControls();
     dom.canvas.hidden=!state.items.length;dom.empty.hidden=!!state.items.length;
-    if(!state.items.length){dom.metaLeft.textContent="—";dom.metaRight.textContent="Zero crop · source aspect locked";dom.footer.textContent="Add Pictures or Video sheets to compose.";dom.footer.classList.remove("is-warning");dom.copy.disabled=true;dom.download.disabled=true;dom.add.disabled=true;positionCaptionUI();return}
+    if(!state.items.length){dom.metaLeft.textContent="—";dom.metaRight.textContent=t("media.composer.zero_crop");dom.footer.textContent=t("media.composer.footer_empty");dom.footer.classList.remove("is-warning");dom.copy.disabled=true;dom.download.disabled=true;dom.add.disabled=true;positionCaptionUI();return}
     const r=outputResolution(),pr=previewResolution(r);dom.canvas.width=pr.W;dom.canvas.height=pr.H;drawOutput(dom.canvas.getContext("2d"),pr.W,pr.H,true);fitPreview();positionCaptionUI();requestAnimationFrame(positionCaptionUI);const mp=r.W*r.H/1e6;
-    dom.metaLeft.innerHTML=`<b>${r.W} × ${r.H}</b> · ${mp.toFixed(2)} MP · ${state.items.length} item${state.items.length===1?"":"s"} · ${state.aspect==="auto"?"content-fit":state.aspect}`;dom.metaRight.textContent="Zero crop · source aspect locked";
-    const availability=addState();dom.footer.classList.toggle("is-warning",!availability.allowed);dom.footer.textContent=availability.message||`${availability.reference?`Becomes ${availability.reference} · `:""}snapshot PNG ${r.W}×${r.H}`;dom.copy.disabled=false;dom.download.disabled=false;dom.add.disabled=!availability.allowed;
+    const items=t(state.items.length===1?"media.composer.items_one":"media.composer.items_other",{count:state.items.length});
+    dom.metaLeft.innerHTML=`<b>${r.W} × ${r.H}</b> · ${mp.toFixed(2)} MP · ${items} · ${state.aspect==="auto"?t("media.composer.content_fit"):state.aspect}`;dom.metaRight.textContent=t("media.composer.zero_crop");
+    const availability=addState();dom.footer.classList.toggle("is-warning",!availability.allowed);dom.footer.textContent=availability.message||`${availability.reference?`${t("media.composer.becomes",{reference:availability.reference})} · `:""}${t("media.composer.snapshot",{width:r.W,height:r.H})}`;dom.copy.disabled=false;dom.download.disabled=false;dom.add.disabled=!availability.allowed;
   }
 
   function renderAll() { renderSources();renderStrip();renderControls();renderPreview(); }
@@ -541,7 +543,7 @@ export function createMediaComposer({
   });
   dom.stage.addEventListener("dragover",(e)=>{e.preventDefault();e.dataTransfer.dropEffect="copy";dom.stage.classList.add("is-dragover")});
   dom.stage.addEventListener("dragleave",()=>dom.stage.classList.remove("is-dragover"));
-  dom.stage.addEventListener("drop",(e)=>{e.preventDefault();dom.stage.classList.remove("is-dragover");const id=e.dataTransfer.getData("text/plain"),asset=state.assetMap.get(id);if(!asset)return;if(state.items.some((it)=>it.assetId===id)){notify("info",`${asset.reference||"Media"} is already on canvas.`);return}endCaption();const p=dropPoint(e),it=createItem(asset,p.x,p.y);if(!it)return;state.items.push(it);state.selectedUid=it.uid;loadVisual(asset).then(renderPreview).catch((err)=>notify("error",err.message));normalizeCanvas();renderAll()});
+  dom.stage.addEventListener("drop",(e)=>{e.preventDefault();dom.stage.classList.remove("is-dragover");const id=e.dataTransfer.getData("text/plain"),asset=state.assetMap.get(id);if(!asset)return;if(state.items.some((it)=>it.assetId===id)){notify("info",t("media.composer.already",{reference:asset.reference||t("media.composer.media")}));return}endCaption();const p=dropPoint(e),it=createItem(asset,p.x,p.y);if(!it)return;state.items.push(it);state.selectedUid=it.uid;loadVisual(asset).then(renderPreview).catch((err)=>notify("error",err.message));normalizeCanvas();renderAll()});
 
   dom.canvas.addEventListener("pointerdown",(e)=>{if(e.button!==0)return;const hit=hitTest(canvasPoint(e));e.preventDefault();endCaption();const p=canvasPoint(e);if(!hit.it){state.selectedUid=null;renderStrip();renderPreview();return}state.selectedUid=hit.it.uid;e.preventDefault();if(hit.handle==="caption"){startCaption(hit.it);return}state.drag={type:hit.handle==="body"?"move":"resize",handle:hit.handle,it:hit.it,start:p,initialArea:hit.it.w*hit.it.h,orig:{x:hit.it.x,y:hit.it.y,w:hit.it.w,h:hit.it.h,weight:itemWeight(hit.it)}};dom.canvas.setPointerCapture(e.pointerId);renderStrip();renderPreview()});
   dom.canvas.addEventListener("pointermove",(e)=>{if(!state.drag){const h=hitTest(canvasPoint(e)).handle;dom.canvas.style.cursor=h==="caption"?"text":h==="body"?"move":h?`${h}-resize`:"default";return}const p=canvasPoint(e),d=state.drag,it=d.it,dx=p.x-d.start.x,dy=p.y-d.start.y;if(d.type==="move"){const pos=snapMove(it,d.orig.x+dx,d.orig.y+dy);it.x=pos.x;it.y=pos.y}else{const w=resizedWidth(d.orig,d.handle,dx,dy,it.ar),h=w/it.ar;if(d.handle.includes("w"))it.x=d.orig.x+(d.orig.w-w);if(d.handle.includes("n"))it.y=d.orig.y+(d.orig.h-h);it.w=w;it.h=h}renderPreview()});
@@ -575,10 +577,10 @@ export function createMediaComposer({
     if(!state.items.length||dom.copy.disabled)return;
     dom.copy.disabled=true;
     try {
-      if(!navigator.clipboard?.write||typeof ClipboardItem!=="function")throw new Error("Image clipboard is not available in this browser.");
+      if(!navigator.clipboard?.write||typeof ClipboardItem!=="function")throw new Error(t("media.composer.clipboard_unavailable"));
       const png=exportPicture().then((payload)=>payload.blob);
       await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
-      notify("info","Composition copied as PNG.");
+      notify("info",t("media.composer.copied"));
     } catch (error) { notify("error",error?.message||String(error)); }
     finally { dom.copy.disabled=!state.items.length; }
   }
@@ -617,6 +619,11 @@ export function createMediaComposer({
     for(const it of state.items){const d=descriptor(itemAsset(it));if(d)updateItemAspect(it,d.ar)}
     if(state.selectedUid&&!state.items.some((it)=>it.uid===state.selectedUid))state.selectedUid=null;
   }
+
+  const offLocale = onLocaleChange(() => {
+    translateDom(el);
+    if (state.open) renderAll();
+  });
 
   function open({ assets = [], trigger = null } = {}) {
     if (state.open) return;
@@ -673,7 +680,7 @@ export function createMediaComposer({
     onOpenChange(false);
     state.returnFocus?.focus?.({ preventScroll: true });
   }
-  function destroy() { close();resizeObserver.disconnect();document.removeEventListener("keydown",onKey);window.removeEventListener("resize",onResize);el.remove();state.visuals.clear();state.visualPromises.clear(); }
+  function destroy() { offLocale();close();resizeObserver.disconnect();document.removeEventListener("keydown",onKey);window.removeEventListener("resize",onResize);el.remove();state.visuals.clear();state.visualPromises.clear(); }
 
   renderControls();
   return {open,close,destroy,setAssets};

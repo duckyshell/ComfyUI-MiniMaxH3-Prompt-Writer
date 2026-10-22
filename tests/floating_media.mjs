@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { configureI18n, setLanguagePreference } from "../web/i18n.js";
 import { createFloatingMediaPanel } from "../web/floating_media.js";
 
 function fixture(t) {
@@ -123,4 +124,23 @@ test("close or suspend aborts a transfer; reopening permits a new drop without s
   f.panel.suspend(true); assert.equal(f.transfers[2].signal.aborted, true);
   f.transfers[2].resolve(); await suspendedDrop;
   assert.equal(f.root.hidden, true); f.panel.destroy();
+});
+
+test("panel labels and cards follow language switches", async t => {
+  configureI18n({ preference: "en", navigatorLanguage: "en-US" });
+  const f = fixture(t); f.panel.open();
+  try {
+    setLanguagePreference("zh-CN");
+    assert.equal(f.root.attrs["aria-label"], "Prompt Writer 媒体");
+    assert.equal(f.root.status.textContent, "原始或最新已应用媒体 · 不自动同步");
+    assert.equal(f.root.cards.children[0].children[1].children[0].textContent, "需要裁剪");
+    assert.match(f.root.cards.children[0].title, /需要裁剪/);
+    setLanguagePreference("en");
+    assert.equal(f.root.status.textContent, "Original or latest Applied media · no auto-sync");
+    assert.equal(f.root.cards.children[0].children[1].children[0].textContent, "Trim required");
+  } finally {
+    setLanguagePreference("en");
+    f.panel.destroy();
+    configureI18n({ preference: "auto", navigatorLanguage: "en-US" });
+  }
 });

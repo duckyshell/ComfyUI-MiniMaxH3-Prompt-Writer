@@ -20,12 +20,12 @@ test('editor keeps draft and source separate and requests actual frame timestamp
   assert.match(js,/current.source_url\s*\|\|\s*current.content_url/);
   assert.match(js,/serial\('frame',\{time:t,direction:step\}\)/);
   assert.doesNotMatch(js,/1\s*\/\s*30|toDataURL|drawImage\(video/);
-  assert.match(js,/data-ed-sheet alt="Media representation"/);
+  assert.match(js,/data-ed-sheet alt="\$\{t\("media\.editor\.sheet_alt"\)\}"/);
 });
 test('editor uses explicit Apply, local draft controls and independent cropped frame actions',()=>{
   const js=readFileSync(new URL('../web/media_editor.js',import.meta.url),'utf8');
   assert.doesNotMatch(js,/schedulePreview|serial\('preview'|setTimeout\(async/);
-  assert.match(js,/data-ed-save>Apply/);
+  assert.match(js,/data-ed-save>\$\{t\("media\.editor\.apply"\)\}/);
   assert.match(js,/type="range" min="2" max="24"/);
   assert.match(js,/data-ed-custom-row hidden/);
   assert.doesNotMatch(js,/data-ed-dimension=|<select data-ed-ratio/);

@@ -3,6 +3,8 @@ from __future__ import annotations
 import atexit
 import ctypes
 import gc
+import io
+import re
 import sys
 import threading
 import time
@@ -31,6 +33,86 @@ _MTMD_CONTINUE_LEVEL = 5
 
 def _write_console(message: str) -> None:
     print(f"{CONSOLE_PREFIX} {message}", file=sys.stderr, flush=True)
+
+
+_NATIVE_INFO_VERBOSITY = 3
+_NATIVE_LAYER_RE = re.compile(r"load_tensors:\s+offloaded\s+(\d+)/(\d+)\s+layers to GPU")
+_NATIVE_DEVICE_RE = re.compile(r"llama_prepare_model_devices:\s+using device\s+(\S+)\s+\(([^)]+)\)")
+_NATIVE_BACKEND_RE = re.compile(r"load_backend:\s+loaded\s+(\S+)\s+backend")
+_NATIVE_MODEL_BUFFER_RE = re.compile(r"load_tensors:\s+(\S+)\s+model buffer size\s*=\s*([\d.]+)\s+MiB")
+_NATIVE_KV_BUFFER_RE = re.compile(r"llama_kv_cache:\s+(\S+)\s+KV buffer size\s*=\s*([\d.]+)\s+MiB")
+
+
+def _parse_native_load_report(text: str) -> dict[str, Any]:
+    backends: list[str] = []
+    model_buffers: dict[str, float] = {}
+    kv_buffers: dict[str, float] = {}
+    device: tuple[str, str] | None = None
+    offloaded_layers: int | None = None
+    total_layers: int | None = None
+    for line in (text or "").splitlines():
+        match = _NATIVE_BACKEND_RE.search(line)
+        if match and match.group(1) not in backends:
+            backends.append(match.group(1))
+        match = _NATIVE_DEVICE_RE.search(line)
+        if match:
+            device = (match.group(1), match.group(2).strip())
+        match = _NATIVE_LAYER_RE.search(line)
+        if match:
+            offloaded_layers, total_layers = int(match.group(1)), int(match.group(2))
+        match = _NATIVE_MODEL_BUFFER_RE.search(line)
+        if match:
+            model_buffers[match.group(1)] = float(match.group(2))
+        match = _NATIVE_KV_BUFFER_RE.search(line)
+        if match:
+            kv_buffers[match.group(1)] = float(match.group(2))
+    return {
+        "backends": backends,
+        "device": device,
+        "offloaded_layers": offloaded_layers,
+        "total_layers": total_layers,
+        "model_buffers_mb": model_buffers,
+        "kv_buffers_mb": kv_buffers,
+    }
+
+
+@contextmanager
+def _capture_native_load_logs():
+    """Capture llama.cpp INFO output emitted while a model loads.
+
+    The native logger writes through ``llama_cpp._logger._config``. Swapping
+    only that stream keeps the rest of the process untouched and lets the
+    loader report which backend actually handled the model.
+    """
+    buffer = io.StringIO()
+    config = None
+    previous_stream = None
+    previous_verbosity = None
+    try:
+        from llama_cpp import _logger
+
+        config = _logger._config
+        previous_stream = config.stderr
+        previous_verbosity = getattr(config, "verbosity", None)
+        config.stderr = buffer
+    except Exception:
+        config = None
+    try:
+        yield buffer, config is not None
+    finally:
+        if config is not None:
+            config.stderr = previous_stream
+            if previous_verbosity is not None:
+                config.verbosity = previous_verbosity
+
+
+def _native_backend_state() -> tuple[int | None, bool | None]:
+    try:
+        from llama_cpp._ggml import ggml_backend_reg_by_name, ggml_backend_reg_count
+
+        return int(ggml_backend_reg_count()), bool(ggml_backend_reg_by_name(b"CUDA"))
+    except Exception:
+        return None, None
 
 
 def _configure_mtmd_logging(mtmd_cpp: Any) -> None:
@@ -189,6 +271,41 @@ class GGUFBackend:
 
     def _console(self, message: str) -> None:
         _write_console(message)
+
+    def _report_load_runtime(self, native_log: str, captured: bool) -> None:
+        if not captured:
+            self._console("Runtime · native backend details unavailable")
+            return
+        report = _parse_native_load_report(native_log)
+        registry_count, cuda_registered = _native_backend_state()
+        backends = list(report["backends"])
+        if registry_count is not None:
+            cuda_label = "CUDA registered" if cuda_registered else "CUDA unavailable"
+            self._console(f"Runtime · ggml backends {registry_count} · {cuda_label}")
+        elif backends:
+            self._console(f"Runtime · backends {', '.join(backends)}")
+        device = report["device"]
+        if device:
+            self._console(f"Runtime · using device {device[0]} ({device[1]})")
+        if report["model_buffers_mb"]:
+            buffers = " · ".join(
+                f"{name} {size:.0f} MiB" for name, size in report["model_buffers_mb"].items()
+            )
+            self._console(f"Runtime · model buffers · {buffers}")
+        offloaded, total = report["offloaded_layers"], report["total_layers"]
+        if offloaded is not None and total:
+            self._console(f"GPU offload · {offloaded}/{total} layers")
+            if offloaded == 0:
+                self._console("Warning: 0 layers were offloaded to GPU; inference will run on CPU")
+            elif offloaded < total:
+                self._console(
+                    f"Warning: only {offloaded}/{total} layers were offloaded to GPU; inference will be slower"
+                )
+        else:
+            self._console("Warning: the native loader did not report GPU layer offload")
+        cuda_available = cuda_registered if cuda_registered is not None else ("CUDA" in backends)
+        if cuda_available is False:
+            self._console("Warning: the CUDA backend is not registered; inference will run on CPU")
 
     def _count_preflight_text_tokens(self, model_info: dict[str, Any], text: str) -> int:
         try:
@@ -349,9 +466,13 @@ class GGUFBackend:
                 if mtmd_cpp is not None:
                     _configure_mtmd_logging(mtmd_cpp)
                 llama_options["chat_handler"] = self.chat_handler
-            self.model = Llama(**llama_options)
+            with _capture_native_load_logs() as (native_log, native_captured):
+                if native_captured:
+                    llama_options["verbosity"] = _NATIVE_INFO_VERBOSITY
+                self.model = Llama(**llama_options)
             self.model_id = model_info["id"]
             self.runtime_signature = signature
+            self._report_load_runtime(native_log.getvalue(), native_captured)
         except MemoryError as error:
             self.unload()
             raise ModelError("MODEL_LOAD_OOM", "The GGUF model did not fit in available memory.") from error

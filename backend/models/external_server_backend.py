@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import http.client
 import json
 import logging
+import math
 import threading
+import time
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlencode
 
@@ -21,6 +25,297 @@ from .external_lifecycle import RouterLifecycle
 DEFAULT_SERVER_URL = "http://127.0.0.1:8080"
 CONNECT_TIMEOUT_SECONDS = 3
 REQUEST_TIMEOUT_SECONDS = 900
+CHAT_MAX_MESSAGES = 200
+CHAT_MAX_TOTAL_CHARACTERS = 400_000
+CHAT_MAX_OUTPUT_TOKENS = 131_072
+CHAT_MAX_IMAGES_PER_MESSAGE = 4
+CHAT_MAX_VIDEOS_PER_MESSAGE = 1
+CHAT_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+CHAT_MAX_VIDEO_BYTES = 10 * 1024 * 1024
+CHAT_MAX_TOTAL_MEDIA_BYTES = 48 * 1024 * 1024
+CHAT_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+CHAT_VIDEO_MIME_TYPES = {"video/mp4", "video/webm", "video/mpeg"}
+CHAT_ROLES = {"system", "user", "assistant"}
+LOGGER = logging.getLogger(__name__)
+
+
+def _chat_data_url(url: Any, *, label: str, allowed_types: set[str], max_bytes: int, details: dict[str, Any]) -> int:
+    """Validate one media data URL and return its decoded size in bytes."""
+    if not isinstance(url, str) or not url.startswith("data:"):
+        raise ModelError("INVALID_REQUEST", f"{label} attachments must be data URLs.", details)
+    header, separator, payload = url[5:].partition(",")
+    if not separator or ";base64" not in header.lower():
+        raise ModelError("INVALID_REQUEST", f"{label} attachments must be base64 data URLs.", details)
+    mime = header.split(";", 1)[0].strip().lower()
+    if mime not in allowed_types:
+        raise ModelError(
+            "INVALID_REQUEST",
+            f"{label} type {mime or 'unknown'} is not supported.",
+            {**details, "mime": mime},
+        )
+    estimated_bytes = len(payload) * 3 // 4
+    if estimated_bytes > max_bytes + 3:
+        raise ModelError(
+            "INVALID_REQUEST",
+            f"{label} attachments are limited to {max_bytes // (1024 * 1024)} MB.",
+            {**details, "bytes": estimated_bytes},
+        )
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        raise ModelError("INVALID_REQUEST", f"{label} attachment is not valid base64.", details) from None
+    if not raw:
+        raise ModelError("INVALID_REQUEST", f"{label} attachment is empty.", details)
+    if len(raw) > max_bytes:
+        raise ModelError(
+            "INVALID_REQUEST",
+            f"{label} attachments are limited to {max_bytes // (1024 * 1024)} MB.",
+            {**details, "bytes": len(raw)},
+        )
+    return len(raw)
+
+
+def _chat_content(content: Any, index: int, totals: dict[str, int]) -> tuple[str | list[dict[str, Any]], int]:
+    """Normalize one message body, returning it plus its text character count."""
+    if isinstance(content, str):
+        return content, len(content)
+    if not isinstance(content, list) or not content:
+        raise ModelError("INVALID_REQUEST", "Every chat message needs text or media content.", {"index": index})
+    parts: list[dict[str, Any]] = []
+    text_characters = 0
+    image_count = 0
+    video_count = 0
+    for part_index, part in enumerate(content):
+        details = {"index": index, "part": part_index}
+        if not isinstance(part, dict):
+            raise ModelError("INVALID_REQUEST", "Every content part must be an object.", details)
+        kind = part.get("type")
+        if kind == "text":
+            text = part.get("text")
+            if not isinstance(text, str):
+                raise ModelError("INVALID_REQUEST", "Text content parts need a text string.", details)
+            if not text:
+                continue
+            text_characters += len(text)
+            parts.append({"type": "text", "text": text})
+            continue
+        if kind == "image_url":
+            payload = part.get("image_url")
+            url = payload.get("url") if isinstance(payload, dict) else None
+            image_count += 1
+            if image_count > CHAT_MAX_IMAGES_PER_MESSAGE:
+                raise ModelError(
+                    "INVALID_REQUEST",
+                    f"Messages accept at most {CHAT_MAX_IMAGES_PER_MESSAGE} images.",
+                    details,
+                )
+            size = _chat_data_url(
+                url,
+                label="Image",
+                allowed_types=CHAT_IMAGE_MIME_TYPES,
+                max_bytes=CHAT_MAX_IMAGE_BYTES,
+                details=details,
+            )
+            totals["images"] += 1
+            totals["image_bytes"] += size
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        elif kind == "video_url":
+            payload = part.get("video_url")
+            url = payload.get("url") if isinstance(payload, dict) else None
+            video_count += 1
+            if video_count > CHAT_MAX_VIDEOS_PER_MESSAGE:
+                raise ModelError(
+                    "INVALID_REQUEST",
+                    f"Messages accept at most {CHAT_MAX_VIDEOS_PER_MESSAGE} video.",
+                    details,
+                )
+            size = _chat_data_url(
+                url,
+                label="Video",
+                allowed_types=CHAT_VIDEO_MIME_TYPES,
+                max_bytes=CHAT_MAX_VIDEO_BYTES,
+                details=details,
+            )
+            totals["videos"] += 1
+            totals["video_bytes"] += size
+            parts.append({"type": "video_url", "video_url": {"url": url}})
+        else:
+            raise ModelError("INVALID_REQUEST", f"Unsupported content part type {kind!r}.", details)
+        total_media_bytes = totals["image_bytes"] + totals["video_bytes"]
+        if total_media_bytes > CHAT_MAX_TOTAL_MEDIA_BYTES:
+            raise ModelError(
+                "INVALID_REQUEST",
+                f"Attached media is limited to {CHAT_MAX_TOTAL_MEDIA_BYTES // (1024 * 1024)} MB per request.",
+                {**details, "bytes": total_media_bytes},
+            )
+    if not parts:
+        raise ModelError("INVALID_REQUEST", "Every chat message needs text or media content.", {"index": index})
+    return parts, text_characters
+
+
+def normalize_chat_messages(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list) or not messages:
+        raise ModelError("INVALID_REQUEST", "Chat requires at least one message.")
+    if len(messages) > CHAT_MAX_MESSAGES:
+        raise ModelError("INVALID_REQUEST", f"Chat accepts at most {CHAT_MAX_MESSAGES} messages.")
+    normalized: list[dict[str, Any]] = []
+    total_characters = 0
+    totals = {"images": 0, "videos": 0, "image_bytes": 0, "video_bytes": 0}
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            raise ModelError("INVALID_REQUEST", "Every chat message must be an object.")
+        role = message.get("role")
+        if role not in CHAT_ROLES:
+            raise ModelError("INVALID_REQUEST", "Chat roles must be system, user, or assistant.", {"index": index})
+        content, characters = _chat_content(message.get("content"), index, totals)
+        total_characters += characters
+        if total_characters > CHAT_MAX_TOTAL_CHARACTERS:
+            raise ModelError("INVALID_REQUEST", "The chat history is too large for one request.")
+        normalized.append({"role": role, "content": content})
+    if not any(message["role"] == "user" for message in normalized):
+        raise ModelError("INVALID_REQUEST", "Chat requires a user message.")
+    if totals["images"] or totals["videos"]:
+        LOGGER.info(
+            "Chat media accepted: images=%d videos=%d image_bytes=%d video_bytes=%d",
+            totals["images"],
+            totals["videos"],
+            totals["image_bytes"],
+            totals["video_bytes"],
+        )
+    return normalized
+
+
+def count_chat_media(messages: list[dict[str, Any]]) -> tuple[int, int]:
+    images = 0
+    videos = 0
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "image_url":
+                images += 1
+            elif part.get("type") == "video_url":
+                videos += 1
+    return images, videos
+
+
+def normalize_chat_options(payload: dict[str, Any]) -> dict[str, Any]:
+    def bounded_number(name: str, default: float, minimum: float, maximum: float) -> float:
+        value = payload.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ModelError("INVALID_REQUEST", f"{name} must be a number.")
+        value = float(value)
+        if not math.isfinite(value) or value < minimum or value > maximum:
+            raise ModelError("INVALID_REQUEST", f"{name} is outside the supported range.")
+        return value
+
+    def optional_integer(name: str, minimum: int, maximum: int) -> int | None:
+        value = payload.get(name)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum or value > maximum:
+            raise ModelError("INVALID_REQUEST", f"{name} must be an integer between {minimum} and {maximum}.")
+        return value
+
+    top_k = optional_integer("top_k", 0, 500)
+    thinking = payload.get("thinking", True)
+    if not isinstance(thinking, bool):
+        raise ModelError("INVALID_REQUEST", "thinking must be a boolean.")
+    keep_loaded = payload.get("keep_loaded", False)
+    if not isinstance(keep_loaded, bool):
+        raise ModelError("INVALID_REQUEST", "keep_loaded must be a boolean.")
+    return {
+        "temperature": bounded_number("temperature", 0.8, 0.0, 2.0),
+        "top_p": bounded_number("top_p", 0.95, 0.0, 1.0),
+        "top_k": 40 if top_k is None else top_k,
+        "max_tokens": optional_integer("max_tokens", 1, CHAT_MAX_OUTPUT_TOKENS),
+        "seed": optional_integer("seed", 0, 2**63 - 1),
+        "thinking": thinking,
+        "keep_loaded": keep_loaded,
+    }
+
+
+class _ChatStreamSplitter:
+    """Split content deltas that embed <think> reasoning when the server sends no reasoning deltas."""
+
+    OPEN_TAG = "<think>"
+    CLOSE_TAG = "</think>"
+
+    def __init__(self) -> None:
+        self._state = "undecided"
+        self._buffer = ""
+        self._reasoning_seen = False
+
+    def feed_reasoning(self, text: str) -> tuple[tuple[str, str], ...]:
+        if not text:
+            return ()
+        events: tuple[tuple[str, str], ...] = ()
+        if self._buffer and self._state != "content":
+            events = (("content", self._buffer),)
+            self._buffer = ""
+            self._state = "content"
+        self._reasoning_seen = True
+        return (*events, ("reasoning", text))
+
+    def feed_content(self, text: str) -> tuple[tuple[str, str], ...]:
+        if not text:
+            return ()
+        if self._reasoning_seen or self._state == "content":
+            return (("content", text),)
+        self._buffer += text
+        return self._drain(final=False)
+
+    def flush(self) -> tuple[tuple[str, str], ...]:
+        return self._drain(final=True)
+
+    def _drain(self, *, final: bool) -> tuple[tuple[str, str], ...]:
+        events: list[tuple[str, str]] = []
+        while self._buffer:
+            if self._state == "undecided":
+                stripped = self._buffer.lstrip()
+                if not stripped:
+                    if final:
+                        events.append(("content", self._buffer))
+                        self._buffer = ""
+                    break
+                if stripped.startswith(self.OPEN_TAG):
+                    self._buffer = stripped[len(self.OPEN_TAG):]
+                    self._state = "reasoning"
+                    continue
+                if not final and self.OPEN_TAG.startswith(stripped):
+                    break
+                events.append(("content", self._buffer))
+                self._buffer = ""
+                self._state = "content"
+                break
+            if self._state == "reasoning":
+                closing = self._buffer.find(self.CLOSE_TAG)
+                if closing >= 0:
+                    if closing:
+                        events.append(("reasoning", self._buffer[:closing]))
+                    self._buffer = self._buffer[closing + len(self.CLOSE_TAG):]
+                    self._state = "content"
+                    continue
+                if final:
+                    events.append(("reasoning", self._buffer))
+                    self._buffer = ""
+                    break
+                keep = 0
+                for size in range(min(len(self._buffer), len(self.CLOSE_TAG) - 1), 0, -1):
+                    if self._buffer.endswith(self.CLOSE_TAG[:size]):
+                        keep = size
+                        break
+                emit = self._buffer[:-keep] if keep else self._buffer
+                if emit:
+                    events.append(("reasoning", emit))
+                self._buffer = self._buffer[-keep:] if keep else ""
+                break
+            events.append(("content", self._buffer))
+            self._buffer = ""
+        return tuple(events)
 
 
 def _split_embedded_reasoning(content: str) -> tuple[str, str | None]:
@@ -120,9 +415,12 @@ class ExternalServerBackend:
         self.model_id: str | None = None
         self.chat_handler: _RemoteChatHandler | None = None
         self.cancel_event = threading.Event()
+        self.chat_cancel_event = threading.Event()
         self.lock = threading.RLock()
         self._connection: http.client.HTTPConnection | None = None
         self._connection_lock = threading.Lock()
+        self._chat_connection: http.client.HTTPConnection | None = None
+        self._chat_connection_lock = threading.Lock()
         self._keys = {}
         self.router = RouterLifecycle(self._request_json)
         self._unload_requested = threading.Event()
@@ -156,6 +454,21 @@ class ExternalServerBackend:
     def request_unload(self) -> bool:
         self._unload_requested.set()
         return self.cancel()
+
+    def prepare_chat(self) -> None:
+        self.chat_cancel_event.clear()
+
+    def cancel_chat(self) -> bool:
+        self.chat_cancel_event.set()
+        with self._chat_connection_lock:
+            connection = self._chat_connection
+        if connection is not None:
+            try:
+                connection.close()
+            except OSError:
+                pass
+        LOGGER.info("External chat cancellation requested.")
+        return True
 
     def unload(self, model_id):
         with self.lock:
@@ -339,6 +652,233 @@ class ExternalServerBackend:
             "choices": [{"message": message, "finish_reason": finish_reason or "stop"}],
             "usage": usage,
         }
+
+    def _stream_chat_completion(
+        self,
+        endpoint: str,
+        payload: dict[str, Any],
+        on_delta: Callable[[str, str], None],
+    ) -> dict[str, Any]:
+        parsed = urlsplit(endpoint)
+        connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        connection = connection_type(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), timeout=REQUEST_TIMEOUT_SECONDS)
+        body = json.dumps(payload).encode("utf-8")
+        with self._chat_connection_lock:
+            self._chat_connection = connection
+        splitter = _ChatStreamSplitter()
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        finish_reason = None
+        terminal_received = False
+        usage: dict[str, Any] = {}
+
+        def emit(events: tuple[tuple[str, str], ...]) -> None:
+            for kind, text in events:
+                if kind == "reasoning":
+                    reasoning_parts.append(text)
+                else:
+                    content_parts.append(text)
+                on_delta(kind, text)
+
+        try:
+            connection.request(
+                "POST",
+                "/v1/chat/completions",
+                body=body,
+                headers={"Accept": "text/event-stream", "Content-Type": "application/json", **self._auth_headers(endpoint)},
+            )
+            response = connection.getresponse()
+            if not 200 <= response.status < 300:
+                raw = response.read()
+                try:
+                    data = json.loads(raw.decode("utf-8")) if raw else {}
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    data = {}
+                remote_error = data.get("error") if isinstance(data, dict) else None
+                message = remote_error.get("message") if isinstance(remote_error, dict) else None
+                raise ModelError(
+                    "EXTERNAL_SERVER_ERROR",
+                    self._redact(message) if message else f"The llama.cpp server returned HTTP {response.status}.",
+                    {"url": endpoint, "status": response.status, "response": self._redact(data)},
+                )
+            while True:
+                if self.chat_cancel_event.is_set():
+                    raise ModelError("GENERATION_CANCELLED", "Chat was cancelled.")
+                line = response.readline()
+                if not line:
+                    break
+                decoded = line.decode("utf-8", errors="replace").strip()
+                if not decoded.startswith("data:"):
+                    continue
+                event = decoded[5:].strip()
+                if event == "[DONE]":
+                    terminal_received = True
+                    break
+                try:
+                    chunk = json.loads(event)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(chunk, dict):
+                    continue
+                if isinstance(chunk.get("usage"), dict):
+                    usage = chunk["usage"]
+                choices = chunk.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0] if isinstance(choices[0], dict) else {}
+                delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+                text = delta.get("content")
+                if isinstance(text, str) and text:
+                    emit(splitter.feed_content(text))
+                reasoning = delta.get("reasoning_content")
+                if isinstance(reasoning, str) and reasoning:
+                    emit(splitter.feed_reasoning(reasoning))
+                if choice.get("finish_reason") is not None:
+                    finish_reason = choice["finish_reason"]
+        except ModelError:
+            raise
+        except (OSError, TimeoutError, AttributeError, ValueError, http.client.HTTPException) as error:
+            if self.chat_cancel_event.is_set():
+                raise ModelError("GENERATION_CANCELLED", "Chat was cancelled.") from error
+            raise ModelError(
+                "EXTERNAL_SERVER_UNAVAILABLE",
+                "The connection to the local llama.cpp server was interrupted.",
+                {"url": endpoint, "reason": self._redact(error)},
+            ) from error
+        finally:
+            try:
+                emit(splitter.flush())
+            finally:
+                with self._chat_connection_lock:
+                    if self._chat_connection is connection:
+                        self._chat_connection = None
+                connection.close()
+        if not terminal_received and finish_reason is None:
+            raise ModelError(
+                "EXTERNAL_STREAM_INTERRUPTED",
+                "The chat stream ended before completion.",
+                {"partial_output": bool(content_parts)},
+            )
+        if not usage:
+            usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": estimate_text_tokens("".join(content_parts + reasoning_parts)),
+            }
+        return {
+            "finish_reason": finish_reason or "stop",
+            "usage": usage,
+            "reasoning": bool(reasoning_parts),
+        }
+
+    def stream_chat(
+        self,
+        model_info: dict[str, Any],
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        max_tokens: int | None,
+        seed: int | None,
+        thinking: bool,
+        on_event: Callable[[str, dict[str, Any]], None],
+        keep_loaded: bool = False,
+    ) -> dict[str, Any]:
+        endpoint = model_info["endpoint"]
+        remote_model = model_info["remote_model"]
+        payload: dict[str, Any] = {
+            "model": remote_model,
+            "messages": messages,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "chat_template_kwargs": {"enable_thinking": thinking},
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if seed is not None:
+            payload["seed"] = seed
+        self.prepare_chat()
+        started = time.perf_counter()
+        loaded = False
+        images, videos = count_chat_media(messages)
+        LOGGER.info(
+            "External chat started: model=%s endpoint=%s messages=%d images=%d videos=%d max_tokens=%s thinking=%s keep_loaded=%s",
+            remote_model,
+            endpoint,
+            len(messages),
+            images,
+            videos,
+            max_tokens,
+            thinking,
+            keep_loaded,
+        )
+        with self.lock:
+            try:
+                if model_info.get("lifecycle_supported"):
+                    on_event("status", {"phase": "loading_model"})
+                    LOGGER.info("External chat loading model: %s", model_info["id"])
+                    self.router.transition(model_info["id"], True, self.chat_cancel_event.is_set)
+                    loaded = True
+                    LOGGER.info("External chat model loaded: %s", model_info["id"])
+                if self.chat_cancel_event.is_set():
+                    raise ModelError("GENERATION_CANCELLED", "Chat was cancelled after model loading.")
+                generation_started = time.perf_counter()
+                on_event("status", {"phase": "generating"})
+                result = self._stream_chat_completion(
+                    endpoint,
+                    payload,
+                    lambda kind, text: on_event(kind, {"text": text}),
+                )
+                generation_seconds = time.perf_counter() - generation_started
+                usage = result.get("usage") or {}
+                completion_tokens = usage.get("completion_tokens")
+                tokens_per_second = None
+                if (
+                    isinstance(completion_tokens, (int, float))
+                    and not isinstance(completion_tokens, bool)
+                    and completion_tokens > 0
+                    and generation_seconds > 0
+                ):
+                    tokens_per_second = round(completion_tokens / generation_seconds, 2)
+                result["elapsed_seconds"] = round(generation_seconds, 3)
+                result["tokens_per_second"] = tokens_per_second
+                LOGGER.info(
+                    "External chat finished: model=%s finish_reason=%s prompt_tokens=%s completion_tokens=%s "
+                    "generation=%.2fs tokens_per_second=%s elapsed=%.2fs",
+                    remote_model,
+                    result["finish_reason"],
+                    usage.get("prompt_tokens"),
+                    completion_tokens,
+                    generation_seconds,
+                    tokens_per_second,
+                    time.perf_counter() - started,
+                )
+                return result
+            except ModelError as error:
+                LOGGER.info("External chat stopped: model=%s code=%s elapsed=%.2fs", remote_model, error.code, time.perf_counter() - started)
+                raise
+            except Exception as error:
+                LOGGER.exception("External chat failed: model=%s", remote_model)
+                raise ModelError("GENERATION_FAILED", "The external chat request failed.", self._redact(error)) from error
+            finally:
+                if loaded and keep_loaded:
+                    LOGGER.info("External chat model kept loaded: %s", model_info["id"])
+                elif loaded:
+                    try:
+                        self.router.transition(model_info["id"], False)
+                    except Exception as error:
+                        warning = self._redact(error)
+                        LOGGER.warning("External chat cleanup failed: %s", warning)
+                        on_event("warning", {
+                            "code": "EXTERNAL_UNLOAD_FAILED",
+                            "message": "Chat ended, but External model unload was not confirmed.",
+                            "details": warning,
+                        })
+                    else:
+                        LOGGER.info("External chat model unloaded: %s", model_info["id"])
 
     @staticmethod
     def _context_tokens(props: dict[str, Any]) -> int:
@@ -597,6 +1137,8 @@ class ExternalServerBackend:
                         logging.getLogger(__name__).warning("External model cleanup failed: %s", warning)
                         if response is not None:
                             response["lifecycle_warning"] = "Prompt completed, but External model unload was not confirmed."
+                    else:
+                        logging.getLogger(__name__).info("External router model unloaded after request: %s", model_info["id"])
 
 
 BACKEND = ExternalServerBackend()

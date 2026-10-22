@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 import time
@@ -9,6 +10,8 @@ from backend.models.contract import ModelError
 from backend.models.external_server_backend import (
     ExternalServerBackend,
     _RemoteChatHandler,
+    normalize_chat_messages,
+    normalize_chat_options,
     normalize_server_url,
 )
 from backend.models.gguf_backend import GGUFBackend
@@ -560,6 +563,302 @@ class ExternalServerBackendTests(unittest.TestCase):
         self.assertTrue(result["external_server"])
         self.assertIsNone(result["cold_start"])
         self.assertIsNone(result["model_load_seconds"])
+
+    def test_stream_chat_emits_status_and_streamed_content(self):
+        model = self.backend.probe_model({"url": self.url})
+        events = []
+
+        result = self.backend.stream_chat(
+            model,
+            [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hello"}],
+            temperature=0.8,
+            top_p=0.95,
+            top_k=40,
+            max_tokens=256,
+            seed=7,
+            thinking=True,
+            on_event=lambda kind, payload: events.append((kind, payload)),
+        )
+
+        self.assertEqual([kind for kind, _ in events], ["status", "content", "content"])
+        self.assertEqual(events[0][1], {"phase": "generating"})
+        self.assertEqual(
+            "".join(payload["text"] for kind, payload in events if kind == "content"),
+            "SERVER_OK",
+        )
+        self.assertEqual(result["finish_reason"], "stop")
+        self.assertEqual(result["usage"], {"prompt_tokens": 12, "completion_tokens": 3})
+        self.assertFalse(result["reasoning"])
+        self.assertGreaterEqual(result["elapsed_seconds"], 0)
+        self.assertGreater(result["tokens_per_second"], 0)
+        payload = _FakeLlamaHandler.last_completion
+        self.assertEqual(payload["model"], "gemma-test.gguf")
+        self.assertEqual(payload["messages"][-1], {"role": "user", "content": "hello"})
+        self.assertTrue(payload["stream"])
+        self.assertEqual(payload["stream_options"], {"include_usage": True})
+        self.assertEqual(payload["max_tokens"], 256)
+        self.assertEqual(payload["seed"], 7)
+        self.assertEqual(payload["top_k"], 40)
+        self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": True})
+
+    def test_stream_chat_can_disable_thinking(self):
+        model = self.backend.probe_model({"url": self.url})
+        events = []
+
+        result = self.backend.stream_chat(
+            model,
+            [{"role": "user", "content": "hello"}],
+            temperature=0.8,
+            top_p=0.95,
+            top_k=40,
+            max_tokens=None,
+            seed=None,
+            thinking=False,
+            on_event=lambda kind, payload: events.append((kind, payload)),
+        )
+
+        self.assertEqual(_FakeLlamaHandler.last_completion["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(result["finish_reason"], "stop")
+
+    def test_stream_chat_splits_embedded_think_reasoning(self):
+        _FakeLlamaHandler.reasoning_mode = "embedded"
+        model = self.backend.probe_model({"url": self.url})
+        events = []
+
+        result = self.backend.stream_chat(
+            model,
+            [{"role": "user", "content": "think first"}],
+            temperature=0.8,
+            top_p=0.95,
+            top_k=40,
+            max_tokens=None,
+            seed=None,
+            thinking=True,
+            on_event=lambda kind, payload: events.append((kind, payload)),
+        )
+
+        reasoning = "".join(payload["text"] for kind, payload in events if kind == "reasoning")
+        content = "".join(payload["text"] for kind, payload in events if kind == "content")
+        self.assertEqual(reasoning, "PRIVATE_THOUGHT")
+        self.assertEqual(content, "PUBLIC")
+        self.assertNotIn("<think>", content)
+        self.assertTrue(result["reasoning"])
+        self.assertEqual(result["usage"], {"prompt_tokens": 12, "completion_tokens": 5})
+        self.assertNotIn("max_tokens", _FakeLlamaHandler.last_completion)
+        self.assertNotIn("seed", _FakeLlamaHandler.last_completion)
+
+    def test_stream_chat_unloads_router_managed_model_after_use(self):
+        model = dict(self.backend.probe_model({"url": self.url}), lifecycle_supported=True)
+        transitions = []
+
+        def transition(model_id, load, *_args):
+            transitions.append((model_id, load))
+
+        with patch.object(self.backend.router, "transition", side_effect=transition):
+            result = self.backend.stream_chat(
+                model,
+                [{"role": "user", "content": "hello"}],
+                temperature=0.8,
+                top_p=0.95,
+                top_k=40,
+                max_tokens=None,
+                seed=None,
+                thinking=True,
+                on_event=lambda _kind, _payload: None,
+            )
+
+        self.assertEqual(transitions, [(model["id"], True), (model["id"], False)])
+        self.assertEqual(result["finish_reason"], "stop")
+
+    def test_stream_chat_keeps_router_managed_model_loaded_when_requested(self):
+        model = dict(self.backend.probe_model({"url": self.url}), lifecycle_supported=True)
+        transitions = []
+
+        def transition(model_id, load, *_args):
+            transitions.append((model_id, load))
+
+        with patch.object(self.backend.router, "transition", side_effect=transition):
+            result = self.backend.stream_chat(
+                model,
+                [{"role": "user", "content": "hello"}],
+                temperature=0.8,
+                top_p=0.95,
+                top_k=40,
+                max_tokens=None,
+                seed=None,
+                thinking=True,
+                on_event=lambda _kind, _payload: None,
+                keep_loaded=True,
+            )
+
+        self.assertEqual(transitions, [(model["id"], True)])
+        self.assertEqual(result["finish_reason"], "stop")
+
+    def test_stream_chat_warns_when_unload_is_not_confirmed(self):
+        model = dict(self.backend.probe_model({"url": self.url}), lifecycle_supported=True)
+        events = []
+
+        def transition(_model_id, load, *_args):
+            if not load:
+                raise ModelError("EXTERNAL_ROUTER_UNAVAILABLE", "router went away")
+
+        with patch.object(self.backend.router, "transition", side_effect=transition):
+            result = self.backend.stream_chat(
+                model,
+                [{"role": "user", "content": "hello"}],
+                temperature=0.8,
+                top_p=0.95,
+                top_k=40,
+                max_tokens=None,
+                seed=None,
+                thinking=True,
+                on_event=lambda kind, payload: events.append((kind, payload)),
+            )
+
+        warnings = [payload for kind, payload in events if kind == "warning"]
+        self.assertEqual([warning["code"] for warning in warnings], ["EXTERNAL_UNLOAD_FAILED"])
+        self.assertIn("not confirmed", warnings[0]["message"])
+        content = "".join(payload["text"] for kind, payload in events if kind == "content")
+        self.assertEqual(content, "SERVER_OK")
+        self.assertEqual(result["finish_reason"], "stop")
+
+    def test_stream_chat_cancellation_interrupts_the_stream(self):
+        model = self.backend.probe_model({"url": self.url})
+        result: dict[str, object] = {}
+
+        def run_request():
+            try:
+                self.backend.stream_chat(
+                    model,
+                    [{"role": "user", "content": "slow"}],
+                    temperature=0.8,
+                    top_p=0.95,
+                    top_k=999,
+                    max_tokens=None,
+                    seed=None,
+                    thinking=True,
+                    on_event=lambda _kind, _payload: None,
+                )
+            except ModelError as error:
+                result["error"] = error
+
+        thread = threading.Thread(target=run_request)
+        thread.start()
+        self.assertTrue(_FakeLlamaHandler.slow_started.wait(timeout=2))
+        self.backend.cancel_chat()
+        thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertIsInstance(result.get("error"), ModelError)
+        self.assertEqual(result["error"].code, "GENERATION_CANCELLED")
+
+    def test_chat_message_normalization_requires_valid_history(self):
+        self.assertEqual(
+            normalize_chat_messages([{"role": "user", "content": "hi"}]),
+            [{"role": "user", "content": "hi"}],
+        )
+        for messages in (
+            [],
+            [{"role": "system", "content": "no user turn"}],
+            [{"role": "tool", "content": "hi"}],
+            [{"role": "user", "content": 42}],
+            [{"role": "user"}],
+            "not a list",
+        ):
+            with self.subTest(messages=messages):
+                with self.assertRaises(ModelError) as error:
+                    normalize_chat_messages(messages)
+                self.assertEqual(error.exception.code, "INVALID_REQUEST")
+
+    def test_chat_message_normalization_accepts_inline_images_and_videos(self):
+        image = "data:image/png;base64," + base64.b64encode(b"png-bytes").decode("ascii")
+        video = "data:video/mp4;base64," + base64.b64encode(b"mp4-bytes").decode("ascii")
+        content = [
+            {"type": "text", "text": "describe these"},
+            {"type": "image_url", "image_url": {"url": image}},
+            {"type": "video_url", "video_url": {"url": video}},
+        ]
+        normalized = normalize_chat_messages([{"role": "user", "content": content}])
+        self.assertEqual(normalized, [{"role": "user", "content": content}])
+
+    def test_chat_message_normalization_rejects_unsafe_media(self):
+        image = "data:image/png;base64," + base64.b64encode(b"png-bytes").decode("ascii")
+        video = "data:video/mp4;base64," + base64.b64encode(b"mp4-bytes").decode("ascii")
+        oversized_image = "data:image/png;base64," + base64.b64encode(b"x" * (4 * 1024 * 1024 + 1)).decode("ascii")
+        cases = {
+            "remote image URL": {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}],
+            },
+            "unsupported image type": {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/gif;base64,AAAA"}}],
+            },
+            "invalid base64": {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,%%%"}}],
+            },
+            "oversized image": {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": oversized_image}}],
+            },
+            "unsupported video type": {
+                "role": "user",
+                "content": [{"type": "video_url", "video_url": {"url": "data:video/quicktime;base64,AAAA"}}],
+            },
+            "too many images": {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": image}}] * 5,
+            },
+            "too many videos": {
+                "role": "user",
+                "content": [{"type": "video_url", "video_url": {"url": video}}] * 2,
+            },
+            "unknown part": {
+                "role": "user",
+                "content": [{"type": "audio_url", "audio_url": {"url": image}}],
+            },
+            "empty parts": {"role": "user", "content": [{"type": "text", "text": ""}]},
+        }
+        for label, message in cases.items():
+            with self.subTest(label=label):
+                with self.assertRaises(ModelError) as error:
+                    normalize_chat_messages([message])
+                self.assertEqual(error.exception.code, "INVALID_REQUEST")
+
+    def test_chat_options_are_bounded_and_defaulted(self):
+        self.assertEqual(
+            normalize_chat_options({}),
+            {
+                "temperature": 0.8,
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_tokens": None,
+                "seed": None,
+                "thinking": True,
+                "keep_loaded": False,
+            },
+        )
+        self.assertEqual(normalize_chat_options({"top_k": 0})["top_k"], 0)
+        self.assertEqual(normalize_chat_options({"top_k": None})["top_k"], 40)
+        self.assertFalse(normalize_chat_options({"thinking": False})["thinking"])
+        self.assertTrue(normalize_chat_options({"keep_loaded": True})["keep_loaded"])
+        self.assertFalse(normalize_chat_options({"keep_loaded": False})["keep_loaded"])
+        for payload in (
+            {"temperature": 9},
+            {"temperature": True},
+            {"top_p": -0.1},
+            {"top_k": 501},
+            {"top_k": 2.5},
+            {"max_tokens": 0},
+            {"seed": -1},
+            {"thinking": "yes"},
+            {"keep_loaded": "yes"},
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ModelError) as error:
+                    normalize_chat_options(payload)
+                self.assertEqual(error.exception.code, "INVALID_REQUEST")
 
 
 if __name__ == "__main__":

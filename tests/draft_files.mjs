@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { draftFile, draftFilename, parseDraft } from "../web/draft_files.js";
 import { newSequence } from "../web/sequence_state.js";
 import { buildGeneratePayload, buildRefinePayload } from "../web/studio_state.js";
+import { msg } from "../web/i18n.js";
 
 test("draft filenames identify the workspace and local save time",()=>{
   const now = new Date(2026,8,21,14,3,8);
@@ -60,12 +61,13 @@ test("a failed draft import leaves the workspace and prompts intact",async()=>{
   const loadSource=source.slice(source.indexOf("async function loadTextDraft("),source.indexOf("function updateBriefLayout("));
   const phases=[],notices=[];
   const state={sessionId:"test",assets:[{id:"keep"}],sequence:{setActive(){assert.fail("Must not enter Sequence on failure");}}};
-  const load=new Function("studio","clearMedia","setGenerationState","showToast",loadSource+";return loadTextDraft;")(
-    state,async()=>{throw Error("Clear failed");},phase=>phases.push(phase),(...notice)=>notices.push(notice));
+  const load=new Function("studio","clearMedia","setGenerationState","showToast","msg","showErrorToast",loadSource+";return loadTextDraft;")(
+    state,async()=>{throw Error("Clear failed");},phase=>phases.push(phase),(...notice)=>notices.push(notice),msg,
+    (title,error)=>notices.push([title,error.message]));
   await load({kind:"sequence"});
   assert.deepEqual(state.assets,[{id:"keep"}]);
   assert.deepEqual(phases,["busy","idle"]);
-  assert.deepEqual(notices,[["Load draft","Clear failed"]]);
+  assert.deepEqual(notices,[["toast.draft.load_failed.title","Clear failed"]]);
 });
 test("Ollama Generate and Refine carry manual output budget without Direct-only settings",()=>{
   const state={mode:"Reference",customSystemPrompts:{},selectedModel:{family:"ollama",remote_model:"test"},generationBudget:"custom",generationBudgetTokens:6000};

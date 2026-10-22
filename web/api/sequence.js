@@ -1,5 +1,5 @@
 import { api } from "/scripts/api.js";
-import { readApiResponse } from "./response.js";
+import { networkError, readApiResponse } from "./response.js";
 
 export async function readSequenceStream(response, onEvent) {
   if (!response.ok) return readApiResponse(response);
@@ -21,18 +21,33 @@ export async function readSequenceStream(response, onEvent) {
       }
       if (part.done) break;
     }
-    if (!done || buffer.trim()) throw new Error("Sequence connection ended before completion. Completed prompts were kept.");
+    if (!done || buffer.trim()) {
+      const error = new Error("Sequence connection ended before completion. Completed prompts were kept.");
+      error.code = "STREAM_INTERRUPTED";
+      throw error;
+    }
   } finally { reader.releaseLock(); }
 }
 
 export async function generateSequence(payload, onEvent) {
-  const response = await api.fetchApi("/h3studio/sequence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  let response;
+  try {
+    response = await api.fetchApi("/h3studio/sequence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  } catch (error) {
+    throw networkError(error);
+  }
   return readSequenceStream(response, onEvent);
 }
 
 export async function cancelSequence(operationId, sessionId) {
-  return readApiResponse(await api.fetchApi("/h3studio/sequence/cancel", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({operation_id:operationId,session_id:sessionId}),
-  }));
+  let response;
+  try {
+    response = await api.fetchApi("/h3studio/sequence/cancel", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({operation_id:operationId,session_id:sessionId}),
+    });
+  } catch (error) {
+    throw networkError(error);
+  }
+  return readApiResponse(response);
 }

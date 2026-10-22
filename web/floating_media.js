@@ -1,3 +1,4 @@
+import { onLocaleChange, t, translateDom } from "./i18n.js";
 import { clampPanelPosition, workflowMediaSnapshot } from "./workflow_media.js";
 
 const DRAG_TYPE = "application/x-h3ps-workflow-media";
@@ -6,14 +7,14 @@ const POSITION_KEY = "h3ps-floating-media-position";
 export function createFloatingMediaPanel({ app, getState, transfer, icon, openWriter, storage = localStorage }) {
   const root = document.createElement("section");
   root.className = "h3ps-root h3ps-media-float";
-  root.setAttribute("aria-label", "Prompt Writer media");
-  root.innerHTML = `<header class="h3ps-float-header" tabindex="0" aria-label="Move media panel">
-    <strong>Media</strong><span></span>
-    <button type="button" class="h3ps-icon-button" data-float-writer title="Open Prompt Writer" aria-label="Open Prompt Writer">${icon("expand", 15)}</button>
-    <button type="button" class="h3ps-icon-button" data-float-close title="Close media panel" aria-label="Close media panel">${icon("close", 15)}</button>
-  </header><p class="h3ps-float-hint">Drag media to the canvas to add it, or onto a compatible loader to replace its file.</p>
+  root.setAttribute("aria-label", t("media.float.aria"));
+  root.innerHTML = `<header class="h3ps-float-header" tabindex="0" aria-label="${t("media.float.move")}" data-i18n-aria-label="media.float.move">
+    <strong data-i18n="media.float.title">${t("media.float.title")}</strong><span></span>
+    <button type="button" class="h3ps-icon-button" data-float-writer title="${t("media.float.open")}" data-i18n-title="media.float.open" aria-label="${t("media.float.open")}" data-i18n-aria-label="media.float.open">${icon("expand", 15)}</button>
+    <button type="button" class="h3ps-icon-button" data-float-close title="${t("media.float.close")}" data-i18n-title="media.float.close" aria-label="${t("media.float.close")}" data-i18n-aria-label="media.float.close">${icon("close", 15)}</button>
+  </header><p class="h3ps-float-hint" data-i18n="media.float.hint">${t("media.float.hint")}</p>
   <div class="h3ps-assets h3ps-float-assets"></div>
-  <p class="h3ps-float-status" role="status" aria-live="polite">Original or latest Applied media · no auto-sync</p>`;
+  <p class="h3ps-float-status" role="status" aria-live="polite"></p>`;
   document.body.appendChild(root);
   const header = root.querySelector("header"), cards = root.querySelector(".h3ps-assets");
   const status = root.querySelector("[role=status]");
@@ -26,7 +27,10 @@ export function createFloatingMediaPanel({ app, getState, transfer, icon, openWr
     root.style.left = position.x + "px"; root.style.top = position.y + "px";
   }
   function savePosition() { try { storage.setItem(POSITION_KEY, JSON.stringify(position)); } catch {} }
-  function notice(message) { status.textContent = message; }
+  let statusKey = "media.float.status", statusParams = {}, statusRaw = "";
+  function renderStatus() { status.textContent = statusRaw || t(statusKey, statusParams); }
+  function notice(key, params = {}) { statusKey = key; statusParams = params; statusRaw = ""; renderStatus(); }
+  function noticeFailure(message) { statusKey = "media.float.failed"; statusParams = {}; statusRaw = message ? String(message) : ""; renderStatus(); }
   function cancelTransfer() { dragging = null; pending?.abort(); pending = null; move = null; }
   function isOurDrag(event) {
     return !!dragging && Array.from(event.dataTransfer?.types || []).includes(DRAG_TYPE);
@@ -43,8 +47,9 @@ export function createFloatingMediaPanel({ app, getState, transfer, icon, openWr
     for (const asset of assets) {
       const card = document.createElement("div");
       card.className = "h3ps-asset"; card.tabIndex = 0; card.draggable = true; card.dataset.floatAsset = asset.id;
-      const title = asset.reference || (asset.status === "needs_edit" ? "Trim required" : asset.type);
-      card.title = `${title} · ${asset.filename}\nDrag original or latest Applied media to the workflow`;
+      const typeKey = ["image", "video", "audio"].includes(asset.type) ? `media.type.${asset.type}` : "";
+      const title = asset.reference || (asset.status === "needs_edit" ? t("media.trim_required") : typeKey ? t(typeKey) : asset.type);
+      card.title = `${title} · ${asset.filename}\n${t("media.float.drag_hint")}`;
       const preview = document.createElement("div"); preview.className = "h3ps-asset-preview";
       if (asset.preview_url && asset.type !== "audio") {
         const image = document.createElement("img"); image.className = "h3ps-real-thumb";
@@ -57,7 +62,7 @@ export function createFloatingMediaPanel({ app, getState, transfer, icon, openWr
     }
     if (!assets.length) {
       const empty = document.createElement("p"); empty.className = "h3ps-float-empty";
-      empty.textContent = "Add media in Prompt Writer to use it here."; cards.appendChild(empty);
+      empty.textContent = t("media.float.empty"); cards.appendChild(empty);
     }
     if (opened && !suspended) place();
   }
@@ -83,12 +88,12 @@ export function createFloatingMediaPanel({ app, getState, transfer, icon, openWr
       dragging = null;
       const element = event.target;
       const controller = new AbortController(); pending = controller;
-      notice("Sending media to workflow…");
+      notice("media.float.sending");
       try {
         await transfer.drop(snapshot, [event.clientX, event.clientY], controller.signal, element);
-        if (!controller.signal.aborted) notice("Media sent. Later Writer edits will not change this loader.");
+        if (!controller.signal.aborted) notice("media.float.sent");
       } catch (error) {
-        if (!controller.signal.aborted) notice(error.message || "Media transfer failed.");
+        if (!controller.signal.aborted) noticeFailure(error.message);
       } finally { if (pending === controller) pending = null; }
     }, options);
     window.addEventListener("resize", () => { place(); savePosition(); }, { signal: events.signal });
@@ -139,12 +144,20 @@ export function createFloatingMediaPanel({ app, getState, transfer, icon, openWr
   root.querySelector("[data-float-writer]").addEventListener("click", openWriter);
   root.querySelector("[data-float-close]").addEventListener("click", close);
   function close() { opened = false; visibility(); app.canvas?.canvas?.focus(); }
+  renderStatus();
+  const offLocale = onLocaleChange(() => {
+    root.setAttribute("aria-label", t("media.float.aria"));
+    translateDom(root);
+    renderStatus();
+    signature = "";
+    if (opened && !suspended) refresh();
+  });
   visibility();
   return {
     open() { opened = true; suspended = false; visibility(); header.focus({ preventScroll: true }); },
     suspend(value) { suspended = value; visibility(); },
     refresh,
     close,
-    destroy() { close(); root.remove(); },
+    destroy() { offLocale(); close(); root.remove(); },
   };
 }

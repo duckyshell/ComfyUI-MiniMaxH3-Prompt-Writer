@@ -167,6 +167,8 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "pending_unload_model_id": None,
             "pending_unload_endpoint": None,
             "media_mutation_active": False,
+            "chat_active": False,
+            "chat_request_id": None,
         })
         routes.GENERATION_CACHE.clear()
         routes.GENERATION_CACHE_ACCESS.clear()
@@ -183,6 +185,8 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             "pending_unload_model_id": None,
             "pending_unload_endpoint": None,
             "media_mutation_active": False,
+            "chat_active": False,
+            "chat_request_id": None,
         })
         routes.GENERATION_CACHE.clear()
         routes.GENERATION_CACHE_ACCESS.clear()
@@ -1152,6 +1156,154 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.payload(response), {"assets": assets})
         self.assertNotIn(reference_key, routes.GENERATION_CACHE)
         self.assertIn(text_key, routes.GENERATION_CACHE)
+
+    async def test_chat_route_streams_sse_events_and_releases_chat_state(self):
+        app = routes.web.Application()
+        app.router.add_post("/chat", routes.chat)
+        model = {"id": "external:writer.gguf", "name": "writer.gguf", "family": "external"}
+        seen = {}
+
+        def fake_stream_chat(model_info, messages, **options):
+            seen["model"] = model_info
+            seen["messages"] = messages
+            seen["options"] = {key: value for key, value in options.items() if key != "on_event"}
+            options["on_event"]("status", {"phase": "generating"})
+            options["on_event"]("content", {"text": "Hello"})
+            options["on_event"]("content", {"text": " world"})
+            return {
+                "finish_reason": "stop",
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+                "reasoning": False,
+                "elapsed_seconds": 1.5,
+                "tokens_per_second": 4.0,
+            }
+
+        with (
+            patch.object(routes.EXTERNAL_SERVER_BACKEND, "probe_model", return_value=model),
+            patch.object(routes.EXTERNAL_SERVER_BACKEND, "stream_chat", side_effect=fake_stream_chat),
+        ):
+            async with TestClient(TestServer(app)) as client:
+                async with client.post("/chat", json={
+                    "url": "http://127.0.0.1:8080",
+                    "model": "writer.gguf",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "temperature": 0.5,
+                    "top_k": 64,
+                    "keep_loaded": True,
+                }) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.content_type, "text/event-stream")
+                    body = await response.text()
+
+        events = [json.loads(line[5:].strip()) for line in body.splitlines() if line.startswith("data:")]
+        self.assertEqual([event["type"] for event in events], ["status", "content", "content", "done"])
+        self.assertEqual(events[0]["phase"], "generating")
+        self.assertEqual("".join(event["text"] for event in events if event["type"] == "content"), "Hello world")
+        self.assertEqual(events[-1]["finish_reason"], "stop")
+        self.assertEqual(events[-1]["elapsed"], 1.5)
+        self.assertEqual(events[-1]["tokens_per_second"], 4.0)
+        self.assertEqual(seen["messages"], [{"role": "user", "content": "hi"}])
+        self.assertEqual(seen["options"]["temperature"], 0.5)
+        self.assertEqual(seen["options"]["top_k"], 64)
+        self.assertTrue(seen["options"]["keep_loaded"])
+        self.assertFalse(routes.STATE["chat_active"])
+        self.assertIsNone(routes.STATE["chat_request_id"])
+
+    async def test_chat_route_streams_error_event_and_releases_chat_state(self):
+        app = routes.web.Application()
+        app.router.add_post("/chat", routes.chat)
+        model = {"id": "external:writer.gguf", "name": "writer.gguf", "family": "external"}
+        failure = routes.ModelError("EXTERNAL_STREAM_INTERRUPTED", "The chat stream ended before completion.")
+
+        def fake_stream_chat(_model_info, _messages, **options):
+            options["on_event"]("status", {"phase": "generating"})
+            raise failure
+
+        with (
+            patch.object(routes.EXTERNAL_SERVER_BACKEND, "probe_model", return_value=model),
+            patch.object(routes.EXTERNAL_SERVER_BACKEND, "stream_chat", side_effect=fake_stream_chat),
+        ):
+            async with TestClient(TestServer(app)) as client:
+                async with client.post("/chat", json={
+                    "url": "http://127.0.0.1:8080",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }) as response:
+                    self.assertEqual(response.status, 200)
+                    body = await response.text()
+
+        events = [json.loads(line[5:].strip()) for line in body.splitlines() if line.startswith("data:")]
+        self.assertEqual([event["type"] for event in events], ["status", "error"])
+        self.assertEqual(events[-1]["code"], "EXTERNAL_STREAM_INTERRUPTED")
+        self.assertFalse(routes.STATE["chat_active"])
+        self.assertIsNone(routes.STATE["chat_request_id"])
+
+    async def test_chat_route_rejects_invalid_payloads_without_claiming(self):
+        app = routes.web.Application()
+        app.router.add_post("/chat", routes.chat)
+        cases = [
+            ({"url": "", "messages": [{"role": "user", "content": "hi"}]}, "A local llama.cpp server URL is required."),
+            ({"url": "http://127.0.0.1:8080", "messages": []}, "Chat requires at least one message."),
+            ({"url": "http://127.0.0.1:8080", "messages": "nope"}, "Chat requires at least one message."),
+            ({"url": "http://127.0.0.1:8080", "messages": [{"role": "user", "content": "hi"}], "temperature": 9},
+             "temperature is outside the supported range."),
+        ]
+        with patch.object(routes.EXTERNAL_SERVER_BACKEND, "probe_model") as probe:
+            async with TestClient(TestServer(app)) as client:
+                for body, message in cases:
+                    with self.subTest(body=body):
+                        async with client.post("/chat", json=body) as response:
+                            self.assertEqual(response.status, 400)
+                            payload = await response.json()
+                        self.assertEqual(payload["error"]["code"], "INVALID_REQUEST")
+                        self.assertEqual(payload["error"]["message"], message)
+                        self.assertFalse(routes.STATE["chat_active"])
+        probe.assert_not_called()
+
+    async def test_chat_route_rejects_while_another_request_is_running(self):
+        app = routes.web.Application()
+        app.router.add_post("/chat", routes.chat)
+        routes.STATE["active_request_id"] = "generation-running"
+        with patch.object(routes.EXTERNAL_SERVER_BACKEND, "probe_model") as probe:
+            async with TestClient(TestServer(app)) as client:
+                async with client.post("/chat", json={
+                    "url": "http://127.0.0.1:8080",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }) as response:
+                    self.assertEqual(response.status, 409)
+                    payload = await response.json()
+        self.assertEqual(payload["error"]["code"], "GENERATION_BUSY")
+        self.assertFalse(routes.STATE["chat_active"])
+        probe.assert_not_called()
+
+    async def test_chat_route_releases_chat_state_when_probe_fails(self):
+        app = routes.web.Application()
+        app.router.add_post("/chat", routes.chat)
+        with patch.object(
+            routes.EXTERNAL_SERVER_BACKEND,
+            "probe_model",
+            side_effect=routes.ModelError("EXTERNAL_SERVER_UNAVAILABLE", "The local llama.cpp server is not reachable."),
+        ):
+            async with TestClient(TestServer(app)) as client:
+                async with client.post("/chat", json={
+                    "url": "http://127.0.0.1:8080",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }) as response:
+                    self.assertEqual(response.status, 502)
+                    payload = await response.json()
+        self.assertEqual(payload["error"]["code"], "EXTERNAL_SERVER_UNAVAILABLE")
+        self.assertFalse(routes.STATE["chat_active"])
+        self.assertIsNone(routes.STATE["chat_request_id"])
+
+    async def test_chat_cancel_reports_idle_and_active_states(self):
+        routes.STATE["chat_active"] = False
+        response = await routes.cancel_chat(_Request())
+        self.assertEqual(self.payload(response), {"cancelled": False, "reason": "idle"})
+
+        routes.STATE["chat_active"] = True
+        with patch.object(routes.EXTERNAL_SERVER_BACKEND, "cancel_chat", return_value=True) as cancel:
+            response = await routes.cancel_chat(_Request())
+        self.assertEqual(self.payload(response), {"cancelled": True, "pending": False})
+        cancel.assert_called_once_with()
 
 
 if __name__ == "__main__":

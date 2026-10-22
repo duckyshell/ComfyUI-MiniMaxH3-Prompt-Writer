@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>llama.cpp chat</title>
+  <link rel="stylesheet" href="./styles/llama_chat.css">
+</head>
+<body>
+  <div class="h3lc-app" data-chat-app>
+    <header class="h3lc-header">
+      <div class="h3lc-brand">
+        <span class="h3lc-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M20 12a8 8 0 0 1-8 8H4l2-3.2A8 8 0 1 1 20 12Z"/><path d="M8 11h8m-8 3h5"/></svg>
+        </span>
+        <span class="h3lc-brand-copy">
+          <strong data-i18n="chat.title">llama.cpp chat</strong>
+          <small data-chat-target data-i18n="chat.subtitle">External llama.cpp</small>
+        </span>
+      </div>
+      <div class="h3lc-header-actions">
+        <button class="h3lc-button" type="button" data-chat-new data-i18n="chat.new">New chat</button>
+        <button class="h3lc-button" type="button" data-chat-history-toggle aria-expanded="false" aria-controls="h3lc-history" data-i18n="chat.history">History</button>
+        <button class="h3lc-button" type="button" data-chat-params-toggle aria-expanded="false" aria-controls="h3lc-params" data-i18n="chat.settings">Parameters</button>
+        <button class="h3lc-icon-button" type="button" data-chat-close title="Close chat" aria-label="Close chat" data-i18n-title="chat.close" data-i18n-aria-label="chat.close">✕</button>
+      </div>
+    </header>
+
+    <div class="h3lc-statusbar" data-chat-statusbar>
+      <span class="h3lc-dot" data-chat-dot data-state="checking" aria-hidden="true"></span>
+      <span class="h3lc-status" data-chat-status role="status" aria-live="polite" data-i18n="chat.status.checking">Checking llama.cpp server…</span>
+      <button class="h3lc-link" type="button" data-chat-retry hidden data-i18n="chat.retry">Retry</button>
+    </div>
+
+    <div class="h3lc-banner" data-chat-banner role="alert" hidden>
+      <span data-chat-banner-text></span>
+      <span class="h3lc-banner-actions">
+        <button class="h3lc-link" type="button" data-chat-open-writer hidden data-i18n="chat.open_writer">Open H3 Prompt Writer</button>
+        <button class="h3lc-link" type="button" data-chat-retry-banner hidden data-i18n="chat.retry">Retry</button>
+      </span>
+    </div>
+
+    <main class="h3lc-messages" data-chat-messages aria-live="polite">
+      <section class="h3lc-empty" data-chat-empty>
+        <span class="h3lc-empty-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="26" height="26"><path d="M20 12a8 8 0 0 1-8 8H4l2-3.2A8 8 0 1 1 20 12Z"/><path d="M8 11h8m-8 3h5"/></svg>
+        </span>
+        <h1 data-i18n="chat.empty_title">Start a conversation</h1>
+        <p data-i18n="chat.empty_body">Messages use the model connected in H3 Prompt Writer. Saved conversations stay in this browser; images and videos are not saved.</p>
+      </section>
+    </main>
+
+    <form class="h3lc-composer" data-chat-form>
+      <div class="h3lc-attachments" data-chat-attachments hidden></div>
+      <p class="h3lc-attach-error" data-chat-attach-error role="alert" hidden></p>
+      <label class="h3lc-input-wrap">
+        <span class="h3lc-sr-only" data-i18n="chat.message">Message</span>
+        <textarea data-chat-input rows="2" maxlength="200000" spellcheck="true" placeholder="Ask the model anything…" data-i18n-placeholder="chat.composer_placeholder"></textarea>
+      </label>
+      <input type="file" data-chat-file accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/mpeg" multiple hidden>
+      <footer class="h3lc-composer-footer">
+        <div class="h3lc-composer-tools">
+          <button class="h3lc-icon-button h3lc-attach" type="button" data-chat-attach title="Attach image or video" aria-label="Attach image or video" data-i18n-title="chat.attach" data-i18n-aria-label="chat.attach">
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button class="h3lc-thinking" type="button" data-chat-thinking-toggle aria-pressed="true" title="Thinking is on. Turn it off for faster replies." aria-label="Thinking is on. Turn it off for faster replies." data-i18n-title="chat.thinking_on_title" data-i18n-aria-label="chat.thinking_on_title">
+            <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3Z"/></svg>
+            <span data-i18n="chat.thinking">Thinking</span>
+          </button>
+          <button class="h3lc-thinking h3lc-keep-loaded" type="button" data-chat-keep-loaded aria-pressed="true" hidden title="Model stays loaded after each reply. Turn it off to unload after replies." aria-label="Model stays loaded after each reply. Turn it off to unload after replies." data-i18n-title="chat.keep_loaded_on_title" data-i18n-aria-label="chat.keep_loaded_on_title">
+            <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M9 3h6l-1 6 3 3H7l3-3-1-6Zm3 9v9"/></svg>
+            <span data-i18n="chat.keep_loaded">Keep loaded</span>
+          </button>
+          <small data-i18n="chat.enter_hint">Enter to send · Shift+Enter for a new line</small>
+        </div>
+        <div class="h3lc-composer-buttons">
+          <button class="h3lc-button h3lc-stop" type="button" data-chat-stop hidden data-i18n="chat.stop">Stop</button>
+          <button class="h3lc-button h3lc-unload" type="button" data-chat-unload hidden title="Unload the local llama.cpp model" data-i18n="chat.unload" data-i18n-title="chat.unload_title">Unload model</button>
+          <button class="h3lc-button h3lc-primary" type="submit" data-chat-send disabled data-i18n="chat.send">Send</button>
+        </div>
+      </footer>
+    </form>
+
+    <aside class="h3lc-history" id="h3lc-history" data-chat-history hidden>
+      <header class="h3lc-history-header">
+        <strong data-i18n="chat.history_title">Saved conversations</strong>
+        <button class="h3lc-icon-button" type="button" data-chat-history-close title="Close history" aria-label="Close history" data-i18n-title="chat.close_history" data-i18n-aria-label="chat.close_history">✕</button>
+      </header>
+      <p class="h3lc-history-empty" data-chat-history-empty data-i18n="chat.history_empty">No saved conversations yet.</p>
+      <ul class="h3lc-history-list" data-chat-history-list></ul>
+    </aside>
+
+    <aside class="h3lc-params" id="h3lc-params" data-chat-params hidden>
+      <header class="h3lc-params-header">
+        <strong data-i18n="chat.parameters">Sampling</strong>
+        <button class="h3lc-icon-button" type="button" data-chat-params-close title="Close parameters" aria-label="Close parameters" data-i18n-title="chat.close" data-i18n-aria-label="chat.close">✕</button>
+      </header>
+      <label class="h3lc-field">
+        <span data-i18n="chat.system_prompt">System prompt</span>
+        <textarea data-chat-system rows="4" maxlength="8000" spellcheck="true" placeholder="Optional instructions for the model" data-i18n-placeholder="chat.system_prompt_placeholder"></textarea>
+      </label>
+      <label class="h3lc-switch">
+        <input type="checkbox" data-chat-thinking checked>
+        <span class="h3lc-switch-track" aria-hidden="true"></span>
+        <span class="h3lc-switch-copy">
+          <strong data-i18n="chat.thinking_toggle">Thinking process</strong>
+          <small data-i18n="chat.thinking_toggle_hint">The model reasons before it answers. Turn this off for faster replies.</small>
+        </span>
+      </label>
+      <div class="h3lc-params-grid">
+        <label class="h3lc-field">
+          <span data-i18n="chat.temperature">Temperature</span>
+          <input type="number" data-chat-temperature min="0" max="2" step="0.05" value="0.8">
+        </label>
+        <label class="h3lc-field">
+          <span data-i18n="chat.top_p">Top P</span>
+          <input type="number" data-chat-top-p min="0" max="1" step="0.01" value="0.95">
+        </label>
+        <label class="h3lc-field">
+          <span data-i18n="chat.top_k">Top K</span>
+          <input type="number" data-chat-top-k min="0" max="500" step="1" value="40">
+        </label>
+        <label class="h3lc-field">
+          <span data-i18n="chat.max_tokens">Max tokens</span>
+          <input type="number" data-chat-max-tokens min="1" max="131072" step="1" placeholder="Default" data-i18n-placeholder="chat.max_tokens_hint">
+        </label>
+        <label class="h3lc-field">
+          <span data-i18n="chat.seed">Seed</span>
+          <input type="number" data-chat-seed min="0" step="1" placeholder="Random" data-i18n-placeholder="chat.seed_hint">
+        </label>
+      </div>
+      <footer class="h3lc-params-footer">
+        <button class="h3lc-button" type="button" data-chat-reset data-i18n="chat.reset">Reset</button>
+      </footer>
+    </aside>
+  </div>
+  <script type="module" src="./llama_chat.js"></script>
+</body>
+</html>

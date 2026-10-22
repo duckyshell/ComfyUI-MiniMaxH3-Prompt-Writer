@@ -28,6 +28,7 @@ function fixture() {
       },
     },
   };
+  const toasts = [];
   const api = vm.createContext({
     document,
     HTMLElement: window.HTMLElement,
@@ -43,6 +44,9 @@ function fixture() {
     syncMusicSystemPromptSummary() {},
     updateBriefLayout() {},
     setSettingsOpen() {},
+    releaseStudioResources() {},
+    msg: (key) => key,
+    showToast: (title, message) => toasts.push([title, message]),
   });
   for (const name of [
     "focusAvailableControl",
@@ -67,6 +71,7 @@ function fixture() {
     canvas,
     opener,
     studio,
+    toasts,
     flush: () => frames.splice(0).forEach((fn) => fn()),
   };
 }
@@ -133,6 +138,33 @@ test("a refused media-editor close keeps Writer modal and its workspace active",
   assert.equal(f.root.classList.contains("is-open"), true);
   assert.equal(f.modal.getAttribute("aria-modal"), "true");
   assert.equal(f.studio.left, undefined);
+});
+
+test("a generating Writer request or chat reply keeps the Writer window open", () => {
+  for (const [busyState, messageKey] of [
+    ["requestBusy", "toast.close.writer_busy"],
+    ["chatBusy", "toast.close.chat_busy"],
+  ]) {
+    const f = fixture();
+    f.api.openStudio();
+    f.flush();
+    f.studio[busyState] = true;
+    assert.equal(f.api.closeStudio(), false);
+    assert.equal(f.root.classList.contains("is-open"), true);
+    assert.equal(f.modal.getAttribute("aria-modal"), "true");
+    assert.equal(f.studio.left, undefined);
+    assert.deepEqual(f.toasts.at(-1), ["toast.close.busy_title", messageKey]);
+  }
+});
+
+test("Writer and chat generating together keep the window open with the combined notice", () => {
+  const f = fixture();
+  f.api.openStudio();
+  f.flush();
+  f.studio.requestBusy = true;
+  f.studio.chatBusy = true;
+  assert.equal(f.api.closeStudio(), false);
+  assert.deepEqual(f.toasts.at(-1), ["toast.close.busy_title", "toast.close.both_busy"]);
 });
 
 test("verified-model popover declares modality only while open and cancels delayed focus", () => {

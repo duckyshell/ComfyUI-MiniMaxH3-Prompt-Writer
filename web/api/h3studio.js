@@ -1,20 +1,30 @@
 import { api } from "/scripts/api.js";
-import { readApiResponse } from "./response.js";
+import { networkError, readApiResponse } from "./response.js";
 
 const PREFIX = "/h3studio";
 
 async function request(path, options) {
-  const response = await api.fetchApi(`${PREFIX}${path}`, options);
+  let response;
+  try {
+    response = await api.fetchApi(`${PREFIX}${path}`, options);
+  } catch (error) {
+    throw networkError(error);
+  }
   return readApiResponse(response);
 }
 
-function post(path, body = {}) {
+function post(path, body = {}, options = {}) {
   return request(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    ...options,
   });
 }
+
+// ComfyUI aborts fetchApi requests after 60s by default. Local prompt models
+// routinely need longer, so generation and refinement wait without a deadline.
+const noFetchTimeout = { timeoutMs: null };
 
 const ollamaQuery = (name, host) => host ? `?${name}=${encodeURIComponent(host)}` : "";
 
@@ -32,20 +42,31 @@ export const getGuides = () => request("/guides");
 export const getGuide = (mode) => request(`/guides/${encodeURIComponent(mode)}`);
 export const getSystemPrompt = (mode) => request(`/system-prompt/${encodeURIComponent(mode)}`);
 export const assemble = (payload) => post("/assemble", payload);
-export const generate = (payload) => post("/generate", payload);
+export const generate = (payload) => post("/generate", payload, noFetchTimeout);
 export const cancel = () => post("/cancel");
 export const unloadModel = (target = {}) => post("/unload", target);
-export const refine = (payload) => post("/refine", payload);
+export const refine = (payload) => post("/refine", payload, noFetchTimeout);
 
-export async function freeComfyVram() {
-  const response = await api.fetchApi("/free", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ unload_models: true, free_memory: false }),
-  });
-  if (!response.ok) {
-    throw new Error(`ComfyUI memory release failed (${response.status})`);
+export async function freeComfyVram({ freeMemory = false } = {}) {
+  console.log(`[H3 Writer] releasing ComfyUI resources unload_models=true free_memory=${freeMemory}`);
+  let response;
+  try {
+    response = await api.fetchApi("/free", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unload_models: true, free_memory: freeMemory }),
+    });
+  } catch (error) {
+    console.warn(`[H3 Writer] ComfyUI resource release request failed: ${error?.message || error}`);
+    throw networkError(error);
   }
+  if (!response.ok) {
+    console.warn(`[H3 Writer] ComfyUI resource release rejected status=${response.status}`);
+    const error = new Error(`ComfyUI memory release failed (${response.status})`);
+    error.code = "REQUEST_FAILED";
+    throw error;
+  }
+  console.log(`[H3 Writer] ComfyUI resources released free_memory=${freeMemory}`);
 }
 
 export function uploadMedia(sessionId, mode, files, replaceAssetId = null) {
@@ -59,9 +80,14 @@ export function uploadMedia(sessionId, mode, files, replaceAssetId = null) {
 
 export const listMedia = (sessionId) => request(`/media?session_id=${encodeURIComponent(sessionId)}`);
 export async function editMedia(sessionId, assetId, options) {
-  const response = await api.fetchApi(`${PREFIX}/media/${encodeURIComponent(assetId)}/edit`, {
-    method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({session_id:sessionId,...options}),
-  });
+  let response;
+  try {
+    response = await api.fetchApi(`${PREFIX}/media/${encodeURIComponent(assetId)}/edit`, {
+      method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({session_id:sessionId,...options}),
+    });
+  } catch (error) {
+    throw networkError(error);
+  }
   if (["download", "audio"].includes(options.action) && response.ok) return response.blob();
   return readApiResponse(response);
 }

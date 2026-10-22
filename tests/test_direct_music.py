@@ -45,11 +45,15 @@ def model_info(*, ready=True, projector="mmproj.gguf"):
 
 class _FakeModel:
     instances = []
+    native_log = None
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.closed = False
         self.__class__.instances.append(self)
+        logger_module = sys.modules.get("llama_cpp._logger")
+        if self.native_log and logger_module is not None:
+            logger_module._config.stderr.write(self.native_log)
 
     def close(self):
         self.closed = True
@@ -93,13 +97,40 @@ class _FakeGGMLType(IntEnum):
     GGML_TYPE_Q8_0 = 2
 
 
+CUDA_LOAD_LOG = """\
+load_backend: loaded CUDA backend from C:\\llama_cpp\\lib\\ggml-cuda.dll
+load_backend: loaded CPU backend from C:\\llama_cpp\\lib\\ggml-cpu-alderlake.dll
+llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 4090) (0000:01:00.0) - 23036 MiB free
+load_tensors: layer   0 assigned to device CUDA0, is_swa = 0
+load_tensors: offloading 35 repeating layers to GPU
+load_tensors: offloaded 37/37 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =   333.84 MiB
+load_tensors:        CUDA0 model buffer size =  4455.34 MiB
+llama_kv_cache:      CUDA0 KV buffer size =  1224.00 MiB
+"""
+
+CPU_LOAD_LOG = """\
+load_backend: loaded CPU backend from C:\\llama_cpp\\lib\\ggml-cpu-alderlake.dll
+load_tensors: offloaded 0/37 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =  4789.18 MiB
+"""
+
+
 class DirectMusicRuntimeTests(unittest.TestCase):
     def setUp(self):
         _FakeModel.instances = []
+        _FakeModel.native_log = None
         _FakeVisionHandler.instances = []
         _FakeMTMD.callbacks = {}
 
-    def fake_modules(self, *, top_level_ggml_types=True, top_level_log_callback=True):
+    def fake_modules(
+        self,
+        *,
+        top_level_ggml_types=True,
+        top_level_log_callback=True,
+        native_log=None,
+        cuda_registered=True,
+    ):
         llama_cpp = types.ModuleType("llama_cpp")
         llama_cpp.Llama = _FakeModel
         if top_level_log_callback:
@@ -117,6 +148,19 @@ class DirectMusicRuntimeTests(unittest.TestCase):
             ggml = types.ModuleType("llama_cpp._ggml")
             ggml.GGMLType = _FakeGGMLType
             modules["llama_cpp._ggml"] = ggml
+        if native_log is not None:
+            llama_cpp.__path__ = getattr(llama_cpp, "__path__", [])
+            logger_module = types.ModuleType("llama_cpp._logger")
+            logger_module._config = types.SimpleNamespace(stderr=StringIO(), verbosity=1)
+            llama_cpp._logger = logger_module
+            modules["llama_cpp._logger"] = logger_module
+            ggml = modules.get("llama_cpp._ggml")
+            if ggml is None:
+                ggml = types.ModuleType("llama_cpp._ggml")
+                modules["llama_cpp._ggml"] = ggml
+            ggml.ggml_backend_reg_count = lambda: 2
+            ggml.ggml_backend_reg_by_name = lambda name: 1 if name == b"CUDA" and cuda_registered else None
+            _FakeModel.native_log = native_log
         return modules
 
     def test_text_only_load_skips_projector_but_h3_load_keeps_it(self):
@@ -336,6 +380,52 @@ class DirectMusicRuntimeTests(unittest.TestCase):
         model = _FakeModel.instances[-1]
         self.assertEqual(model.kwargs["type_k"], _FakeGGMLType.GGML_TYPE_Q8_0.value)
         self.assertEqual(model.kwargs["type_v"], _FakeGGMLType.GGML_TYPE_Q8_0.value)
+
+    def test_native_load_log_reports_backend_device_and_offload(self):
+        report = gguf_backend._parse_native_load_report(CUDA_LOAD_LOG)
+
+        self.assertEqual(report["backends"], ["CUDA", "CPU"])
+        self.assertEqual(report["device"], ("CUDA0", "NVIDIA GeForce RTX 4090"))
+        self.assertEqual((report["offloaded_layers"], report["total_layers"]), (37, 37))
+        self.assertEqual(report["model_buffers_mb"]["CUDA0"], 4455.34)
+        self.assertEqual(report["model_buffers_mb"]["CPU_Mapped"], 333.84)
+        self.assertEqual(report["kv_buffers_mb"]["CUDA0"], 1224.0)
+
+    def test_load_logs_actual_cuda_backend_and_restores_native_logging(self):
+        backend = GGUFBackend()
+        modules = self.fake_modules(native_log=CUDA_LOAD_LOG)
+        logger_module = modules["llama_cpp._logger"]
+        original_stream = logger_module._config.stderr
+        output = StringIO()
+
+        with patch.dict(sys.modules, modules), redirect_stderr(output):
+            backend.load(model_info(), runtime_plan())
+
+        console = output.getvalue()
+        self.assertIn("Runtime · ggml backends 2 · CUDA registered", console)
+        self.assertIn("Runtime · using device CUDA0 (NVIDIA GeForce RTX 4090)", console)
+        self.assertIn("Runtime · model buffers · CPU_Mapped 334 MiB · CUDA0 4455 MiB", console)
+        self.assertIn("GPU offload · 37/37 layers", console)
+        self.assertNotIn("Warning:", console)
+        self.assertIs(logger_module._config.stderr, original_stream)
+        self.assertEqual(logger_module._config.verbosity, 1)
+        self.assertEqual(_FakeModel.instances[-1].kwargs["verbosity"], gguf_backend._NATIVE_INFO_VERBOSITY)
+
+    def test_load_warns_when_native_runtime_falls_back_to_cpu(self):
+        backend = GGUFBackend()
+        output = StringIO()
+
+        with (
+            patch.dict(sys.modules, self.fake_modules(native_log=CPU_LOAD_LOG, cuda_registered=False)),
+            redirect_stderr(output),
+        ):
+            backend.load(model_info(), runtime_plan())
+
+        console = output.getvalue()
+        self.assertIn("Runtime · ggml backends 2 · CUDA unavailable", console)
+        self.assertIn("GPU offload · 0/37 layers", console)
+        self.assertIn("Warning: 0 layers were offloaded to GPU; inference will run on CPU", console)
+        self.assertIn("Warning: the CUDA backend is not registered; inference will run on CPU", console)
 
     def test_generate_selects_text_only_for_music_or_missing_projector(self):
         selections = []

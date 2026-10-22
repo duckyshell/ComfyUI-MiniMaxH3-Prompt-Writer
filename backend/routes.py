@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import logging
 import mimetypes
 import shutil
 import sys
@@ -22,9 +24,9 @@ from .devlog import DEVELOPER_MODE, LOG_PATH, PeakVRAMMonitor, gpu_memory_snapsh
 from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
 from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, parse_session_id
 from .media_editor import browser_source, commit_edit, prepare_edit, video_frame
-from .memory import assess_free_vram
+from .memory import assess_free_vram, unmeasured_vram_warning
 from .models.gguf_backend import BACKEND as GGUF_BACKEND
-from .models.external_server_backend import BACKEND as EXTERNAL_SERVER_BACKEND
+from .models.external_server_backend import BACKEND as EXTERNAL_SERVER_BACKEND, normalize_chat_messages, normalize_chat_options
 from .models.ollama_backend import BACKEND as OLLAMA_BACKEND, normalize_ollama_url
 from .models.api_provider_backend import BACKEND as API_PROVIDER_BACKEND
 from .models.contract import ModelError
@@ -35,6 +37,7 @@ from .sequence_routes import register_sequence_routes
 
 
 ROUTE_PREFIX = "/h3studio"
+LOGGER = logging.getLogger(__name__)
 MODES = {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"}
 STATE: dict[str, Any] = {
     "phase": "idle",
@@ -47,6 +50,8 @@ STATE: dict[str, Any] = {
     "pending_unload_model_id": None,
     "pending_unload_endpoint": None,
     "media_mutation_active": False,
+    "chat_active": False,
+    "chat_request_id": None,
 }
 STATE_LOCK = threading.RLock()
 
@@ -166,7 +171,7 @@ async def _cleanup_expired_state(*, now: float | None = None) -> None:
 def _claim_generation_request() -> str | None:
     request_id = str(uuid4())
     with STATE_LOCK:
-        if STATE["active_request_id"] is not None or STATE["media_mutation_active"]:
+        if STATE["active_request_id"] is not None or STATE["media_mutation_active"] or STATE.get("chat_active"):
             return None
         STATE.update({
             "phase": "preparing",
@@ -225,6 +230,23 @@ def _release_generation_request(request_id: str) -> None:
         })
 
 
+def _claim_chat_request(request_id: str) -> bool:
+    with STATE_LOCK:
+        if STATE["active_request_id"] is not None or STATE.get("chat_active"):
+            return False
+        STATE["chat_active"] = True
+        STATE["chat_request_id"] = request_id
+    return True
+
+
+def _release_chat_request(request_id: str) -> None:
+    with STATE_LOCK:
+        if STATE.get("chat_request_id") != request_id:
+            return
+        STATE["chat_active"] = False
+        STATE["chat_request_id"] = None
+
+
 async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: dict[str, Any]) -> None:
     if getattr(backend, "manages_gpu_memory", True) is False:
         return
@@ -239,13 +261,27 @@ async def _memory_preflight(backend: Any, model: dict[str, Any], runtime_plan: d
     if status.get("loaded") and not already_loaded:
         _result, cancellation = await _run_thread_worker(backend.unload)
         _propagate_worker_cancellation(cancellation)
-    details = assess_free_vram(model, runtime_plan, gpu_memory_snapshot(), already_loaded=bool(already_loaded))
+    gpu_memory = gpu_memory_snapshot()
+    details = assess_free_vram(model, runtime_plan, gpu_memory, already_loaded=bool(already_loaded))
     if details:
         raise ModelError(
             "INSUFFICIENT_FREE_VRAM",
             "The selected prompt model needs more free GPU memory before it can load.",
             details,
         )
+    if not already_loaded and model.get("family") == "gguf":
+        warning = unmeasured_vram_warning(model, runtime_plan, gpu_memory)
+        if warning:
+            LOGGER.warning(
+                "VRAM preflight skipped for %s: no measured VRAM estimate; free %s MB of %s MB "
+                "(profile=%s, context=%s, kv=%s). Generation may fail if the model does not fit.",
+                warning["model_name"],
+                warning["free_mb"],
+                warning["total_mb"],
+                warning["context_profile"],
+                warning["context_tokens"],
+                warning["kv_cache"],
+            )
 
 
 async def _resolve_model(body: dict[str, Any]) -> dict[str, Any] | None:
@@ -515,7 +551,7 @@ async def get_status(request: web.Request) -> web.Response:
     else:
         backend_status = await asyncio.to_thread(backend.status)
     return web.json_response({
-        **{key: state[key] for key in ("phase", "active_request_id", "selected_model_id", "selected_model_family")},
+        **{key: state[key] for key in ("phase", "active_request_id", "selected_model_id", "selected_model_family", "chat_active")},
         **backend_status,
         "backend_ready": True,
         "model_backend_ready": True,
@@ -583,6 +619,168 @@ async def probe_external_server(request: web.Request) -> web.Response:
     except ModelError as error:
         return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
     return web.json_response({"model": model})
+
+
+def _sse_event(event: dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n".encode("utf-8")
+
+
+@routes.post(f"{ROUTE_PREFIX}/chat")
+async def chat(request: web.Request) -> web.StreamResponse:
+    body = await _json_body(request)
+    if body is None:
+        return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
+    url = body.get("url")
+    model_id = body.get("model", "")
+    if not isinstance(url, str) or not url.strip():
+        return _error("INVALID_REQUEST", "A local llama.cpp server URL is required.", status=400)
+    if not isinstance(model_id, str):
+        return _error("INVALID_REQUEST", "The model ID must be a string.", status=400)
+    try:
+        messages = normalize_chat_messages(body.get("messages"))
+        options = normalize_chat_options(body)
+    except ModelError as error:
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+
+    chat_id = str(uuid4())
+    if not _claim_chat_request(chat_id):
+        return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
+    try:
+        model = await asyncio.to_thread(EXTERNAL_SERVER_BACKEND.probe_model, {"url": url, "model": model_id})
+    except ModelError as error:
+        _release_chat_request(chat_id)
+        return _error(error.code, error.message, status=_model_error_status(error), details=error.details)
+    except BaseException:
+        _release_chat_request(chat_id)
+        raise
+
+    stream = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await stream.prepare(request)
+    loop = asyncio.get_running_loop()
+    events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    started = time.perf_counter()
+    write_event(
+        "chat_started",
+        request_id=chat_id,
+        operation="chat",
+        model={"id": model["id"], "name": model["name"], "family": model["family"]},
+        messages=len(messages),
+        temperature=options["temperature"],
+        top_p=options["top_p"],
+        top_k=options["top_k"],
+        max_tokens=options["max_tokens"],
+        seed=options["seed"],
+        thinking=options["thinking"],
+        keep_loaded=options["keep_loaded"],
+    )
+
+    def emit(kind: str, payload: dict[str, Any]) -> None:
+        loop.call_soon_threadsafe(events.put_nowait, {"type": kind, **payload})
+
+    def worker() -> None:
+        try:
+            result = EXTERNAL_SERVER_BACKEND.stream_chat(
+                model,
+                messages,
+                temperature=options["temperature"],
+                top_p=options["top_p"],
+                top_k=options["top_k"],
+                max_tokens=options["max_tokens"],
+                seed=options["seed"],
+                thinking=options["thinking"],
+                on_event=emit,
+                keep_loaded=options["keep_loaded"],
+            )
+            emit("done", {
+                "finish_reason": result["finish_reason"],
+                "usage": result.get("usage"),
+                "reasoning": bool(result.get("reasoning")),
+                "elapsed": result.get("elapsed_seconds"),
+                "tokens_per_second": result.get("tokens_per_second"),
+            })
+        except ModelError as error:
+            emit("error", {"code": error.code, "message": error.message, "details": error.details})
+        except Exception as error:
+            LOGGER.exception("External chat worker failed")
+            emit("error", {"code": "GENERATION_FAILED", "message": "The external chat request failed.", "details": str(error)})
+        finally:
+            loop.call_soon_threadsafe(events.put_nowait, None)
+
+    worker_task = asyncio.create_task(asyncio.to_thread(worker))
+    disconnected = False
+    failure: dict[str, Any] | None = None
+    try:
+        while True:
+            event = await events.get()
+            if event is None:
+                break
+            if event["type"] == "error":
+                failure = event
+            if disconnected:
+                continue
+            try:
+                await stream.write(_sse_event(event))
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, RuntimeError):
+                disconnected = True
+                EXTERNAL_SERVER_BACKEND.cancel_chat()
+        if failure is None and not disconnected:
+            await stream.write_eof()
+    except asyncio.CancelledError:
+        EXTERNAL_SERVER_BACKEND.cancel_chat()
+        while not worker_task.done():
+            try:
+                await asyncio.shield(worker_task)
+            except asyncio.CancelledError:
+                pass
+        raise
+    finally:
+        if not worker_task.done():
+            EXTERNAL_SERVER_BACKEND.cancel_chat()
+        while not worker_task.done():
+            try:
+                await asyncio.shield(worker_task)
+            except asyncio.CancelledError:
+                pass
+        try:
+            worker_task.result()
+        except Exception:
+            LOGGER.exception("External chat worker ended unexpectedly")
+        _release_chat_request(chat_id)
+        elapsed = round(time.perf_counter() - started, 3)
+        if failure is not None:
+            write_event(
+                "chat_failed",
+                request_id=chat_id,
+                operation="chat",
+                total_seconds=elapsed,
+                error={"code": failure.get("code"), "message": failure.get("message"), "details": failure.get("details")},
+            )
+        else:
+            write_event(
+                "chat_finished",
+                request_id=chat_id,
+                operation="chat",
+                total_seconds=elapsed,
+                cancelled=disconnected,
+            )
+    return stream
+
+
+@routes.post(f"{ROUTE_PREFIX}/chat/cancel")
+async def cancel_chat(_request: web.Request) -> web.Response:
+    with STATE_LOCK:
+        active = bool(STATE.get("chat_active"))
+    if not active:
+        return web.json_response({"cancelled": False, "reason": "idle"})
+    return web.json_response({"cancelled": EXTERNAL_SERVER_BACKEND.cancel_chat(), "pending": False})
 
 
 @routes.get(f"{ROUTE_PREFIX}/ollama/status")

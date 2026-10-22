@@ -12,6 +12,8 @@ import { comfyVramIsAlreadyEmpty, createSessionId, fileCountFromDataTransfer, in
 import { generateModelSummaryMarkup, settingsMarkup } from "./settings.js";
 import {
   buildGeneratePayload,
+  API_SAMPLING_FIELDS,
+  safeApiSampling,
   buildLyricsRefinePayload,
   buildRefinePayload,
   audioWasAdded,
@@ -1912,6 +1914,36 @@ function apiProviderModelForSettings() {
     || null;
 }
 
+function apiSamplingMarkup(model, config) {
+  const allowed = model?.sampling_parameters || [];
+  const values = safeApiSampling(config.sampling, allowed);
+  if (!allowed.length) return `<details class="h3ps-api-sampling"><summary>Sampling · provider defaults</summary><p>This provider/model uses managed sampling or does not advertise supported controls.</p></details>`;
+  return `<details class="h3ps-api-sampling"><summary>Sampling · ${Object.keys(values).length ? "custom" : "provider defaults"}</summary>
+    <p>Leave a field empty to use the provider default. Changes apply to the next Generate or Refine request.</p>
+    <form data-api-sampling-form><div class="h3ps-api-sampling-fields">${API_SAMPLING_FIELDS.map(({ name, label, min, max, step }) => `<label><span>${label}</span><input type="number" name="${name}" min="${min}" ${max == null ? "" : `max="${max}"`} step="${step}" value="${values[name] ?? ""}" placeholder="${allowed.includes(name) ? "Provider default" : "Not supported"}" ${allowed.includes(name) ? "" : "disabled"}></label>`).join("")}</div>
+    <small>${config.preset === "custom" ? "Custom endpoints may reject parameters their model does not support. Clear that field if the provider rejects it." : "Available controls come from the model's reported capabilities."}</small>
+    <div class="h3ps-api-actions"><button type="button" data-api-sampling-reset>Reset to provider defaults</button><button type="submit">Save sampling</button></div></form></details>`;
+}
+
+function saveApiSampling(form, reset = false) {
+  if (!reset && !form.reportValidity()) return;
+  const allowed = apiProviderModelForSettings()?.sampling_parameters || [];
+  const values = {};
+  if (!reset) for (const name of allowed) {
+    const input = form.elements.namedItem(name);
+    if (input && input.value !== "") values[name] = input.valueAsNumber;
+  }
+  studio.apiProviderConfig.sampling = safeApiSampling(values, allowed);
+  saveApiProviderConfig(localStorage, studio.apiProviderConfig);
+  renderInferenceSettings();
+  const panel = studio.root.querySelector(".h3ps-api-sampling");
+  if (panel) {
+    panel.open = true;
+    panel.querySelector(reset ? "[data-api-sampling-reset]" : '[type="submit"]')?.focus();
+  }
+  showToast("Sampling saved", reset ? "Using provider defaults." : "Applies to the next API request.");
+}
+
 function renderApiProviderControl() {
   const config = studio.apiProviderConfig;
   const selectedPreset = API_PROVIDER_UI[config.preset] || API_PROVIDER_UI.gemini;
@@ -1941,6 +1973,7 @@ function renderApiProviderControl() {
         <label class="h3ps-api-model-select"><span>Model</span><select data-api-model>${models.map((item) => `<option value="${escapeHtml(item.remote_model)}" ${item.remote_model === model?.remote_model ? "selected" : ""}>${escapeHtml(item.name)}${item.model_context_limit ? ` · ${Math.round(item.model_context_limit / 1024)}K` : ""}</option>`).join("")}</select></label>
         <div class="h3ps-api-badges"><span class="${model?.capabilities?.images ? "is-ready" : ""}">${model?.capabilities?.images ? "Vision" : "Text only / unknown"}</span><span>${config.preset === "gemini" ? `Thinking ${escapeHtml(connection.reasoning_effort || "minimal")}` : "Reasoning provider managed"}</span><span>Provider managed</span></div>
         <div class="h3ps-api-actions"><span>${policyLinks}</span><button type="button" data-api-model-refresh>${icon("refresh", 13)} Refresh models</button><button type="button" data-api-disconnect>Disconnect</button></div>
+        ${apiSamplingMarkup(model, config)}
         ${disclosure}
         <p class="h3ps-api-cancel-note">Stop aborts H3's connection. The remote provider may continue processing or billing.</p>
       </div>
@@ -2218,6 +2251,7 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
     studio.contextProfile = "auto";
     studio.kvCache = "auto";
     studio.thinking = false;
+    if (studio.apiProviderConfig.model_id !== model.remote_model) studio.apiProviderConfig.sampling = {};
     studio.apiProviderConfig.model_id = model.remote_model;
     saveApiProviderConfig(localStorage, studio.apiProviderConfig);
   }
@@ -2528,6 +2562,8 @@ async function connectConfiguredApiProvider(form) {
     gemini_reasoning_effort: form.elements.gemini_reasoning_effort?.value || studio.apiProviderConfig.gemini_reasoning_effort || "minimal",
     custom_images: Boolean(form.elements.custom_images?.checked),
     custom_context_tokens: Number.isInteger(contextValue) && contextValue >= 4096 ? contextValue : null,
+    sampling: form.elements.model_id.value.trim() === studio.apiProviderConfig.model_id
+      ? safeApiSampling(studio.apiProviderConfig.sampling) : {},
   };
   submit.disabled = true;
   submit.textContent = "Connecting…";
@@ -2617,6 +2653,7 @@ async function chooseApiProviderPreset(preset) {
     preset,
     base_url: "",
     model_id: "",
+    sampling: {},
     gemini_reasoning_effort: "minimal",
     custom_images: false,
     custom_context_tokens: null,
@@ -3620,6 +3657,11 @@ function createStudio() {
       return;
     }
     const apiDisconnect = event.target.closest("[data-api-disconnect]");
+    const samplingReset = event.target.closest("[data-api-sampling-reset]");
+    if (samplingReset) {
+      saveApiSampling(samplingReset.closest("form"), true);
+      return;
+    }
     if (apiDisconnect) {
       disconnectConfiguredApiProvider();
       return;
@@ -3693,6 +3735,12 @@ function createStudio() {
     }
   });
   root.querySelector("[data-provider-detail]").addEventListener("submit", (event) => {
+    const samplingForm = event.target.closest("[data-api-sampling-form]");
+    if (samplingForm) {
+      event.preventDefault();
+      saveApiSampling(samplingForm);
+      return;
+    }
     const ollamaHostForm = event.target.closest("[data-ollama-host-form]");
     if (ollamaHostForm) {
       event.preventDefault();

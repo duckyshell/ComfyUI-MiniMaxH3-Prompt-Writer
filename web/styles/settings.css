@@ -215,3 +215,9 @@
 }
 .h3ps-additional-settings .h3ps-toggle-control + .h3ps-toggle-control { margin-top: 12px; }
 .h3ps-floating-launcher[hidden] { display: none !important; }
+
+.h3ps-api-sampling { border-top: 1px solid var(--h3ps-divider-soft); padding-top: 12px; }
+.h3ps-api-sampling summary { cursor: pointer; color: var(--h3ps-text); }
+.h3ps-api-sampling-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.h3ps-api-sampling-fields input { width: 100%; min-width: 0; }
+.h3ps-api-sampling-fields input:disabled { opacity: .5; }

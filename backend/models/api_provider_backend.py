@@ -22,6 +22,7 @@ from ..context import (
 from ..h3_pipeline import run_h3_pipeline, validate_media_capabilities
 from ..version import VERSION
 from .contract import ModelError
+from .api_sampling import sampling_parameters, validate_sampling
 
 
 CONNECT_TIMEOUT_SECONDS = 10
@@ -163,10 +164,11 @@ class ApiConnection:
 
 
 class _ApiChatHandler:
-    def __init__(self, backend: "ApiProviderBackend", connection: ApiConnection, model_id: str) -> None:
+    def __init__(self, backend: "ApiProviderBackend", connection: ApiConnection, model_id: str, sampling: dict[str, Any] | None = None) -> None:
         self.backend = backend
         self.connection = connection
         self.model_id = model_id
+        self.sampling = dict(sampling or {})
 
     def __call__(
         self,
@@ -180,7 +182,7 @@ class _ApiChatHandler:
         thinking: bool,
         **_unused: Any,
     ) -> dict[str, Any]:
-        del top_k, seed, max_tokens
+        del temperature, top_p, top_k, seed, max_tokens
         payload: dict[str, Any] = {
             "model": self.model_id,
             "messages": messages,
@@ -193,13 +195,9 @@ class _ApiChatHandler:
             payload["store"] = False
         # Output limits belong to the provider/runtime. In particular, the
         # pipeline's non-thinking and repair budgets are not API request caps.
-        # New OpenAI reasoning models and Gemini 3.6+ reject or deprecate
-        # sampling controls. Keep those presets on the smallest portable set.
-        # Claude model generations differ in which sampling controls they accept.
-        # Let Anthropic choose defaults rather than rejecting otherwise valid requests.
-        if not thinking and preset in {"openrouter", "custom"} and not _is_anthropic_endpoint(self.connection.base_url):
-            payload["temperature"] = temperature
-            payload["top_p"] = top_p
+        # Never inherit the local pipeline's sampler defaults for API requests.
+        # Values are validated against the selected provider/model in preflight.
+        payload.update(self.sampling)
         if preset == "gemini":
             # Let Gemini manage the combined hidden reasoning and visible output
             # budget. Hard-coding per-effort token allowances would duplicate
@@ -496,6 +494,10 @@ class ApiProviderBackend:
             "remote_model": model_id,
             "source_label": f"{PRESETS[connection.preset]['name']} · API provider",
             "pricing": pricing,
+            "sampling_parameters": sampling_parameters(
+                connection.preset, supported_parameters,
+                anthropic=_is_anthropic_endpoint(connection.base_url),
+            ),
         }
 
     def _local_custom_model_metadata(self, connection: ApiConnection) -> dict[str, dict[str, Any]]:
@@ -672,7 +674,9 @@ class ApiProviderBackend:
         context_profile: str | None,
         kv_cache: str | None,
         thinking: bool,
+        sampling: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        api_sampling = validate_sampling(sampling, model_info.get("sampling_parameters", []))
         if (context_profile or "auto").lower() != "auto" or (kv_cache or "auto").lower() != "auto":
             raise ModelError(
                 "API_RUNTIME_MANAGED",
@@ -714,6 +718,7 @@ class ApiProviderBackend:
             )
         return {
             "requested_context_profile": "auto",
+            "api_sampling": api_sampling,
             "context_profile": "provider",
             "context_tokens": context_tokens,
             "requested_kv_cache": "auto",
@@ -879,7 +884,7 @@ class ApiProviderBackend:
             try:
                 if on_phase:
                     on_phase("loading_model")
-                handler = _ApiChatHandler(self, connection, model_info["remote_model"])
+                handler = _ApiChatHandler(self, connection, model_info["remote_model"], runtime_plan.get("api_sampling"))
 
                 def complete(**kwargs: Any) -> dict[str, Any]:
                     kwargs.pop("purpose", None)

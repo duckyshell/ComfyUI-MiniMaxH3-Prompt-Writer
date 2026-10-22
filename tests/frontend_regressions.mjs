@@ -1,4 +1,5 @@
 import "./focus_lifecycle.mjs";
+import "./api_sampling.mjs";
 import "./reference_labels.mjs";
 import "./draft_files.mjs";
 import "./desktop_notifications.mjs";
@@ -494,6 +495,7 @@ test("API provider storage persists configuration but never secret values", () =
     model_id: "provider/model",
     gemini_reasoning_effort: "minimal",
     custom_images: true,
+    sampling: {},
     custom_context_tokens: 32768,
   });
 });

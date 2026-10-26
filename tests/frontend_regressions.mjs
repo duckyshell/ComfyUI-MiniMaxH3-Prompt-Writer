@@ -16,6 +16,8 @@ import { messages as zhCN } from "../web/locales/zh-CN.js";
 import { autoVramControlMarkup } from "../web/vram_handoff.js";
 import './media_visual.mjs';
 import './sequence.mjs';
+import './video_brief_editor.mjs';
+import './dropdown_keyboard.mjs';
 import "./writer_async.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -73,6 +75,7 @@ const {
   normalizeCustomFrameCount,
   saveCustomSystemPrompts,
   saveApiProviderConfig,
+  safeApiSampling,
   saveExternalServerConfig,
   saveOllamaHost,
   saveOllamaModel,
@@ -977,6 +980,15 @@ test("Reference assets replace one dropped file and append multiple dropped file
   assert.equal(replacementTargetForFileDrop("asset-2", 2), null);
 });
 
+test("removing a stale media card drops it locally instead of failing", () => {
+  // A backend hot reload replaces the in-memory media store: the card is already gone
+  // server-side, so the remove click must reconcile instead of showing "Remove failed".
+  assert.match(mainSource, /error\?\.code === "MEDIA_NOT_FOUND"[\s\S]{0,900}acceptMediaAssets\(studio\.assets\.filter\(asset => asset\.id !== assetId\)\)/);
+  assert.match(mainSource, /acceptMediaAssets\(studio\.assets\.filter\(asset => asset\.id !== assetId\)\)[\s\S]{0,500}showToast\(msg\("toast\.media\.refreshed\.title"\), msg\("toast\.media\.refreshed\.message"\)\)/);
+  assert.match(mainSource, /const current = await listMedia\(studio\.sessionId\)[\s\S]{0,300}Array\.isArray\(current\?\.assets\)/);
+  assert.match(mainSource, /catch \(refreshError\)[\s\S]{0,300}kept locally reconciled list/);
+});
+
 test("media panel templates translate inline so labels are localized on first render", () => {
   assert.match(mainSource, /<strong data-i18n="media\.empty_t2va_title">\$\{t\("media\.empty_t2va_title"\)\}<\/strong>/);
   assert.match(mainSource, /<small data-i18n="media\.empty_t2va_hint">\$\{t\("media\.empty_t2va_hint"\)\}<\/small>/);
@@ -1478,7 +1490,7 @@ test("provider panel copy follows locale changes without replacing form state", 
     apiProviderError: null,
   };
   const factory = new Function(
-    "studio", "t", "escapeHtml", "icon", "DEFAULT_OLLAMA_HOST", "detectedVramTier", "reasoningLabel",
+    "studio", "t", "escapeHtml", "icon", "DEFAULT_OLLAMA_HOST", "detectedVramTier", "reasoningLabel", "safeApiSampling",
     `${mainSource.slice(panelStart, panelEnd)}
      return { renderExternalServerControl, renderOllamaProviderControl, renderApiProviderControl, syncProviderPanelCopy };`,
   );
@@ -1492,6 +1504,7 @@ test("provider panel copy follows locale changes without replacing form state", 
     "http://127.0.0.1:11434",
     () => "under-8",
     (value) => (value === "auto" ? t("settings.auto") : value[0].toUpperCase() + value.slice(1)),
+    safeApiSampling,
   );
   configureI18n({ preference: "en", root: panelRoot, navigatorLanguage: "en-US" });
   try {
@@ -2257,7 +2270,7 @@ test("fullscreen reuses the studio root and persists its UI state", () => {
   assert.match(mainSource, /if \(studio\.fullscreen\) setFullscreen\(false\)/);
   assert.match(mainSource, /saveUserPreferences\(localStorage, studio\)/);
   assert.match(mainSource, /fitTextarea\(brief, minimumHeight, 2\)/);
-  assert.match(stylesSource, /\.h3ps-root\.is-fullscreen \.h3ps-brief textarea \{ max-height: none; \}/);
+  assert.match(stylesSource, /\.h3ps-root\.is-fullscreen \.h3ps-brief textarea, \.h3ps-root\.is-fullscreen \.h3ps-brief \[data-seq-brief\] \{ max-height: none; \}/);
 });
 
 test("prompt refinement keeps actions above a vertically resizable editor", () => {

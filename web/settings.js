@@ -129,6 +129,10 @@ export function settingsMarkup(icon) {
           <label class="h3ps-toggle-control"><input type="checkbox" data-desktop-notifications><span></span><span data-i18n="settings.desktop_notifications">Desktop notifications</span></label>
           <p class="h3ps-field-help" data-desktop-notifications-hint></p>
         </section>
+        <section class="h3ps-settings-card h3ps-additional-settings">
+          <header><span><small>Additional settings</small></span></header>
+          <label class="h3ps-toggle-control" data-launcher-settings hidden><input type="checkbox" data-hide-launcher><span></span>Hide H3 button</label>
+        </section>
       </div>
     </section>`;
 }

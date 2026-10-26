@@ -211,7 +211,7 @@
   .h3ps-settings-heading { padding-inline: calc(20px * var(--h3ps-interface-scale)); }
   .h3ps-settings-content {
     grid-template-columns: 1fr;
-    grid-template-areas: "provider" "model" "runtime" "prompt" "notifications";
+    grid-template-areas: "provider" "model" "runtime" "prompt" "additional";
     gap: calc(26px * var(--h3ps-interface-scale));
     width: min(720px, calc(100% - 32px));
   }

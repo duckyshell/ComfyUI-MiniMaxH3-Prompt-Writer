@@ -28,6 +28,8 @@ import { writeToastContent } from "./toast.js";
 import { writeStatusContent } from "./status.js";
 import {
   buildGeneratePayload,
+  API_SAMPLING_FIELDS,
+  safeApiSampling,
   buildLyricsRefinePayload,
   buildRefinePayload,
   audioWasAdded,
@@ -59,6 +61,7 @@ import { editMedia } from "./api/h3studio.js";
 
 const EXTENSION_NAME = "minimax.h3.prompt.studio";
 const LAUNCHER_SCHEMA_VERSION = "2";
+const HIDE_LAUNCHER_SETTING = "H3PromptWriter.General.HideButton";
 const VRAM_HANDOFF_SUPPORTED = typeof app?.queuePrompt === "function";
 const HOST_CAPABILITIES = { windowed: true, comfyMemory: VRAM_HANDOFF_SUPPORTED, workflowMedia: true, ...app.h3psHost };
 const vramHandoffCoordinator = createVramHandoffCoordinator();
@@ -2039,6 +2042,36 @@ function renderApiProviderError() {
   return `<div class="h3ps-api-error"><strong ${error.code ? "" : 'data-provider-dynamic="api-error-code"'}>${escapeHtml(error.code || t("providers.api.connection_failed"))}</strong><span>${escapeHtml(error.message)}</span></div>`;
 }
 
+function apiSamplingMarkup(model, config) {
+  const allowed = model?.sampling_parameters || [];
+  const values = safeApiSampling(config.sampling, allowed);
+  if (!allowed.length) return `<details class="h3ps-api-sampling"><summary>Sampling · provider defaults</summary><p>This provider/model uses managed sampling or does not advertise supported controls.</p></details>`;
+  return `<details class="h3ps-api-sampling"><summary>Sampling · ${Object.keys(values).length ? "custom" : "provider defaults"}</summary>
+    <p>Leave a field empty to use the provider default. Changes apply to the next Generate or Refine request.</p>
+    <form data-api-sampling-form><div class="h3ps-api-sampling-fields">${API_SAMPLING_FIELDS.map(({ name, label, min, max, step }) => `<label><span>${label}</span><input type="number" name="${name}" min="${min}" ${max == null ? "" : `max="${max}"`} step="${step}" value="${values[name] ?? ""}" placeholder="${allowed.includes(name) ? "Provider default" : "Not supported"}" ${allowed.includes(name) ? "" : "disabled"}></label>`).join("")}</div>
+    <small>${config.preset === "custom" ? "Custom endpoints may reject parameters their model does not support. Clear that field if the provider rejects it." : "Available controls come from the model's reported capabilities."}</small>
+    <div class="h3ps-api-actions"><button type="button" data-api-sampling-reset>Reset to provider defaults</button><button type="submit">Save sampling</button></div></form></details>`;
+}
+
+function saveApiSampling(form, reset = false) {
+  if (!reset && !form.reportValidity()) return;
+  const allowed = apiProviderModelForSettings()?.sampling_parameters || [];
+  const values = {};
+  if (!reset) for (const name of allowed) {
+    const input = form.elements.namedItem(name);
+    if (input && input.value !== "") values[name] = input.valueAsNumber;
+  }
+  studio.apiProviderConfig.sampling = safeApiSampling(values, allowed);
+  saveApiProviderConfig(localStorage, studio.apiProviderConfig);
+  renderInferenceSettings();
+  const panel = studio.root.querySelector(".h3ps-api-sampling");
+  if (panel) {
+    panel.open = true;
+    panel.querySelector(reset ? "[data-api-sampling-reset]" : '[type="submit"]')?.focus();
+  }
+  showToast("Sampling saved", reset ? "Using provider defaults." : "Applies to the next API request.");
+}
+
 function renderApiProviderControl() {
   const config = studio.apiProviderConfig;
   const selectedPreset = API_PROVIDER_UI[config.preset] || API_PROVIDER_UI.gemini;
@@ -2068,6 +2101,7 @@ function renderApiProviderControl() {
         <label class="h3ps-api-model-select"><span data-i18n="settings.model">${t("settings.model")}</span><select data-api-model>${models.map((item) => `<option value="${escapeHtml(item.remote_model)}" ${item.remote_model === model?.remote_model ? "selected" : ""}>${escapeHtml(item.name)}${item.model_context_limit ? ` · ${Math.round(item.model_context_limit / 1024)}K` : ""}</option>`).join("")}</select></label>
         <div class="h3ps-api-badges"><span class="${model?.capabilities?.images ? "is-ready" : ""}" data-i18n="${model?.capabilities?.images ? "providers.ollama.vision" : "providers.api.text_unknown"}">${model?.capabilities?.images ? t("providers.ollama.vision") : t("providers.api.text_unknown")}</span><span data-provider-dynamic="api-thinking">${config.preset === "gemini" ? t("providers.api.thinking", { level: escapeHtml(connection.reasoning_effort || "minimal") }) : t("toast.generation.reasoning_managed")}</span><span data-i18n="providers.api.provider_managed">${t("providers.api.provider_managed")}</span></div>
         <div class="h3ps-api-actions"><span>${policyLinks}</span><button type="button" data-api-model-refresh>${icon("refresh", 13)} <span data-i18n="providers.api.refresh_models">${t("providers.api.refresh_models")}</span></button><button type="button" data-api-disconnect data-i18n="providers.external.disconnect">${t("providers.external.disconnect")}</button></div>
+        ${apiSamplingMarkup(model, config)}
         ${disclosure}
         <p class="h3ps-api-cancel-note" data-i18n="providers.api.stop_note">${t("providers.api.stop_note")}</p>
       </div>
@@ -2395,6 +2429,7 @@ function selectModel(model, { preserveSettingsProvider = false } = {}) {
     studio.contextProfile = "auto";
     studio.kvCache = "auto";
     studio.thinking = false;
+    if (studio.apiProviderConfig.model_id !== model.remote_model) studio.apiProviderConfig.sampling = {};
     studio.apiProviderConfig.model_id = model.remote_model;
     saveApiProviderConfig(localStorage, studio.apiProviderConfig);
   }
@@ -2908,6 +2943,8 @@ async function connectConfiguredApiProvider(form) {
     gemini_reasoning_effort: form.elements.gemini_reasoning_effort?.value || studio.apiProviderConfig.gemini_reasoning_effort || "minimal",
     custom_images: Boolean(form.elements.custom_images?.checked),
     custom_context_tokens: Number.isInteger(contextValue) && contextValue >= 4096 ? contextValue : null,
+    sampling: form.elements.model_id.value.trim() === studio.apiProviderConfig.model_id
+      ? safeApiSampling(studio.apiProviderConfig.sampling) : {},
   };
   submit.disabled = true;
   submit.textContent = t("providers.external.connecting");
@@ -3002,6 +3039,7 @@ async function chooseApiProviderPreset(preset) {
     preset,
     base_url: "",
     model_id: "",
+    sampling: {},
     gemini_reasoning_effort: "minimal",
     custom_images: false,
     custom_context_tokens: null,
@@ -3932,7 +3970,7 @@ function createStudio() {
   const notificationsToggle = root.querySelector("[data-desktop-notifications]");
   const syncNotifications = () => {
     notificationsToggle.checked = studio.desktopNotifications.enabled;
-    root.querySelector("[data-desktop-notifications-hint]").textContent = studio.desktopNotifications.hint;
+    root.querySelector("[data-desktop-notifications-hint]").title = studio.desktopNotifications.hint;
   };
   notificationsToggle.addEventListener("change", async () => {
     notificationsToggle.disabled = true;
@@ -3940,6 +3978,20 @@ function createStudio() {
     finally { notificationsToggle.disabled = false; syncNotifications(); }
   });
   syncNotifications();
+  const hideLauncherToggle = root.querySelector("[data-hide-launcher]");
+  root.querySelector("[data-launcher-settings]").hidden = !HOST_CAPABILITIES.windowed;
+  syncLauncherVisibility();
+  hideLauncherToggle.addEventListener("change", async () => {
+    hideLauncherToggle.disabled = true;
+    try {
+      await app.extensionManager.setting.set(HIDE_LAUNCHER_SETTING, hideLauncherToggle.checked);
+    } catch (error) {
+      showToast("Setting not saved", error.message);
+    } finally {
+      hideLauncherToggle.disabled = false;
+      syncLauncherVisibility();
+    }
+  });
   root.querySelector("[data-draft-save]").onclick=()=>{ setClearMenuOpen(false); saveTextDraft(); };
   const draftInput=root.querySelector("[data-draft-file]");
   root.querySelector("[data-draft-load]").onclick=()=>{ if(!studio.requestBusy) { setClearMenuOpen(false); draftInput.click(); } };
@@ -4121,6 +4173,11 @@ function createStudio() {
       return;
     }
     const apiDisconnect = event.target.closest("[data-api-disconnect]");
+    const samplingReset = event.target.closest("[data-api-sampling-reset]");
+    if (samplingReset) {
+      saveApiSampling(samplingReset.closest("form"), true);
+      return;
+    }
     if (apiDisconnect) {
       disconnectConfiguredApiProvider();
       return;
@@ -4194,6 +4251,12 @@ function createStudio() {
     }
   });
   root.querySelector("[data-provider-detail]").addEventListener("submit", (event) => {
+    const samplingForm = event.target.closest("[data-api-sampling-form]");
+    if (samplingForm) {
+      event.preventDefault();
+      saveApiSampling(samplingForm);
+      return;
+    }
     const ollamaHostForm = event.target.closest("[data-ollama-host-form]");
     if (ollamaHostForm) {
       event.preventDefault();
@@ -4522,10 +4585,34 @@ function syncLauncherLabels(doc = document) {
   if (image) image.alt = t("launcher.alt");
 }
 
+function syncLauncherVisibility(hidden = app.extensionManager?.setting?.get(HIDE_LAUNCHER_SETTING) === true) {
+  const launcher = document.querySelector("[data-h3ps-launcher]");
+  if (launcher) launcher.hidden = hidden;
+  const toggle = studio?.root.querySelector("[data-hide-launcher]");
+  if (toggle) toggle.checked = hidden;
+}
+
+function onLauncherVisibilityChange(hidden, previous) {
+  syncLauncherVisibility(hidden === true);
+  // ComfyUI also calls onChange during registration; only explain a user change.
+  if (!HOST_CAPABILITIES.windowed || hidden !== true || previous !== false) return;
+  const message = "Open Writer from the Comfy menu → Extensions → H3 Prompt Writer → Open H3 Prompt Writer.";
+  if (studio?.root.classList.contains("is-open")) {
+    showToast("H3 button hidden", message, null, null, { dismissOnWorkspaceClick: true });
+  } else {
+    const notice = { severity: "info", summary: "H3 button hidden", detail: message, life: 0, closable: true };
+    app.extensionManager.toast.add(notice);
+    document.addEventListener("pointerdown", () => app.extensionManager.toast.remove(notice), { once: true });
+  }
+}
+
 function installLauncher() {
   if (!HOST_CAPABILITIES.windowed) return;
   const existingLauncher = document.querySelector("[data-h3ps-launcher]");
-  if (existingLauncher?.dataset.h3psLauncherVersion === LAUNCHER_SCHEMA_VERSION) return;
+  if (existingLauncher?.dataset.h3psLauncherVersion === LAUNCHER_SCHEMA_VERSION) {
+    syncLauncherVisibility();
+    return;
+  }
   existingLauncher?.remove();
   document.querySelector("[data-h3ps-launcher-group]")?.remove();
   const launcher = document.createElement("button");
@@ -4611,6 +4698,7 @@ function installLauncher() {
     if (!saved || drag) return;
     applyPosition(saved);
   });
+  syncLauncherVisibility();
 }
 
 document.addEventListener("keydown", (event) => {
@@ -4672,6 +4760,13 @@ document.addEventListener("keydown", (event) => {
 
 app.registerExtension({
   name: EXTENSION_NAME,
+  settings: [{
+    id: HIDE_LAUNCHER_SETTING,
+    name: "Hide H3 button",
+    type: "boolean",
+    defaultValue: false,
+    onChange: onLauncherVisibilityChange,
+  }],
   beforeConfigureGraph() { workflowRevision++; },
   commands: [{ id: "h3-prompt-studio.open", label: "Open H3 Prompt Writer", function: openStudio },
     { id: "h3-prompt-studio.media", label: "Prompt Writer media over workflow", function: openFloatingMedia }],

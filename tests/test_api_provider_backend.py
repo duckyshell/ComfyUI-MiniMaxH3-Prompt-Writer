@@ -209,6 +209,53 @@ class ApiProviderBackendTests(unittest.TestCase):
             self.backend._request_chat_completion_stream(self._connection(), {"model": "incomplete"})
         self.assertEqual(error.exception.code, "API_STREAM_INTERRUPTED")
 
+    def test_sampling_overrides_reach_generation_and_repair_without_pipeline_defaults(self):
+        connection = self._connection()
+        self.backend._connections[connection.id] = connection
+        model = self.backend._model_info(connection, "plain-model")
+        assembled = {"messages": [], "media_inputs": [], "input": {"mode": "T2VA", "duration_seconds": 5}}
+        sampling = {"temperature": 0, "top_p": 0.7, "top_k": 15, "frequency_penalty": -0.5, "presence_penalty": 1.2}
+        plan = self.backend.preflight(model, assembled, context_profile="auto", kv_cache="auto", thinking=False, sampling=sampling)
+
+        def pipeline(*args, complete, **kwargs):
+            for purpose in ("generation", "repair"):
+                complete(messages=[], temperature=0.3, top_p=0.9, top_k=40,
+                         max_tokens=50, seed=None, thinking=False, purpose=purpose)
+            return {"prompt": "OK"}
+
+        with patch("backend.models.api_provider_backend.run_h3_pipeline", side_effect=pipeline):
+            self.backend.generate(model, assembled, "test", thinking=False, seed=None, unload_after=False, runtime_plan=plan)
+        for request in [item for item in _FakeApiHandler.requests if item[0] == "POST"]:
+            self.assertEqual({key: request[3][key] for key in sampling}, sampling)
+        self.assertEqual(self.backend._request_count, 2)
+
+    def test_sampling_defaults_omit_every_sampler_for_every_preset(self):
+        names = {"temperature", "top_p", "top_k", "presence_penalty", "frequency_penalty"}
+        for preset in ("custom", "openrouter", "openai", "gemini"):
+            _ApiChatHandler(self.backend, self._connection(preset=preset), "plain-model")(
+                messages=[], temperature=0.2, top_p=0.5, top_k=12, max_tokens=30, seed=None, thinking=False)
+            self.assertFalse(names.intersection(_FakeApiHandler.requests[-1][3]))
+
+    def test_sampling_validation_uses_selected_model_metadata(self):
+        from backend.models.api_sampling import validate_sampling
+        model = self.backend._model_info(self._connection(preset="openrouter"),
+                                        {"id": "limited", "supported_parameters": ["temperature"]})
+        self.assertEqual(model["sampling_parameters"], ["temperature"])
+        self.assertEqual(validate_sampling({"temperature": 0}, model["sampling_parameters"]), {"temperature": 0})
+        for invalid in ({"top_k": 12}, {"temperature": True}, {"temperature": float("nan")},
+                        {"temperature": float("inf")}, {"temperature": "1"}, {"temperature": -1}, {"temperature": 3}):
+            with self.subTest(invalid=invalid), self.assertRaises(ModelError):
+                validate_sampling(invalid, model["sampling_parameters"])
+        for invalid in ({"top_k": 1.5}, {"top_k": -1}, {"top_p": 1.1}, {"presence_penalty": 3}):
+            with self.subTest(invalid=invalid), self.assertRaises(ModelError):
+                validate_sampling(invalid, list(invalid))
+        self.assertEqual(validate_sampling({}, []), {})
+        for preset in ("openai", "gemini"):
+            self.assertEqual(self.backend._model_info(self._connection(preset=preset), "plain-model")["sampling_parameters"], [])
+        connection = self._connection()
+        connection.base_url = "https://api.anthropic.com/v1"
+        self.assertEqual(self.backend._model_info(connection, "claude-test")["sampling_parameters"], [])
+
     def test_custom_url_accepts_loopback_and_private_lan_http_but_requires_https_for_public_hosts(self):
         self.assertEqual(normalize_api_base_url("custom", self.base_url), self.base_url)
         private_urls = (
@@ -322,7 +369,7 @@ class ApiProviderBackendTests(unittest.TestCase):
                 with patch.object(self.backend, "_http_connection", side_effect=lambda _url, timeout: http.client.HTTPConnection(
                     "127.0.0.1", self.server.server_address[1], timeout=timeout,
                 )):
-                    _ApiChatHandler(self.backend, connection, "vision-reasoning-model")(
+                    _ApiChatHandler(self.backend, connection, "vision-reasoning-model", {"temperature": 0.8, "top_p": 0.95})(
                         messages=[], temperature=0.8, top_p=0.95, top_k=64,
                         max_tokens=1536, seed=None, thinking=False,
                     )

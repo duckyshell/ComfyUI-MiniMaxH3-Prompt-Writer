@@ -149,6 +149,22 @@ export function saveUserPreferences(storage, state) {
   storage?.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
 }
 
+export const API_SAMPLING_FIELDS = [
+  { name: "temperature", label: "Temperature", min: 0, max: 2, step: "any" },
+  { name: "top_p", label: "Top P", min: 0, max: 1, step: "any" },
+  { name: "top_k", label: "Top K", min: 0, step: "1" },
+  { name: "frequency_penalty", label: "Frequency penalty", min: -2, max: 2, step: "any" },
+  { name: "presence_penalty", label: "Presence penalty", min: -2, max: 2, step: "any" },
+];
+
+export function safeApiSampling(value, allowed = API_SAMPLING_FIELDS.map(({ name }) => name)) {
+  return Object.fromEntries(API_SAMPLING_FIELDS.filter(({ name, min, max }) => {
+    const number = value?.[name];
+    return allowed.includes(name) && typeof number === "number" && Number.isFinite(number)
+      && number >= min && (max == null || number <= max) && (name !== "top_k" || Number.isSafeInteger(number));
+  }).map(({ name }) => [name, value[name]]));
+}
+
 export function loadApiProviderConfig(storage = globalThis.localStorage) {
   try {
     const value = JSON.parse(storage?.getItem(API_PROVIDER_STORAGE_KEY) || "null");
@@ -159,6 +175,7 @@ export function loadApiProviderConfig(storage = globalThis.localStorage) {
       model_id: typeof value.model_id === "string" ? value.model_id : "",
       gemini_reasoning_effort: ["minimal", "low", "medium", "high"].includes(value.gemini_reasoning_effort) ? value.gemini_reasoning_effort : "minimal",
       custom_images: value.custom_images === true,
+      sampling: safeApiSampling(value.sampling),
       custom_context_tokens: Number.isInteger(value.custom_context_tokens) ? value.custom_context_tokens : null,
     };
   } catch {
@@ -177,6 +194,7 @@ export function saveApiProviderConfig(storage, config) {
     model_id: String(config.model_id || ""),
     gemini_reasoning_effort: ["minimal", "low", "medium", "high"].includes(config.gemini_reasoning_effort) ? config.gemini_reasoning_effort : "minimal",
     custom_images: config.custom_images === true,
+    sampling: safeApiSampling(config.sampling),
     custom_context_tokens: Number.isInteger(config.custom_context_tokens) ? config.custom_context_tokens : null,
   };
   storage?.setItem(API_PROVIDER_STORAGE_KEY, JSON.stringify(safe));
@@ -347,6 +365,9 @@ function sharedInferencePayload(state) {
     ollama_model: selectedOllamaModel(state),
     ollama_host: selectedOllamaHost(state),
     api_provider: selectedApiProvider(state),
+    ...(state.selectedModel?.family === "api" ? {
+      api_sampling: safeApiSampling(state.apiProviderConfig?.sampling, state.selectedModel.sampling_parameters || []),
+    } : {}),
     thinking,
     context_profile: directRuntime ? state.contextProfile : "auto",
     kv_cache: directRuntime ? state.kvCache : "auto",

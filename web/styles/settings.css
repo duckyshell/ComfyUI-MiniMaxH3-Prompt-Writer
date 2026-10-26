@@ -95,7 +95,7 @@
     "provider model"
     "provider runtime"
     "provider prompt"
-    "provider notifications";
+    "provider additional";
   align-items: start;
   gap: 0 44px;
   width: min(1180px, calc(100% - 56px));
@@ -208,13 +208,16 @@
 .h3ps-provider-icon[data-provider-icon="api-custom"] { --h3ps-provider-icon: url("../assets/icons/custom.svg"); }
 .h3ps-provider-selector > button.is-selected .h3ps-provider-icon { color: var(--h3ps-text); }
 
-.h3ps-notifications-settings {
-  grid-area: notifications;
+.h3ps-additional-settings {
+  grid-area: additional;
   padding-top: calc(26px * var(--h3ps-interface-scale));
   border-top: 1px solid var(--h3ps-divider-soft);
 }
-.h3ps-notifications-settings p {
-  margin: 8px 0 0;
-  color: var(--h3ps-dim);
-  font-size: var(--h3ps-font-caption);
-}
+.h3ps-additional-settings .h3ps-toggle-control + .h3ps-toggle-control { margin-top: 12px; }
+.h3ps-floating-launcher[hidden] { display: none !important; }
+
+.h3ps-api-sampling { border-top: 1px solid var(--h3ps-divider-soft); padding-top: 12px; }
+.h3ps-api-sampling summary { cursor: pointer; color: var(--h3ps-text); }
+.h3ps-api-sampling-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.h3ps-api-sampling-fields input { width: 100%; min-width: 0; }
+.h3ps-api-sampling-fields input:disabled { opacity: .5; }

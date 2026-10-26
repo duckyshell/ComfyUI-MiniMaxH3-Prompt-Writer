@@ -1,8 +1,10 @@
 import "./focus_lifecycle.mjs";
+import "./api_sampling.mjs";
 import "./reference_labels.mjs";
 import "./draft_files.mjs";
 import "./desktop_notifications.mjs";
 import { Window } from "happy-dom";
+import "./launcher_visibility.mjs";
 import { generationButtonMarkup } from "../web/writer_controls.js";
 import { aspectRatioMarkup, splitMenuMarkup } from "../web/writer_controls.js";
 import { configureI18n, localizedError, messageText, msg, setLanguagePreference, t } from "../web/i18n.js";
@@ -499,6 +501,7 @@ test("API provider storage persists configuration but never secret values", () =
     model_id: "provider/model",
     gemini_reasoning_effort: "minimal",
     custom_images: true,
+    sampling: {},
     custom_context_tokens: 32768,
   });
 });

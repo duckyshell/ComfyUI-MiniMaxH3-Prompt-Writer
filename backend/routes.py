@@ -440,6 +440,8 @@ async def _prepare_generation_runtime(
     }
     if model["family"] in {"gguf", "ollama"}:
         runtime_options["generation_budget"] = body.get("generation_budget")
+    if model["family"] == "api":
+        runtime_options["sampling"] = body.get("api_sampling")
     if model["family"] == "gguf":
         runtime_options.update({
             "context_tokens": body.get("context_tokens"),

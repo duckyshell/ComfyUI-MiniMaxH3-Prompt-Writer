@@ -8,8 +8,9 @@ async function request(path, options) {
   return readApiResponse(response);
 }
 
-function post(path, body = {}) {
+function post(path, body = {}, options = {}) {
   return request(path, {
+    ...options,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -32,10 +33,11 @@ export const getGuides = () => request("/guides");
 export const getGuide = (mode) => request(`/guides/${encodeURIComponent(mode)}`);
 export const getSystemPrompt = (mode) => request(`/system-prompt/${encodeURIComponent(mode)}`);
 export const assemble = (payload) => post("/assemble", payload);
-export const generate = (payload) => post("/generate", payload);
+// Inference can outlast ComfyUI's default response-header timeout.
+export const generate = (payload) => post("/generate", payload, { timeoutMs: null });
 export const cancel = () => post("/cancel");
 export const unloadModel = (target = {}) => post("/unload", target);
-export const refine = (payload) => post("/refine", payload);
+export const refine = (payload) => post("/refine", payload, { timeoutMs: null });
 
 export async function freeComfyVram() {
   const response = await api.fetchApi("/free", {

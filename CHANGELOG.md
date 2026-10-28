@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.4.8 - 2026-10-28
 
+- Fixed generation and Refine failing with `Fetch timeout` after one minute on newer ComfyUI frontends ([#49](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/49)).
+- Improved Direct GGUF cancellation with native runtime abort support, avoiding a Python callback on every token. Thanks to @Bloodborne9876 ([#39](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/pull/39)).
+- Fixed compatibility with Anthropic's OpenAI-compatible API endpoint ([#41](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/41)).
+- Fixed GGUF model discovery when optional ComfyUI model folders are not registered ([#43](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/43)).
+- Added optional sampling controls for API providers, with saved overrides and a reset to provider defaults ([#44](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/44)).
+- Added a setting to hide the H3 launcher button while keeping Writer available through the Extensions menu ([#46](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/46)).
 - Improved Media Panel drops onto custom media loaders, using each loader's own upload and preview handling ([#37](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/37)).
 
 ## 0.4.7 - 2026-09-26

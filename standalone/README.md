@@ -2,9 +2,9 @@
 
 Use H3 Prompt Writer without ComfyUI.
 
-Current Standalone version: **0.1.9**
+Current Standalone version: **0.1.10**
 
-[Download H3 Prompt Writer Standalone v0.1.9](../../../releases/download/standalone-v0.1.9/H3-Prompt-Writer-Standalone-Windows-v0.1.9.zip)
+[Download H3 Prompt Writer Standalone v0.1.10](../../../releases/download/standalone-v0.1.10/H3-Prompt-Writer-Standalone-Windows-v0.1.10.zip)
 
 ## This is the Standalone version
 
@@ -191,6 +191,6 @@ From the repository root, build the portable package with:
 powershell -ExecutionPolicy Bypass -File scripts\build_standalone.ps1
 ```
 
-The result is `dist\H3-Prompt-Writer-Standalone-Windows-v0.1.9.zip`. It records the
+The result is `dist\H3-Prompt-Writer-Standalone-Windows-v0.1.10.zip`. It records the
 repository commit in `upstream\UPSTREAM_SNAPSHOT.txt` and excludes local settings,
 logs, models, `llama-server`, CUDA libraries, and test artifacts.

@@ -1,5 +1,11 @@
 # Standalone changelog
 
+## 0.1.10 - 2026-10-28
+
+- Added optional sampling controls for API providers, with saved overrides and a reset to provider defaults ([#44](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/44)).
+- Fixed compatibility with Anthropic's OpenAI-compatible API endpoint ([#41](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/41)).
+- Updated the shared Writer core to `0.4.8`.
+
 ## 0.1.9 - 2026-09-23
 
 - Open Writer as an installed browser app with its own window and taskbar icon. Thanks to @kaalibro (#35).

@@ -8,9 +8,9 @@ H3 Prompt Writer is a prompt-writing workspace for MiniMax H3 inside ComfyUI. St
 
 It is a ComfyUI UI extension, not a workflow node. It writes prompt text for your existing H3 workflow and helps prepare reference media. The optional Media panel can add media loaders to your workflow. Writer does not run MiniMax H3 or queue a video.
 
-ComfyUI extension: **0.4.6** · [Download ZIP](../../releases/download/v0.4.6/H3-Prompt-Writer-ComfyUI-v0.4.6.zip) · [Installation](docs/INSTALLATION.md)
+ComfyUI extension: **0.4.8** · [Download ZIP](../../releases/download/v0.4.8/H3-Prompt-Writer-ComfyUI-v0.4.8.zip) · [Installation](docs/INSTALLATION.md)
 
-Standalone for Windows: **0.1.9** · [Download ZIP](../../releases/download/standalone-v0.1.9/H3-Prompt-Writer-Standalone-Windows-v0.1.9.zip) · [Setup guide](standalone/README.md)
+Standalone for Windows: **0.1.10** · [Download ZIP](../../releases/download/standalone-v0.1.10/H3-Prompt-Writer-Standalone-Windows-v0.1.10.zip) · [Setup guide](standalone/README.md)
 
 ## Highlights
 

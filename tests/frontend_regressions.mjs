@@ -19,6 +19,8 @@ import "./editor_interactions.mjs";
 import "./media_tools.mjs";
 import "./workflow_media.mjs";
 import "./floating_media.mjs";
+import "./prompt_library.mjs";
+import "./prompt_tabs.mjs";
 
 const source = await readFile(new URL("../web/compat.js", import.meta.url), "utf8");
 const encoded = Buffer.from(source).toString("base64");

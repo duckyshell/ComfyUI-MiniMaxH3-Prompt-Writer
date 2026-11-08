@@ -40,6 +40,9 @@ import {
 } from "./studio_state.js";
 import { autoVramControlMarkup, createVramHandoffCoordinator, installVramHandoff, isLocalOllamaHost, releaseComfyVramWhenIdle, unloadWriterModels } from "./vram_handoff.js";
 import { createLazyMediaTool } from "./media_tools.js";
+import { createPromptLibrary, historyButtonMarkup, historyPanelMarkup, prefillPickerMarkup } from "./prompt_library.js";
+import { addHistory, clearHistory, deleteHistory, fetchHistoryFile, listHistory, listMedia } from "./api/h3studio.js";
+import { createPromptTabs, tabLabel, tabsBarMarkup, videoModeDrafts } from "./prompt_tabs.js";
 
 import { editMedia } from "./api/h3studio.js";
 
@@ -360,6 +363,8 @@ const STYLE_MODULES = [
   "music",
   "responsive",
   "sequence",
+  "library",
+  "tabs",
 ];
 
 function injectStyles() {
@@ -996,6 +1001,251 @@ async function loadTextDraft(value) {
   }
 }
 
+function recordPromptHistory(prompt, source = null) {
+  if (!studio?.library || (!source && (studio.mode === "Music3" || studio.sequence?.active))) return;
+  const { mode, brief, sessionId, durationSeconds, aspectRatio, assets } = source || {
+    ...studio, brief: currentBriefTextarea().value,
+  };
+  studio.library.record({
+    session_id: sessionId,
+    mode,
+    brief,
+    prompt,
+    duration: durationSeconds,
+    aspect_ratio: aspectRatio,
+    model: studio.selectedModel?.name?.split("/").pop() || "",
+    asset_ids: (assets || []).filter((asset) => asset.mode === mode).map((asset) => asset.id),
+  });
+}
+
+function captureActiveTab() {
+  saveCurrentModeDraft();
+  return {
+    mode: studio.mode === "Music3" ? studio.lastVideoMode : studio.mode,
+    modeDrafts: videoModeDrafts(studio.modeDrafts),
+    sessionId: studio.sessionId,
+    assets: studio.assets,
+    durationSeconds: studio.durationSeconds,
+    aspectRatio: studio.aspectRatio,
+  };
+}
+
+async function loadTabMedia(tab) {
+  try {
+    tab.assets = (await listMedia(tab.sessionId)).assets;
+  } catch {
+    tab.assets = [];
+  }
+  return tab.assets;
+}
+
+async function applyPromptTab(tab) {
+  studio.sessionId = tab.sessionId;
+  studio.assets = tab.assets || [];
+  studio.modeDrafts = { ...tab.modeDrafts, ...(studio.modeDrafts.Music3 ? { Music3: studio.modeDrafts.Music3 } : {}) };
+  if (studio.mode !== "Music3") studio.mode = tab.mode;
+  studio.lastVideoMode = tab.mode;
+  const slider = studio.root.querySelector("[data-duration-slider]");
+  slider.value = String(tab.durationSeconds);
+  slider.dispatchEvent(new Event("input"));
+  studio.aspectRatio = tab.aspectRatio;
+  studio.aspectControl.update(studio.aspectRatio);
+  saveModeDrafts(localStorage, studio.modeDrafts);
+  saveUserPreferences(localStorage, studio);
+  toggleRefine(false);
+  syncWorkspace();
+  restoreModeDraft(studio.mode);
+  renderMedia(studio.mode);
+  syncRuntimeSummary();
+  syncQueueLock();
+  if (!tab.assets) {
+    const assets = await loadTabMedia(tab);
+    if (studio.tabs.active === tab) {
+      studio.assets = assets;
+      renderMedia(studio.mode);
+    }
+  }
+}
+
+function syncQueueControls() {
+  const button = studio?.root.querySelector("[data-queue-toggle]");
+  if (!button || !studio.tabs) return;
+  const tab = studio.tabs.active;
+  button.hidden = studio.mode === "Music3" || Boolean(studio.sequence?.active);
+  button.disabled = (studio.requestBusy && !studio.queueLocked) || tab.status === "running";
+  button.querySelector("[data-queue-label]").textContent = tab.status === "queued" ? "Remove from queue" : tab.status === "running" ? "Generating…" : "Add to queue";
+  button.classList.toggle("is-queued", tab.status === "queued");
+}
+
+// The running tab locks the workspace only while it is the visible tab.
+function syncQueueLock() {
+  const tab = studio.tabs?.running;
+  const lock = Boolean(tab && tab === studio.tabs.active);
+  if (lock && !studio.queueLocked) {
+    studio.queueLocked = true;
+    setGenerationState("busy", tab.phase || "Queued prompt", "Generating from the prompt queue");
+  } else if (!lock && studio.queueLocked) {
+    studio.queueLocked = false;
+    setGenerationState("idle", "", "");
+  }
+  syncQueueControls();
+}
+
+async function runPromptQueue() {
+  if (studio.queueRunning) return;
+  studio.queueRunning = true;
+  let finished = 0;
+  try {
+    while (!(studio.requestBusy && !studio.queueLocked)) {
+      const tab = studio.tabs.queued[0];
+      if (!tab) break;
+      if (!studio.selectedModel?.runtime_ready) {
+        studio.tabs.queued.forEach((item) => studio.tabs.setStatus(item.id, "idle"));
+        showToast("Queue paused", "Select a ready prompt model in Settings, then add the tabs to the queue again.");
+        break;
+      }
+      if (await runQueuedTab(tab)) finished += 1;
+    }
+  } finally {
+    studio.queueRunning = false;
+    syncQueueControls();
+  }
+  if (finished && !studio.tabs.running && !studio.tabs.queued.length) {
+    studio.desktopNotifications.notify(`Prompt queue finished. ${finished} prompt${finished === 1 ? " is" : "s are"} ready.`);
+  }
+}
+
+async function runQueuedTab(tab) {
+  if (!isGenerationModeAvailable(studio.selectedModel, tab.mode)) {
+    studio.tabs.setStatus(tab.id, "error", "This Direct GGUF is text-only. Use T2VA or add the matching mmproj.");
+    return false;
+  }
+  if (tab === studio.tabs.active) Object.assign(tab, captureActiveTab());
+  if (!tab.assets) await loadTabMedia(tab);
+  const draft = tab.modeDrafts[tab.mode] || defaultModeDraft(tab.mode);
+  tab.phase = null;
+  studio.tabs.setStatus(tab.id, "running");
+  syncQueueLock();
+  if (!await prepareWriterRequest({ showStatus: tab === studio.tabs.active })) {
+    studio.tabs.setStatus(tab.id, "error", "The prompt model could not be prepared.");
+    syncQueueLock();
+    return false;
+  }
+  const remote = ["external", "api"].includes(studio.selectedModel.family);
+  const detail = `${tabLabel(tab)} · ${studio.selectedModel.name.split("/").pop()}`;
+  markActiveWriterRequest();
+  let polling = true;
+  const timer = setInterval(async () => {
+    try {
+      const status = await getStatus(studio.ollamaHost);
+      const labels = { loading_model: remote ? "Contacting provider" : "Loading model", processing_media: "Processing references", generating: "Generating", cancelling: "Cancelling" };
+      if (!polling || !labels[status.phase]) return;
+      tab.phase = labels[status.phase];
+      if (studio.queueLocked && studio.tabs.active === tab) setGenerationState("busy", tab.phase, detail);
+    } catch {}
+  }, 650);
+  let completed = false;
+  try {
+    const result = await vramHandoffCoordinator.trackWriterRequest(generate(buildGeneratePayload(
+      { ...studio, mode: tab.mode, sessionId: tab.sessionId, durationSeconds: tab.durationSeconds, aspectRatio: tab.aspectRatio },
+      { creativeBrief: draft.brief, seed: newGenerationSeed() },
+    )));
+    const visible = studio.tabs.active === tab && studio.mode === tab.mode;
+    if (visible) {
+      applyGeneratedPrompt(result);
+      Object.assign(tab, captureActiveTab());
+    } else {
+      tab.modeDrafts[tab.mode] = { ...(tab.modeDrafts[tab.mode] || draft), prompt: result.prompt };
+      if (studio.tabs.active === tab) {
+        studio.modeDrafts[tab.mode] = tab.modeDrafts[tab.mode];
+        saveModeDrafts(localStorage, studio.modeDrafts);
+      }
+    }
+    recordPromptHistory(result.prompt, { ...tab, brief: tab.modeDrafts[tab.mode].brief });
+    studio.tabs.setStatus(tab.id, studio.tabs.active === tab ? "idle" : "done");
+    studio.tabs.save();
+    completed = true;
+    showToast("Prompt ready", `${tabLabel(tab)} · ${tab.mode} · ${result.total_seconds.toFixed(1)}s`, null,
+      studio.tabs.active === tab ? null : { label: "Open tab", onClick: () => studio.tabs.select(tab.id) });
+  } catch (error) {
+    if (error.code === "GENERATION_BUSY") {
+      // Another Writer request or a media change holds the backend; try again shortly.
+      studio.tabs.setStatus(tab.id, "queued");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    } else if (error.code === "GENERATION_CANCELLED") {
+      studio.tabs.setStatus(tab.id, "idle");
+      showToast("Queued prompt cancelled", tabLabel(tab));
+    } else {
+      studio.tabs.setStatus(tab.id, "error", error.message);
+      showToast(error.code || "Queued prompt failed", `${tabLabel(tab)}: ${error.message}`, error.details, studio.tabs.active === tab ? null : { label: "Open tab", onClick: () => studio.tabs.select(tab.id) });
+    }
+  } finally {
+    polling = false;
+    clearInterval(timer);
+    try {
+      updatePromptResidency(await getStatus(studio.ollamaHost));
+    } catch {}
+    clearActiveWriterRequest();
+    syncQueueLock();
+  }
+  return completed;
+}
+
+async function loadHistoryEntry(entry, { withMedia = false } = {}) {
+  if (studio.requestBusy) return false;
+  const owner = studio;
+  const mode = entry.mode;
+  if (!MODES[mode]) return false;
+  setGenerationState("busy", withMedia ? "Restoring pictures" : "Loading prompt", "");
+  try {
+    let files = [];
+    if (withMedia) {
+      const pictures = entry.assets.filter((asset) => asset.media_url);
+      files = await Promise.all(pictures.map(async (asset) => {
+        const blob = await fetchHistoryFile(asset.media_url);
+        return new File([blob], asset.filename || "picture.png", { type: blob.type || "image/png" });
+      }));
+    }
+    if (studio !== owner) return false;
+    stashCurrentModeDraft();
+    if (studio.sequence?.active) studio.sequence.setActive(false);
+    if (withMedia) {
+      studio.assets = (await clearMedia(studio.sessionId, mode)).assets;
+      if (files.length) studio.assets.push(...(await uploadMedia(studio.sessionId, mode, files)).assets);
+    }
+    studio.mode = mode;
+    studio.lastVideoMode = mode;
+    if (Number.isFinite(entry.duration)) {
+      studio.durationSeconds = entry.duration;
+      const slider = studio.root.querySelector("[data-duration-slider]");
+      slider.value = String(entry.duration);
+      slider.dispatchEvent(new Event("input"));
+    }
+    if (entry.aspect_ratio) {
+      studio.aspectRatio = entry.aspect_ratio;
+      studio.aspectControl.update(studio.aspectRatio);
+    }
+    studio.modeDrafts[mode] = { brief: entry.brief, prompt: entry.prompt };
+    saveModeDrafts(localStorage, studio.modeDrafts);
+    saveUserPreferences(localStorage, studio);
+    syncWorkspace();
+    restoreModeDraft(mode);
+    renderMedia(mode);
+    syncRuntimeSummary();
+    const skipped = entry.assets.filter((asset) => !asset.media_url).length;
+    showToast("Prompt loaded", withMedia
+      ? `${files.length} picture${files.length === 1 ? "" : "s"} restored.${skipped ? ` ${skipped} video/audio reference${skipped === 1 ? " was" : "s were"} not stored; reattach ${skipped === 1 ? "it" : "them"} before generating.` : ""}`
+      : "Brief and prompt restored. Current media was kept.", null, null, { dismissOnWorkspaceClick: true });
+    return true;
+  } catch (error) {
+    showToast(error.code || "Load failed", error.message, error.details);
+    renderMedia(studio.mode);
+    return false;
+  } finally {
+    if (studio === owner) setGenerationState("idle", "", "");
+  }
+}
+
 function updateBriefLayout() {
   if (!studio) return;
   const brief = currentBriefTextarea();
@@ -1032,6 +1282,7 @@ function restoreModeDraft(mode) {
   updateMusicLyricsCount();
   renderPromptHighlights();
   syncModifiedState();
+  studio.tabs?.render();
 }
 
 function syncWorkspace() {
@@ -1044,6 +1295,7 @@ function syncWorkspace() {
     button.setAttribute("aria-pressed", String(selected));
   });
   studio.root.querySelector("[data-video-modes]").hidden = music;
+  studio.tabs?.render();
   studio.root.querySelector("[data-video-inputs]").hidden = music;
   studio.root.querySelector("[data-music-inputs]").hidden = !music;
   const outputLabel = music ? "Generated caption" : "Generated prompt";
@@ -1165,6 +1417,7 @@ function setGenerationState(state, label, detail) {
   if (!busy || !wasBusy) button.innerHTML = generationButtonMarkup(icon, busy, studio.mode === "Music3" ? "Generate caption" : "Generate prompt");
   renderMedia(studio.mode);
   syncLifecycleActions();
+  studio.tabs?.render();
   status.hidden = !busy;
   status.classList.toggle("is-busy", busy);
   if (busy) {
@@ -1216,10 +1469,10 @@ function writerAttemptIsCurrent(token) {
   return token == null || vramHandoffCoordinator.isWriterAttemptCurrent(token);
 }
 
-async function prepareWriterVram(token) {
+async function prepareWriterVram(token, showStatus = true) {
   if (token == null) return true;
   studio.vramHandoffInFlight = true;
-  setGenerationState("busy", "Freeing VRAM", "Preparing ComfyUI memory for the prompt model");
+  if (showStatus) setGenerationState("busy", "Freeing VRAM", "Preparing ComfyUI memory for the prompt model");
   try {
     await releaseComfyVramWhenIdle({
       getStatus,
@@ -1236,19 +1489,19 @@ async function prepareWriterVram(token) {
     if (error.code !== "WRITER_PREPARATION_CANCELLED") {
       showToast("Auto VRAM could not prepare memory", error.message, error.details);
     }
-    setGenerationState("idle", "", "");
+    if (showStatus) setGenerationState("idle", "", "");
     return false;
   } finally {
     studio.vramHandoffInFlight = false;
   }
 }
 
-async function prepareWriterRequest() {
+async function prepareWriterRequest({ showStatus = true } = {}) {
   const token = writerAutoVramApplies() ? vramHandoffCoordinator.beginWriterAttempt() : null;
   if (!await inspectDirectRuntime() || !writerAttemptIsCurrent(token)) return false;
-  if (!await prepareWriterVram(token)) return false;
+  if (!await prepareWriterVram(token, showStatus)) return false;
   if (writerAttemptIsCurrent(token)) return true;
-  setGenerationState("idle", "", "");
+  if (showStatus) setGenerationState("idle", "", "");
   return false;
 }
 
@@ -1452,6 +1705,10 @@ async function startGenerationPreview() {
     await cancel();
     return;
   }
+  if (studio.mode !== "Music3" && !studio.sequence?.active && (studio.tabs?.running || studio.tabs?.queued.length)) {
+    if (studio.tabs.enqueue()) showToast("Added to queue", "This tab generates after the prompts ahead of it.");
+    return;
+  }
   if (!studio.selectedModel) {
     showToast("No prompt model selected", "Choose a local model, connect llama.cpp, or configure an API provider.");
     return;
@@ -1484,17 +1741,8 @@ async function startGenerationPreview() {
       lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
       seed: newGenerationSeed(),
     })));
-    const output = studio.root.querySelector("[data-output]");
-    output.value = result.prompt;
-    studio.lastModelPrompt = result.prompt;
-    renderPromptHighlights();
-    studio.lastModelMeta = formatGenerationMeta(result);
-    syncRuntimeSummary(result);
-    studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
-    syncModifiedState();
-    saveCurrentModeDraft();
-    studio.refineRestore = null;
-    studio.root.querySelector("[data-refine-restore]").hidden = true;
+    applyGeneratedPrompt(result);
+    recordPromptHistory(result.prompt);
     if (result.thinking_fallback) {
       showToast("Prompt completed", thinkingFallbackMessage(result, "final prompt"), null, null, { dismissOnWorkspaceClick: true });
     } else if (result.format_repair_applied) {
@@ -1550,7 +1798,22 @@ async function startGenerationPreview() {
     } catch {}
     clearActiveWriterRequest();
     setGenerationState("idle", "", "");
+    runPromptQueue();
   }
+}
+
+function applyGeneratedPrompt(result) {
+  const output = studio.root.querySelector("[data-output]");
+  output.value = result.prompt;
+  studio.lastModelPrompt = result.prompt;
+  renderPromptHighlights();
+  studio.lastModelMeta = formatGenerationMeta(result);
+  syncRuntimeSummary(result);
+  studio.root.querySelector(".h3ps-editor-meta span:last-child").textContent = studio.lastModelMeta;
+  syncModifiedState();
+  saveCurrentModeDraft();
+  studio.refineRestore = null;
+  studio.root.querySelector("[data-refine-restore]").hidden = true;
 }
 
 function modelVramLabel(model) {
@@ -3149,6 +3412,7 @@ function createStudio() {
           <button type="button" data-workspace="video">H3 Video</button>
           <button type="button" data-workspace="music">Music 3</button>
         </nav>
+        <div class="h3ps-tabs-row" data-generate-view>${tabsBarMarkup()}</div>
         <div class="h3ps-header-meta">
           <div class="h3ps-guide-picker">
             <button class="h3ps-guide-button" type="button" aria-expanded="false" data-guide-toggle>Official guides ${icon("chevron", 13)}</button>
@@ -3188,6 +3452,7 @@ function createStudio() {
           <div class="h3ps-section-heading">
             <span><small>Media</small><strong data-h3ps-mode-title></strong></span>
             <div class="h3ps-section-actions">
+              ${historyButtonMarkup(icon)}
               <div class="h3ps-clear-control" data-clear-control>
                 ${splitMenuMarkup(icon, {label: "Actions", primary: "data-actions-menu-toggle", toggle: "data-clear-menu-toggle", menu: "data-clear-menu", ariaLabel: "Media actions", contents: `
                   ${supportsWorkflowMedia() ? `<button type="button" data-open-floating-media data-media-panel-action disabled title="Add media first"><strong>Media panel</strong><small>ADD TO WORKFLOW</small></button>` : ""}
@@ -3212,11 +3477,11 @@ function createStudio() {
             ${aspectRatioMarkup(icon)}
           </div>
 
-          <label class="h3ps-brief">
-            <span><strong>Creative brief</strong><small>Describe what should happen in the video</small></span>
-            <textarea spellcheck="true" data-video-brief>Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
+          <div class="h3ps-brief h3ps-video-brief">
+            <span><strong>Creative brief</strong><span class="h3ps-brief-tools"><small>Describe what should happen in the video</small>${prefillPickerMarkup(icon)}</span></span>
+            <textarea spellcheck="true" aria-label="Creative brief" data-video-brief>Use identity and wardrobe from Picture 1 and the slow lateral camera movement from Video 1. A solitary character waits at a rain-soaked tram stop at blue hour, notices an approaching light and turns into the wind. End on a quiet, unresolved look; keep the shot cinematic, realistic and restrained.</textarea>
             <small class="h3ps-char-count">0 characters</small>
-          </label>
+          </div>
 
           </div>
 
@@ -3314,9 +3579,11 @@ function createStudio() {
             <label class="h3ps-toggle-control" data-keep-loaded-control title="Keep the prompt model in VRAM for the next prompt"><input type="checkbox" data-keep-loaded><span></span>Keep model loaded</label>
             ${autoVramControlMarkup(VRAM_HANDOFF_SUPPORTED)}
           </span>
+          <button class="h3ps-secondary-button h3ps-queue-button" type="button" data-queue-toggle title="Generate this tab in the background so you can keep working in other tabs">${icon("plus", 15)}<span data-queue-label>Add to queue</span></button>
           <button class="h3ps-primary-button" type="button" data-generate>${icon("spark", 16)}<span data-generate-label>Generate prompt</span></button>
         </div>
       </footer>
+      ${historyPanelMarkup(icon)}
     </section>
 
     <div class="h3ps-other-models-backdrop" aria-hidden="true" data-other-models-backdrop hidden></div>
@@ -3380,6 +3647,19 @@ function createStudio() {
       onOpenChange: onMediaToolOpenChange,
     });
   }, mediaToolUnavailable);
+  studio.library = createPromptLibrary({
+    root,
+    icon,
+    storage: localStorage,
+    api: { listHistory, addHistory, deleteHistory, clearHistory },
+    getMode: () => studio.mode,
+    getBriefField: () => root.querySelector("[data-video-brief]"),
+    onBriefChanged: () => { updateBriefLayout(); saveCurrentModeDraft(); },
+    onLoadEntry: loadHistoryEntry,
+    onCopy: (text) => copyPromptText(text),
+    notify: (title, message, action = null) => showToast(title, message, null, action),
+    isBusy: () => studio.requestBusy,
+  });
   root.querySelector("[data-lyrics-use-brief]").checked = studio.musicLyricsUseBrief;
   const durationSlider = root.querySelector("[data-duration-slider]");
   durationSlider.value = String(studio.durationSeconds);
@@ -3883,6 +4163,47 @@ function createStudio() {
     copy: (text) => copyPromptText(text),
     insert: (editor, reference) => insertReferenceAtCaret(editor, reference, editor.selectionStart),
   });
+  studio.queueLocked = false;
+  studio.tabs = createPromptTabs({
+    root,
+    icon,
+    storage: localStorage,
+    newId: createSessionId,
+    initial: {
+      mode: studio.mode === "Music3" ? studio.lastVideoMode : studio.mode,
+      modeDrafts: videoModeDrafts(studio.modeDrafts),
+      sessionId: studio.sessionId,
+      assets: [],
+      durationSeconds: studio.durationSeconds,
+      aspectRatio: studio.aspectRatio,
+    },
+    getActive: () => ({
+      mode: studio.mode === "Music3" ? studio.lastVideoMode : studio.mode,
+      brief: studio.mode === "Music3" ? studio.modeDrafts[studio.lastVideoMode]?.brief : root.querySelector("[data-video-brief]").value,
+    }),
+    capture: captureActiveTab,
+    apply: applyPromptTab,
+    canSwitch: () => studio.sequence.active ? "Turn off Sequence to switch tabs."
+      : studio.requestBusy && !studio.queueLocked ? "Wait for the current request to finish, or use Add to queue to keep working in other tabs."
+      : null,
+    onChange: ({ stop = false } = {}) => {
+      if (stop && studio.tabs.running) cancel();
+      runPromptQueue();
+    },
+    onRender: syncQueueControls,
+    notify: (title, message, action = null) => showToast(title, message, null, action),
+  });
+  if (studio.tabs.active.sessionId !== studio.sessionId) {
+    studio.sessionId = studio.tabs.active.sessionId;
+    loadTabMedia(studio.tabs.active).then((assets) => {
+      if (studio.tabs.active.sessionId !== studio.sessionId) return;
+      studio.assets = assets;
+      renderMedia(studio.mode);
+    });
+  }
+  root.querySelector("[data-queue-toggle]").addEventListener("click", () => {
+    if (!studio.tabs.dequeue()) studio.tabs.enqueue();
+  });
   syncWorkspace();
   restoreModeDraft(studio.mode);
   renderMedia(studio.mode);
@@ -4136,6 +4457,7 @@ document.addEventListener("keydown", (event) => {
   if (openComposer || openEditor) return;
   if (event.key === "Escape") {
     event.preventDefault();
+    if (studio.library?.closeTopmost()) return;
     if (!studio.root.querySelector("[data-clear-menu]").hidden) {
       setClearMenuOpen(false);
       return;

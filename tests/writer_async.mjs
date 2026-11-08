@@ -136,8 +136,9 @@ test("an in-flight status response cannot restore busy after generation finishes
     clearInterval() {},
     getStatus: () => ++statusCalls === 1 ? status.promise : Promise.resolve({}),
     setGenerationState: (phase) => { api.studio.requestBusy = phase === "busy"; },
+    runPromptQueue() {},
   });
-  controller(["startGenerationPreview"], api);
+  controller(["startGenerationPreview", "applyGeneratedPrompt"], api);
   const operation = api.startGenerationPreview();
   await started.promise;
   const oldPoll = poll();

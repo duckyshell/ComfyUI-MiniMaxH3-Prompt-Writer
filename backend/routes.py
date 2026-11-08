@@ -20,6 +20,8 @@ from .catalog import discover_models_with_diagnostics, find_model, model_setup_c
 from .comfy_state import comfyui_runtime_snapshot
 from .devlog import DEVELOPER_MODE, LOG_PATH, PeakVRAMMonitor, gpu_memory_snapshot, write_event
 from .guides import MODE_GUIDES, guide_catalog, guide_for_mode
+from . import history
+from .history import HistoryError
 from .media import CACHE_ROOT, MAX_FILE_BYTES, MODE_LIMITS, STORE, MediaError, parse_session_id
 from .media_editor import browser_source, commit_edit, prepare_edit, video_frame
 from .memory import assess_free_vram
@@ -39,6 +41,7 @@ MODES = {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"}
 STATE: dict[str, Any] = {
     "phase": "idle",
     "active_request_id": None,
+    "active_session_id": None,
     "selected_model_id": None,
     "selected_model_family": None,
     "selected_model_endpoint": None,
@@ -85,16 +88,22 @@ def _invalidate_generation_cache(session_id: str, mode: str) -> None:
     GENERATION_CACHE_ACCESS.pop(key, None)
 
 
-def _generation_busy_error() -> web.Response | None:
+def _generation_uses_session(session_id: str | None) -> bool:
+    """A request locks only its own media session; unscoped requests and callers lock every session."""
+    active_session = STATE["active_session_id"]
+    return STATE["active_request_id"] is not None and (session_id is None or active_session is None or active_session == session_id)
+
+
+def _generation_busy_error(session_id: str | None = None) -> web.Response | None:
     with STATE_LOCK:
-        if STATE["active_request_id"] is None and not STATE["media_mutation_active"]:
+        if not _generation_uses_session(session_id) and not STATE["media_mutation_active"]:
             return None
     return _error("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is busy.", status=409)
 
 
-def _claim_media_mutation() -> bool:
+def _claim_media_mutation(session_id: str | None = None) -> bool:
     with STATE_LOCK:
-        if STATE["active_request_id"] is not None or STATE["media_mutation_active"]:
+        if _generation_uses_session(session_id) or STATE["media_mutation_active"]:
             return False
         STATE["media_mutation_active"] = True
     return True
@@ -163,7 +172,7 @@ async def _cleanup_expired_state(*, now: float | None = None) -> None:
         _release_media_mutation()
 
 
-def _claim_generation_request() -> str | None:
+def _claim_generation_request(session_id: str | None = None) -> str | None:
     request_id = str(uuid4())
     with STATE_LOCK:
         if STATE["active_request_id"] is not None or STATE["media_mutation_active"]:
@@ -171,6 +180,7 @@ def _claim_generation_request() -> str | None:
         STATE.update({
             "phase": "preparing",
             "active_request_id": request_id,
+            "active_session_id": session_id,
             "selected_model_id": None,
             "selected_model_family": None,
             "selected_model_endpoint": None,
@@ -218,6 +228,7 @@ def _release_generation_request(request_id: str) -> None:
         STATE.update({
             "phase": "idle",
             "active_request_id": None,
+            "active_session_id": None,
             "cancel_requested": False,
             "pending_unload_family": None,
             "pending_unload_model_id": None,
@@ -703,7 +714,7 @@ async def generate(request: web.Request) -> web.Response:
         code = error.code if isinstance(error, MediaError) else "GUIDE_LOAD_FAILED"
         return _error(code, str(error), status=500)
 
-    request_id = _claim_generation_request()
+    request_id = _claim_generation_request(parse_session_id(body["session_id"]))
     if request_id is None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
     try:
@@ -908,7 +919,7 @@ async def refine(request: web.Request) -> web.Response:
         code = error.code if isinstance(error, MediaError) else "GUIDE_LOAD_FAILED"
         return _error(code, str(error), status=500)
 
-    request_id = _claim_generation_request()
+    request_id = _claim_generation_request(parse_session_id(body["session_id"]))
     if request_id is None:
         return _error("GENERATION_BUSY", "Another H3 Prompt Writer request is already running.", status=409)
     try:
@@ -1001,7 +1012,7 @@ async def refine(request: web.Request) -> web.Response:
 
 @routes.post(f"{ROUTE_PREFIX}/media/upload")
 async def upload_media(request: web.Request) -> web.Response:
-    busy = _generation_busy_error()
+    busy = _generation_busy_error(request.query.get("session_id"))
     if busy is not None:
         return busy
     try:
@@ -1065,7 +1076,7 @@ async def upload_media(request: web.Request) -> web.Response:
                     if size > MAX_FILE_BYTES:
                         raise MediaError("MEDIA_TOO_LARGE", "A media file cannot exceed 1 GB.")
                     output.write(chunk)
-            if not media_claimed and not _claim_media_mutation():
+            if not media_claimed and not _claim_media_mutation(session_id):
                 raise MediaError("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.")
             media_claimed = True
             if replace_asset_id:
@@ -1206,11 +1217,14 @@ async def edit_media(request: web.Request) -> web.StreamResponse:
     body = await _json_body(request)
     if not isinstance(body, dict) or body.get("action") not in {"preview", "save", "download", "frame", "source", "audio"}:
         return _error("INVALID_EDIT", "Select a valid media edit action.", status=400)
-    if not _claim_media_mutation():
+    try:
+        session_id = parse_session_id(body.get("session_id"))
+    except ValueError:
+        return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
+    if not _claim_media_mutation(session_id):
         return _error("GENERATION_BUSY", "Wait for the current Writer operation to finish.", status=409)
     prepared = None
     try:
-        session_id = parse_session_id(body.get("session_id"))
         asset_id = request.match_info["asset_id"]
         asset = dict(STORE.get(session_id, asset_id))
         action = body["action"]
@@ -1257,11 +1271,11 @@ async def edit_media(request: web.Request) -> web.StreamResponse:
 
 @routes.delete(f"{ROUTE_PREFIX}/media/{{asset_id}}")
 async def remove_media(request: web.Request) -> web.Response:
-    busy = _generation_busy_error()
-    if busy is not None:
-        return busy
     try:
         session_id = parse_session_id(request.query.get("session_id"))
+        busy = _generation_busy_error(session_id)
+        if busy is not None:
+            return busy
         mode = STORE.get(session_id, request.match_info["asset_id"])["mode"]
         STORE.remove(session_id, request.match_info["asset_id"])
     except ValueError:
@@ -1274,11 +1288,11 @@ async def remove_media(request: web.Request) -> web.Response:
 
 @routes.delete(f"{ROUTE_PREFIX}/media")
 async def clear_media(request: web.Request) -> web.Response:
-    busy = _generation_busy_error()
-    if busy is not None:
-        return busy
     try:
         session_id = parse_session_id(request.query.get("session_id"))
+        busy = _generation_busy_error(session_id)
+        if busy is not None:
+            return busy
         mode = request.query.get("mode", "")
         assets = STORE.clear_mode(session_id, mode)
     except ValueError:
@@ -1291,15 +1305,15 @@ async def clear_media(request: web.Request) -> web.Response:
 
 @routes.post(f"{ROUTE_PREFIX}/media/{{asset_id}}/resample")
 async def resample_media(request: web.Request) -> web.Response:
-    busy = _generation_busy_error()
-    if busy is not None:
-        return busy
     body = await _json_body(request)
-    if not _claim_media_mutation():
+    try:
+        session_id = parse_session_id((body or {}).get("session_id"))
+    except ValueError:
+        return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
+    if not _claim_media_mutation(session_id):
         return _error("GENERATION_BUSY", "Media cannot be changed while H3 Prompt Writer is generating or refining.", status=409)
     prepared: dict[str, Any] | None = None
     try:
-        session_id = parse_session_id((body or {}).get("session_id"))
         mode = STORE.get(session_id, request.match_info["asset_id"])["mode"]
         prepared, cancellation = await _run_thread_worker(
             STORE.prepare_resample,
@@ -1335,17 +1349,14 @@ async def resample_media(request: web.Request) -> web.Response:
 
 @routes.post(f"{ROUTE_PREFIX}/media/reorder")
 async def reorder_media(request: web.Request) -> web.Response:
-    busy = _generation_busy_error()
-    if busy is not None:
-        return busy
     body = await _json_body(request)
     if body is None or body.get("mode") not in MODE_LIMITS or not isinstance(body.get("asset_ids"), list):
         return _error("INVALID_REQUEST", "Mode and ordered asset IDs are required.", status=400)
-    busy = _generation_busy_error()
-    if busy is not None:
-        return busy
     try:
         session_id = parse_session_id(body.get("session_id"))
+        busy = _generation_busy_error(session_id)
+        if busy is not None:
+            return busy
         assets = STORE.reorder(session_id, body["mode"], body["asset_ids"])
     except ValueError:
         return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
@@ -1353,6 +1364,63 @@ async def reorder_media(request: web.Request) -> web.Response:
         return _media_error(error)
     _invalidate_generation_cache(session_id, body["mode"])
     return web.json_response({"assets": assets})
+
+
+def _history_error(error: HistoryError) -> web.Response:
+    return _error(error.code, error.message, status=404 if error.code == "HISTORY_NOT_FOUND" else 400)
+
+
+@routes.get(f"{ROUTE_PREFIX}/history")
+async def list_history(_request: web.Request) -> web.Response:
+    entries = await asyncio.to_thread(history.list_entries)
+    return web.json_response({"entries": [history.public_entry(entry, ROUTE_PREFIX) for entry in entries]})
+
+
+@routes.post(f"{ROUTE_PREFIX}/history")
+async def add_history(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    if body is None:
+        return _error("INVALID_REQUEST", "A JSON body is required.", status=400)
+    try:
+        session_id = parse_session_id(body.get("session_id"))
+    except ValueError:
+        return _error("INVALID_SESSION", "The media session ID is invalid.", status=400)
+    asset_ids = body.get("asset_ids") if isinstance(body.get("asset_ids"), list) else []
+    assets = []
+    for asset_id in asset_ids:
+        try:
+            assets.append(dict(STORE.get(session_id, str(asset_id))))
+        except MediaError:
+            continue
+    try:
+        entry = await asyncio.to_thread(history.add_entry, body, assets)
+    except HistoryError as error:
+        return _history_error(error)
+    return web.json_response({"entry": history.public_entry(entry, ROUTE_PREFIX)})
+
+
+@routes.delete(f"{ROUTE_PREFIX}/history")
+async def clear_history(_request: web.Request) -> web.Response:
+    removed = await asyncio.to_thread(history.clear_entries)
+    return web.json_response({"removed": removed})
+
+
+@routes.delete(f"{ROUTE_PREFIX}/history/{{entry_id}}")
+async def delete_history(request: web.Request) -> web.Response:
+    try:
+        await asyncio.to_thread(history.delete_entry, request.match_info["entry_id"])
+    except HistoryError as error:
+        return _history_error(error)
+    return web.json_response({"deleted": request.match_info["entry_id"]})
+
+
+@routes.get(f"{ROUTE_PREFIX}/history/{{entry_id}}/file/{{kind}}/{{index}}")
+async def history_file(request: web.Request) -> web.StreamResponse:
+    try:
+        path = history.entry_file(request.match_info["entry_id"], request.match_info["kind"], int(request.match_info["index"]))
+    except (HistoryError, ValueError, OSError):
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={"Content-Type": mimetypes.guess_type(path.name)[0] or "application/octet-stream"})
 
 
 register_sequence_routes(routes, sys.modules[__name__])

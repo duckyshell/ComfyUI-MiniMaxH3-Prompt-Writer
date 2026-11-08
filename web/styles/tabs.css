@@ -15,11 +15,10 @@
 
 .h3ps-tab {
   display: flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   align-items: center;
-  flex-shrink: 0;
-  min-width: calc(130px * var(--h3ps-interface-scale));
-  max-width: calc(220px * var(--h3ps-interface-scale));
+  width: calc(170px * var(--h3ps-interface-scale));
+  min-width: calc(110px * var(--h3ps-interface-scale));
   height: calc(32px * var(--h3ps-interface-scale));
   border: 1px solid transparent;
   border-radius: 7px;

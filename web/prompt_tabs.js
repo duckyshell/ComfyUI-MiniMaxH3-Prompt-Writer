@@ -61,12 +61,14 @@ export function saveTabs(storage, { tabs, activeId }) {
 }
 
 export function tabsBarMarkup() {
-  return `<div class="h3ps-tabs" data-prompt-tabs><div class="h3ps-tabs-strip" role="tablist" aria-label="Prompt tabs" data-tabs-strip></div><div class="h3ps-tabs-queue" data-queue-summary hidden></div></div>`;
+  return `<div class="h3ps-tabs" data-prompt-tabs><div class="h3ps-tabs-strip" role="tablist" aria-label="Prompt tabs" data-tabs-strip></div><button type="button" class="h3ps-tab-add" data-tab-add aria-label="New tab" title="New tab"></button><div class="h3ps-tabs-queue" data-queue-summary hidden></div></div>`;
 }
 
 export function createPromptTabs({ root, icon, storage, newId, initial, getActive, capture, apply, canSwitch, onChange, onRender, notify }) {
   const bar = root.querySelector("[data-prompt-tabs]");
   const strip = bar.querySelector("[data-tabs-strip]");
+  const addButton = bar.querySelector("[data-tab-add]");
+  addButton.innerHTML = icon("plus", 14);
   const summary = bar.querySelector("[data-queue-summary]");
   const restored = loadTabs(storage);
   let tabs = restored?.tabs || [{ id: newId(), name: null, assets: [], status: "idle", ...initial }];
@@ -95,6 +97,7 @@ export function createPromptTabs({ root, icon, storage, newId, initial, getActiv
 
   function render() {
     const disabled = Boolean(canSwitch());
+    const scrollLeft = strip.scrollLeft;
     strip.innerHTML = tabs.map((tab) => {
       const isActive = tab.id === activeId;
       const live = isActive ? getActive() : null;
@@ -109,7 +112,17 @@ export function createPromptTabs({ root, icon, storage, newId, initial, getActiv
         </button>
         ${tabs.length > 1 ? `<button type="button" class="h3ps-tab-close" data-tab-close="${tab.id}" aria-label="Close ${escapeHtml(label)}" title="Close tab" ${disabled || tab.status === "running" ? "disabled" : ""}>${icon("close", 11)}</button>` : ""}
       </div>`;
-    }).join("") + `<button type="button" class="h3ps-tab-add" data-tab-add aria-label="New tab" title="New tab" ${disabled || tabs.length >= MAX_TABS ? "disabled" : ""}>${icon("plus", 14)}</button>`;
+    }).join("");
+    addButton.disabled = disabled || tabs.length >= MAX_TABS;
+    strip.scrollLeft = scrollLeft;
+    const activeTab = strip.querySelector(".h3ps-tab.is-active");
+    if (activeTab) {
+      // Keep the active tab, including its close button, inside the visible strip.
+      const view = strip.getBoundingClientRect();
+      const box = activeTab.getBoundingClientRect();
+      if (box.left < view.left) strip.scrollLeft -= view.left - box.left;
+      else if (box.right > view.right) strip.scrollLeft += box.right - view.right;
+    }
     const waiting = queued().length;
     const current = running();
     summary.hidden = !waiting && !current;
@@ -206,11 +219,16 @@ export function createPromptTabs({ root, icon, storage, newId, initial, getActiv
   strip.addEventListener("click", (event) => {
     const closeButton = event.target.closest("[data-tab-close]");
     if (closeButton) { close(closeButton.dataset.tabClose); return; }
-    if (event.target.closest("[data-tab-add]")) { add(); return; }
     if (event.target.closest("[data-tab-rename]")) return;
     const tabButton = event.target.closest("[data-tab-select]");
     if (tabButton) select(tabButton.dataset.tabSelect);
   });
+  addButton.addEventListener("click", add);
+  strip.addEventListener("wheel", (event) => {
+    if (strip.scrollWidth <= strip.clientWidth || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    event.preventDefault();
+    strip.scrollLeft += event.deltaY;
+  }, { passive: false });
   strip.addEventListener("auxclick", (event) => {
     const tab = event.button === 1 && event.target.closest("[data-tab]");
     if (tab) { event.preventDefault(); close(tab.dataset.tab); }

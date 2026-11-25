@@ -125,8 +125,11 @@ async def run_sequence(body, services, emit):
                             "attention": "The model's prompt could not be checked or corrected because the request stopped. "
                                          "Its text is kept here. Suggested fix: review it, or Refine / Regenerate this chunk."})
             await emit({"type": "phase", "phase": "failed", **current_chunk})
+            details = current_chunk
+            if isinstance(error, ModelError) and error.code == "CONTEXT_BUDGET_EXCEEDED" and isinstance(error.details, dict):
+                details = {**error.details, **current_chunk}
             raise ModelError(getattr(error, "code", "SEQUENCE_FAILED"),
-                             f"Chunk {current_chunk['chunk_index']} failed: {error}", current_chunk) from error
+                             f"Chunk {current_chunk['chunk_index']} failed: {error}", details) from error
         raise
     finally:
         primary_error = sys.exc_info()[1]

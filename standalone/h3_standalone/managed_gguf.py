@@ -681,6 +681,8 @@ class ManagedGGUFBackend:
             "max_output_tokens": output_budget,
             "reserved_output_tokens": output_budget + safety_tokens,
             "generation_budget_manual": generation_budget is not None,
+            "supports_custom_context": True,
+            "native_context_tokens": model.get("native_context_tokens"),
             "output_tokens_managed_by_server": False,
         })
         plan.update({

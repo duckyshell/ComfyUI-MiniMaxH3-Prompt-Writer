@@ -291,6 +291,8 @@ Review the brief and Chunk Direction. Make required event order or endpoint expl
 
 For context errors, increase the supported Context or reduce Generation budget or reference load. Writer does not silently truncate continuity evidence. Do not increase context for a VRAM allocation failure; follow the memory guidance above.
 
+If a chunk exceeds its context after planning, its error shows the shortfall and the estimated context needed for that chunk, including the plan, preceding prompt, reply and safety margin. When the provider lets you increase context, use the suggested size and retry with the same brief and references. If the model's limit is too small, reduce the input or use a model with a larger context window.
+
 **Verify**
 
 Each chunk starts from the preceding accepted state, keeps timestamps local, and completes only its intended action. Check reference tags and natural pacing yourself. See [Sequence usage](USAGE.md#sequence) for media scope and editing behavior.

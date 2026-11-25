@@ -106,15 +106,39 @@ def _messages(
     reserved_output_tokens = (
         int(output_limit) if isinstance(output_limit, int) and output_limit > 0 else 0
     ) + CONTEXT_SAFETY_TOKENS
-    if estimated_input_tokens + reserved_output_tokens > runtime_plan["context_tokens"]:
+    context_tokens = runtime_plan["context_tokens"]
+    excess = estimated_input_tokens + reserved_output_tokens - context_tokens
+    if excess > 0:
+        required = context_tokens + excess
+        family = model_info.get("family")
+        writer_controls_context = family == "gguf" or model_info.get("supports_custom_context") or runtime_plan.get("supports_custom_context")
+        limit = (model_info.get("model_context_limit") if family == "ollama" else
+                 model_info.get("native_context_tokens") or runtime_plan.get("native_context_tokens"))
+        if writer_controls_context and (not limit or required <= limit):
+            setting = "Context (tokens)" if family == "ollama" else "Context → Custom"
+            suggestion = f"In Settings, set {setting} to at least {required:,} tokens."
+            if not limit:
+                suggestion += " Check that your model supports this size."
+        elif family == "external" and not writer_controls_context:
+            suggestion = f"If your model supports it, increase the llama.cpp server context to at least {required:,} tokens."
+        else:
+            suggestion = "Shorten the brief or use fewer visual references." if visual_input_count else "Shorten the brief."
+            if runtime_plan.get("generation_budget_manual") and output_limit > excess:
+                suggestion += " You can also lower the Generation budget in Settings."
+            if writer_controls_context and limit:
+                suggestion = f"The model's context limit is {limit:,} tokens. " + suggestion
+        unit = "token" if excess == 1 else "tokens"
         raise ModelError(
             "CONTEXT_BUDGET_EXCEEDED",
-            "The selected references and guide leave too little context for a complete prompt.",
+            f"This request needs about {excess:,} more context {unit}. {suggestion}",
             {
                 "estimated_input_tokens": estimated_input_tokens,
+                "estimated_visual_tokens": visual_tokens,
                 "reserved_output_tokens": reserved_output_tokens,
-                "context_tokens": runtime_plan["context_tokens"],
-                "suggestion": "Choose a larger Context profile or shorten the creative brief.",
+                "context_tokens": context_tokens,
+                "required_context_tokens": required,
+                "excess_tokens": excess,
+                "suggestion": suggestion,
             },
         )
     return messages, {

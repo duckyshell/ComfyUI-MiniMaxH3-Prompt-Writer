@@ -25,6 +25,63 @@ def body(state=None, **values):
 
 
 class SequenceAssemblyTests(unittest.TestCase):
+    def test_chunk_context_error_reports_the_actual_shortfall(self):
+        item = assemble_chunk(draft(1), 0, body(), {})
+        plan = {"context_tokens": 4096, "max_output_tokens": 1024}
+        complete = Mock()
+        with self.assertRaises(ModelError) as failure:
+            run_h3_pipeline({"family": "external", "capabilities": {}}, item, "session", plan,
+                            complete=complete, count_text_tokens=lambda _: 3000,
+                            is_cancelled=lambda: False, thinking=False, seed=None)
+        details = failure.exception.details
+        self.assertEqual(failure.exception.code, "CONTEXT_BUDGET_EXCEEDED")
+        self.assertEqual(details["excess_tokens"], details["estimated_input_tokens"] + details["reserved_output_tokens"] - 4096)
+        self.assertTrue(str(failure.exception).startswith(f'This request needs about {details["excess_tokens"]:,} more context tokens.'))
+        self.assertNotIn("references", details["suggestion"])
+        self.assertIn("server", details["suggestion"])
+        complete.assert_not_called()
+
+    def test_context_advice_depends_on_actual_visual_inputs_and_reply_budget(self):
+        item = assemble_chunk(draft(1), 0, body(), {})
+        item["media_inputs"] = [{"type": "image", "asset_id": "picture", "reference": "<Picture 1>",
+                                "requires_capability": "images", "snapshot_asset": {"id": "picture"},
+                                "snapshot_uri": "data:image/png;base64,AA=="}]
+        for text_tokens, can_reduce_budget in [(2400, True), (6000, False)]:
+            with self.subTest(text_tokens=text_tokens), self.assertRaises(ModelError) as failure:
+                run_h3_pipeline({"family": "ollama", "capabilities": {"images": True}}, item, "session",
+                                {"context_tokens": 4096, "max_output_tokens": 2048, "generation_budget_manual": True},
+                                complete=Mock(), count_text_tokens=lambda _: text_tokens,
+                                is_cancelled=lambda: False, thinking=False, seed=None)
+            suggestion = failure.exception.details["suggestion"]
+            self.assertIn("visual references", suggestion)
+            self.assertEqual("lower the Generation budget" in suggestion, can_reduce_budget)
+
+    def test_chunk_suggests_a_sufficient_context_only_where_it_can_be_set(self):
+        item = assemble_chunk(draft(1), 0, body(), {})
+        plan = {"context_tokens": 4096, "max_output_tokens": 1024}
+        cases = [
+            ({"family": "ollama", "supports_custom_context": True, "model_context_limit": 8192}, {}, "Context (tokens)"),
+            ({"family": "ollama", "model_context_limit": 8192}, {}, "Shorten the brief"),
+            ({"family": "gguf", "native_context_tokens": 8192}, {}, "Context → Custom"),
+            ({"family": "gguf", "native_context_tokens": 4096}, {}, "model's context limit"),
+            ({"family": "external"}, {"supports_custom_context": True, "native_context_tokens": 8192}, "Context → Custom"),
+            ({"family": "external"}, {}, "llama.cpp server"),
+            ({"family": "api"}, {}, "Shorten the brief"),
+        ]
+        for model, overrides, expected in cases:
+            with self.subTest(model=model, overrides=overrides), self.assertRaises(ModelError) as failure:
+                run_h3_pipeline({**model, "capabilities": {}}, item, "session", {**plan, **overrides},
+                                complete=Mock(), count_text_tokens=lambda _: 3000,
+                                is_cancelled=lambda: False, thinking=False, seed=None)
+            details = failure.exception.details
+            self.assertIn(expected, details["suggestion"])
+            self.assertEqual(details["required_context_tokens"], 4096 + details["excess_tokens"])
+            if expected.startswith("Context") or expected == "llama.cpp server":
+                self.assertIn(f'{details["required_context_tokens"]:,}', details["suggestion"])
+                self.assertNotIn("Shorten", details["suggestion"])
+            else:
+                self.assertNotIn("In Settings", details["suggestion"])
+
     def test_long_brief_survives_sequence_validation(self):
         state = draft()
         state["brief"] = "Keep the same scene throughout. " * 1000
@@ -462,7 +519,8 @@ class SequenceBatchTests(unittest.IsolatedAsyncioTestCase):
                 return {"prompt":json.dumps(dict(steps=[dict(progression=f"move {i}",ending=f"place {i}") for i in range(count)]))}
             calls.append((copy.deepcopy(model),item,kwargs))
             try:
-                if failure and len(calls)==2:raise ModelError("BROKEN","technical failure")
+                if failure and len(calls) == 2:
+                    raise failure
                 return {"prompt":f"integrated_multimodal_description: [Shot 1] prompt {len(calls)}\n\noverall_soundscape: N/A\n\nnon_diegetic_music: N/A"}
             finally:
                 if kwargs["unload_after"]:unloads.append("provider")
@@ -497,9 +555,14 @@ class SequenceBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len([e for e in events if e["type"]=="chunk"]),1)
 
     async def test_failure_preserves_earlier_chunk_and_cleans_once(self):
-        services,calls,unloads,_=self.services(failure=True);events=[]
+        failure = ModelError("CONTEXT_BUDGET_EXCEEDED", "Request exceeds context by 512 tokens.",
+                             {"context_tokens": 8192, "excess_tokens": 512})
+        services,calls,unloads,_=self.services(failure=failure);events=[]
         async def emit(event):events.append(event)
-        with self.assertRaises(ModelError):await run_sequence(body(),services,emit)
+        with self.assertRaisesRegex(ModelError, "Chunk 2 failed") as raised:
+            await run_sequence(body(),services,emit)
+        self.assertEqual(raised.exception.code, failure.code)
+        self.assertEqual(raised.exception.details, {**failure.details, "chunk_id": "c1", "chunk_index": 2})
         self.assertEqual(len(calls),2);self.assertEqual(unloads,["batch"])
         self.assertEqual([e["chunk_id"] for e in events if e["type"]=="chunk"],["c0"])
 

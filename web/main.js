@@ -2037,10 +2037,16 @@ function syncProviderSettings() {
   });
   const runtimeSettings = studio.root.querySelector(".h3ps-runtime-settings");
   runtimeSettings.hidden = !["direct", "ollama"].includes(provider);
+  runtimeSettings.querySelector("[data-ollama-context]").hidden = provider !== "ollama";
+  const ollamaContext = runtimeSettings.querySelector("[data-ollama-context-input]");
+  if (ollamaContext !== document.activeElement) ollamaContext.value = studio.ollamaContextTokens ?? "";
+  const limit = studio.selectedModel?.family === "ollama" && studio.selectedModel.model_context_limit;
+  if (limit) ollamaContext.max = String(limit);
+  else ollamaContext.removeAttribute("max");
   runtimeSettings.querySelector('[data-runtime-toggle="context"]').closest(".h3ps-runtime-control").hidden = provider !== "direct";
   runtimeSettings.querySelector('[data-runtime-toggle="kv"]').closest(".h3ps-runtime-control").hidden = provider !== "direct";
   runtimeSettings.querySelector("[data-runtime-management]").textContent = provider === "ollama"
-    ? "Ollama context is planned automatically. Generation budget applies to the next request, including thinking."
+    ? "Leave Context empty for Auto, or enter a token count within the model's limit. Generation budget sets the reply length."
     : "Direct GGUF runtime settings are applied to the next request.";
 }
 
@@ -2322,8 +2328,10 @@ function syncThinkingAvailability() {
   const label = input.closest("label");
   const unsupported = ["ollama", "gguf"].includes(studio.selectedModel?.family)
     && studio.selectedModel.thinking !== true;
-  const customTooSmall = context === "custom" && Number(studio.contextTokens || 0) < 16384;
-  const disabled = apiManaged || externalManaged || unsupported || (context !== "auto" && (resolved === "low" || customTooSmall));
+  const customTooSmall = studio.selectedModel?.family === "ollama"
+    ? studio.ollamaContextTokens != null && studio.ollamaContextTokens < 16384
+    : context === "custom" && Number(studio.contextTokens || 0) < 16384;
+  const disabled = apiManaged || externalManaged || unsupported || customTooSmall || (context !== "auto" && resolved === "low");
   if (disabled) input.checked = false;
   if (disabled) studio.thinking = false;
   input.checked = studio.thinking;
@@ -2440,8 +2448,8 @@ function syncRuntimeSummary(result = null) {
     const tokens = result?.context_tokens || studio.selectedModel.server_context_tokens;
     activeSummary = tokens ? `Server · ${Math.round(tokens / 1024)}K` : "Server managed";
   } else if (studio.selectedModel?.family === "ollama") {
-    const tokens = result?.context_tokens || (studio.contextProfile === "auto" ? null : ({ low: 8192, standard: 16384, extended: 24576, large: 32768, maximum: 49152 }[studio.contextProfile]));
-    activeSummary = tokens ? `Ollama · ${Math.round(tokens / 1024)}K` : "Ollama · Auto";
+    const tokens = result?.context_tokens || studio.ollamaContextTokens;
+    activeSummary = tokens ? `Ollama · ${tokens.toLocaleString()} tokens` : "Ollama · Auto";
   } else if (studio.selectedModel?.family === "api") {
     const tokens = result?.context_limit_known ? result.context_tokens : studio.selectedModel.model_context_limit;
     activeSummary = tokens ? `API · ${Math.round(tokens / 1024)}K` : "API · Provider managed";
@@ -3550,6 +3558,17 @@ function createStudio() {
     syncRuntimeSummary();
     syncThinkingAvailability();
     rememberRuntimePreferences();
+    saveUserPreferences(localStorage, studio);
+  });
+  root.querySelector("[data-ollama-context-input]").addEventListener("change", ({ target }) => {
+    if (!target.reportValidity()) {
+      showToast("Ollama context", target.validationMessage);
+      target.value = studio.ollamaContextTokens ?? "";
+      return;
+    }
+    studio.ollamaContextTokens = target.value === "" ? null : target.valueAsNumber;
+    syncThinkingAvailability();
+    syncRuntimeSummary();
     saveUserPreferences(localStorage, studio);
   });
   root.querySelector("[data-custom-generation-budget-input]").addEventListener("input", (event) => {

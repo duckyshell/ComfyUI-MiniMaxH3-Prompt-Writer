@@ -104,6 +104,7 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
       direct_kv_cache: KV_CACHES.includes(value.direct_kv_cache) ? value.direct_kv_cache : "auto",
       direct_generation_budget: GENERATION_BUDGETS.includes(value.direct_generation_budget) ? value.direct_generation_budget : "auto",
       direct_generation_budget_tokens: Number.isInteger(value.direct_generation_budget_tokens) && value.direct_generation_budget_tokens > 0 ? value.direct_generation_budget_tokens : null,
+      ollama_context_tokens: Number.isSafeInteger(value.ollama_context_tokens) && value.ollama_context_tokens > 0 ? value.ollama_context_tokens : null,
       ollama_generation_budget: GENERATION_BUDGETS.includes(value.ollama_generation_budget) ? value.ollama_generation_budget : "auto",
       ollama_generation_budget_tokens: Number.isInteger(value.ollama_generation_budget_tokens) && value.ollama_generation_budget_tokens > 0 ? value.ollama_generation_budget_tokens : null,
       direct_reasoning_effort: typeof value.direct_reasoning_effort === "string" && value.direct_reasoning_effort ? value.direct_reasoning_effort : "auto",
@@ -131,6 +132,7 @@ export function saveUserPreferences(storage, state) {
     direct_kv_cache: KV_CACHES.includes(state.directKvCache) ? state.directKvCache : "auto",
     direct_generation_budget: GENERATION_BUDGETS.includes(state.directGenerationBudget) ? state.directGenerationBudget : "auto",
     direct_generation_budget_tokens: Number.isInteger(state.directGenerationBudgetTokens) && state.directGenerationBudgetTokens > 0 ? state.directGenerationBudgetTokens : null,
+    ollama_context_tokens: state.ollamaContextTokens ?? null,
     ollama_generation_budget: GENERATION_BUDGETS.includes(state.ollamaGenerationBudget) ? state.ollamaGenerationBudget : "auto",
     ollama_generation_budget_tokens: Number.isInteger(state.ollamaGenerationBudgetTokens) && state.ollamaGenerationBudgetTokens > 0 ? state.ollamaGenerationBudgetTokens : null,
     direct_reasoning_effort: typeof state.directReasoningEffort === "string" && state.directReasoningEffort ? state.directReasoningEffort : "auto",
@@ -345,6 +347,7 @@ export function restoredModelAfterDiscovery(state) {
 
 function sharedInferencePayload(state) {
   const directRuntime = state.selectedModel?.family === "gguf";
+  const customOllamaContext = state.selectedModel?.family === "ollama" && state.ollamaContextTokens != null;
   const thinking = state.selectedModel?.family === "external" ? false : state.thinking;
   const generationBudgetMode = state.generationBudget || "auto";
   const generationBudget = generationBudgetMode === "custom"
@@ -363,7 +366,8 @@ function sharedInferencePayload(state) {
       api_sampling: safeApiSampling(state.apiProviderConfig?.sampling, state.selectedModel.sampling_parameters || []),
     } : {}),
     thinking,
-    context_profile: directRuntime ? state.contextProfile : "auto",
+    context_profile: directRuntime ? state.contextProfile : customOllamaContext ? "custom" : "auto",
+    ...(customOllamaContext ? { context_tokens: state.ollamaContextTokens } : {}),
     kv_cache: directRuntime ? state.kvCache : "auto",
     ...(directRuntime ? {
       context_tokens: state.contextProfile === "custom" ? state.contextTokens : null,
@@ -445,6 +449,7 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
     directContextProfile: preferences?.direct_context_profile || "auto",
     directContextTokens: preferences?.direct_context_tokens || null,
     directKvCache: preferences?.direct_kv_cache || "auto",
+    ollamaContextTokens: preferences?.ollama_context_tokens ?? null,
     ollamaGenerationBudget: preferences?.ollama_generation_budget || "auto",
     ollamaGenerationBudgetTokens: preferences?.ollama_generation_budget_tokens || null,
     directGenerationBudget: preferences?.direct_generation_budget || "auto",

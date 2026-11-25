@@ -378,7 +378,24 @@ class OllamaBackendTests(unittest.TestCase):
                                        kv_cache="auto", thinking=False, generation_budget=budget)
             self.assertEqual(error.exception.code, "INVALID_GENERATION_BUDGET")
 
-    def test_auto_context_is_explicit_and_capped_by_model_limit(self):
+    def test_custom_context_reaches_chat_and_respects_model_limit(self):
+        model = self._model()
+        model["model_context_limit"] = 65536
+        for tokens in (8192, 10000, 40960):
+            with self.subTest(tokens=tokens):
+                plan = self.backend.preflight(model, self._assembled(), context_profile="custom",
+                                              kv_cache="auto", thinking=False, context_tokens=tokens)
+                self.backend._chat_completion(model["remote_model"], plan, endpoint=self.url, messages=[],
+                                              max_tokens=128, thinking=False, seed=1,
+                                              temperature=.7, top_p=.9, top_k=40)
+                request = next(body for _, path, body in reversed(_FakeOllamaHandler.requests) if path == "/api/chat")
+                self.assertEqual(request["options"]["num_ctx"], tokens)
+        with self.assertRaises(ModelError) as oversized:
+            self.backend.preflight(model, self._assembled(), context_profile="custom",
+                                   kv_cache="auto", thinking=False, context_tokens=65537)
+        self.assertEqual(oversized.exception.code, "OLLAMA_MODEL_CONTEXT_LIMIT")
+
+    def test_automatic_ladder_and_fixed_profile_obey_model_limit(self):
         plan = self.backend.preflight(
             self._model(), self._assembled(),
             context_profile="auto", kv_cache="auto", thinking=False,

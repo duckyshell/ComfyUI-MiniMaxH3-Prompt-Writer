@@ -535,6 +535,7 @@ test("user preferences persist only stable non-secret settings", () => {
     directKvCache: "q8",
     directGenerationBudget: "custom",
     directGenerationBudgetTokens: 6000,
+    ollamaContextTokens: 32768,
     directReasoningEffort: "medium",
     musicLyricsUseBrief: false,
     fullscreen: true,
@@ -562,6 +563,7 @@ test("user preferences persist only stable non-secret settings", () => {
     direct_kv_cache: "q8",
     direct_generation_budget: "custom",
     direct_generation_budget_tokens: 6000,
+    ollama_context_tokens: 32768,
     ollama_generation_budget: "auto",
     ollama_generation_budget_tokens: null,
     direct_reasoning_effort: "medium",
@@ -603,6 +605,7 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
     direct_kv_cache: "auto",
     direct_generation_budget: "auto",
     direct_generation_budget_tokens: null,
+    ollama_context_tokens: null,
     ollama_generation_budget: "auto",
     ollama_generation_budget_tokens: null,
     direct_reasoning_effort: "auto",
@@ -1164,6 +1167,10 @@ test("Generate and Refine payloads are built from state rather than Settings DOM
   assert.equal(ollamaPayload.api_provider, null);
   assert.equal(ollamaPayload.context_profile, "auto");
   assert.equal(ollamaPayload.kv_cache, "auto");
+  state.ollamaContextTokens = 32768;
+  const customContext = buildGeneratePayload(state, { creativeBrief: "A quiet shot." });
+  assert.equal(customContext.context_profile, "custom");
+  assert.equal(customContext.context_tokens, 32768);
 
   const apiModel = {
     id: "api::connection-id::provider/model",

@@ -380,6 +380,7 @@ class OllamaBackend:
                 "thinking_detected": "thinking" in capability_set,
                 "recommended_context": "low",
                 "auto_context_ladder": True,
+                "supports_custom_context": True,
                 "model_context_limit": _model_context_limit(details),
                 "parameter_size": detail.get("parameter_size"),
                 "quantization_level": detail.get("quantization_level"),
@@ -426,6 +427,7 @@ class OllamaBackend:
         kv_cache: str | None,
         thinking: bool,
         generation_budget: int | None = None,
+        context_tokens: int | None = None,
     ) -> dict[str, Any]:
         if (kv_cache or "auto").lower() != "auto":
             raise ModelError("OLLAMA_KV_MANAGED", "KV cache is managed by Ollama. Set it to Auto.")
@@ -437,6 +439,7 @@ class OllamaBackend:
                 model_info,
                 requested_output_tokens=generation_budget,
                 requested_context=context_profile,
+                requested_context_tokens=context_tokens,
                 requested_kv_cache="auto",
                 thinking=thinking,
             )

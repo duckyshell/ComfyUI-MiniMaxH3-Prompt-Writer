@@ -404,11 +404,12 @@ async def _prepare_generation_runtime(
     }
     if model["family"] in {"gguf", "ollama"}:
         runtime_options["generation_budget"] = body.get("generation_budget")
+        if body.get("context_tokens") is not None:
+            runtime_options["context_tokens"] = body["context_tokens"]
     if model["family"] == "api":
         runtime_options["sampling"] = body.get("api_sampling")
     if model["family"] == "gguf":
         runtime_options.update({
-            "context_tokens": body.get("context_tokens"),
             "reasoning_effort": body.get("reasoning_effort", "auto"),
         })
     runtime_plan, cancellation = await _run_thread_worker(

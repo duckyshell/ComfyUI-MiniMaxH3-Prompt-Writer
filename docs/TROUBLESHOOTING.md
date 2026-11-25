@@ -269,7 +269,7 @@ For Direct Auto, let Writer select a supported preset. If a manual Context or Ge
 
 For actual memory failure, use **Free ComfyUI VRAM**, close other GPU-heavy applications, select a smaller model, or reduce context. Do not increase context as a generic response to an OOM.
 
-Ollama context is automatic in Writer; Ollama decides whether to offload parts of the model to CPU/RAM.
+For Ollama, leave **Context (tokens)** empty for Auto or enter a value within the model's limit. A smaller value can reduce memory use if the request still fits. Ollama decides whether to offload parts of the model to CPU/RAM.
 
 **Verify**
 

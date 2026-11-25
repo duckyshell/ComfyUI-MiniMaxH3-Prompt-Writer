@@ -55,8 +55,9 @@ export function uploadMedia(sessionId, mode, files, replaceAssetId = null) {
   body.append("session_id", sessionId);
   body.append("mode", mode);
   for (const file of files) body.append("file", file);
-  const replace = replaceAssetId ? `?replace_asset_id=${encodeURIComponent(replaceAssetId)}` : "";
-  return request(`/media/upload${replace}`, { method: "POST", body });
+  const query = new URLSearchParams({ session_id: sessionId });
+  if (replaceAssetId) query.set("replace_asset_id", replaceAssetId);
+  return request(`/media/upload?${query}`, { method: "POST", body });
 }
 
 export const listMedia = (sessionId) => request(`/media?session_id=${encodeURIComponent(sessionId)}`);
@@ -83,6 +84,15 @@ export const reorderMedia = (sessionId, mode, assetIds) => post(
   "/media/reorder",
   { session_id: sessionId, mode, asset_ids: assetIds },
 );
-export const getMediaManifest = (sessionId, mode) => request(
+export const listHistory = () => request("/history");
+export const addHistory = (payload) => post("/history", payload);
+export const deleteHistory = (entryId) => request(`/history/${encodeURIComponent(entryId)}`, { method: "DELETE" });
+export const clearHistory = () => request("/history", { method: "DELETE" });
+export async function fetchHistoryFile(url) {
+  const response = await api.fetchApi(url);
+  if (!response.ok) throw new Error(`History file is unavailable (${response.status})`);
+  return response.blob();
+}
+export const getMediaManifest =(sessionId, mode) => request(
   `/media/manifest?session_id=${encodeURIComponent(sessionId)}&mode=${encodeURIComponent(mode)}`,
 );

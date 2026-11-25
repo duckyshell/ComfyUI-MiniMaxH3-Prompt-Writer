@@ -668,6 +668,23 @@ class RouteStabilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 409)
             self.assertEqual(self.payload(response)["error"]["code"], "GENERATION_BUSY")
 
+    async def test_generation_locks_only_its_own_media_session(self):
+        other_session = "22222222-2222-4222-8222-222222222222"
+        request_id = routes._claim_generation_request(self.session_id)
+        try:
+            self.assertFalse(routes._claim_media_mutation(self.session_id))
+            self.assertFalse(routes._claim_media_mutation())
+            self.assertTrue(routes._claim_media_mutation(other_session))
+            routes._release_media_mutation()
+            busy = await routes.clear_media(_Request(query={"session_id": self.session_id, "mode": "Reference"}))
+            self.assertEqual(busy.status, 409)
+            with patch.object(routes.STORE, "clear_mode", return_value=[]):
+                free = await routes.clear_media(_Request(query={"session_id": other_session, "mode": "Reference"}))
+            self.assertEqual(free.status, 200)
+        finally:
+            routes._release_generation_request(request_id)
+        self.assertIsNone(routes.STATE["active_session_id"])
+
     async def test_read_only_media_listing_remains_available_while_busy(self):
         routes.STATE["active_request_id"] = "request"
         with patch.object(routes.STORE, "list", return_value=[{"id": "asset"}]):

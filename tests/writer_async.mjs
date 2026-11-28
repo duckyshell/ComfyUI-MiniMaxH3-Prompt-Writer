@@ -138,7 +138,7 @@ test("an in-flight status response cannot restore busy after generation finishes
     getStatus: () => ++statusCalls === 1 ? status.promise : Promise.resolve({}),
     setGenerationState: (phase) => { api.studio.requestBusy = phase === "busy"; },
   });
-  controller(["startGenerationPreview"], api);
+  controller(["draftKey", "startGenerationPreview"], api);
   const operation = api.startGenerationPreview();
   await started.promise;
   const oldPoll = poll();
@@ -149,6 +149,29 @@ test("an in-flight status response cannot restore busy after generation finishes
   await oldPoll;
   assert.equal(api.studio.requestBusy, false);
 });
+
+for (const change of ["edit", "switch mode", "switch image task"]) {
+  test(`Single Generate preserves the active draft after ${change}`, async () => {
+    const pending = deferred(), started = deferred(), notices = [];
+    const { api, output } = refinementController(false, pending);
+    if (change === "switch image task") api.studio.mode = "H3Image";
+    Object.assign(api, {
+      generate: () => { started.resolve(); return pending.promise; },
+      buildGeneratePayload: () => ({}), setInterval: () => 1, clearInterval() {},
+      showToast: title => notices.push(title),
+    });
+    controller(["draftKey", "startGenerationPreview"], api);
+    const operation = api.startGenerationPreview();
+    await started.promise;
+    if (change === "edit") output.value = "new user text";
+    else if (change === "switch mode") api.studio.mode = "T2VA";
+    else api.studio.imageTask = "edit";
+    pending.resolve({ prompt: "late result" });
+    await operation;
+    assert.equal(output.value, change === "edit" ? "new user text" : "original");
+    assert.deepEqual(notices, ["Prompt kept"]);
+  });
+}
 
 const composerSource = await readFile(new URL("../web/media_composer.js", import.meta.url), "utf8");
 test("an old Composer Add cannot clear a reopened composition", async () => {

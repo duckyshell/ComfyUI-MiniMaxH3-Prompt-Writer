@@ -1509,6 +1509,9 @@ async function startGenerationPreview() {
     return;
   }
   if (!generationModeIsAvailable()) return;
+  const workspace = draftKey(studio.mode);
+  const output = studio.root.querySelector("[data-output]");
+  const originalPrompt = output.value;
   if (!await prepareWriterRequest()) return;
   const modelName = studio.selectedModel.name.split("/").pop();
   const external = studio.selectedModel.family === "external";
@@ -1527,12 +1530,16 @@ async function startGenerationPreview() {
     } catch {}
   }, 650);
   try {
+    if (draftKey(studio.mode) !== workspace) return;
     const result = await vramHandoffCoordinator.trackWriterRequest(generate(buildGeneratePayload(studio, {
       creativeBrief: currentBriefTextarea().value,
       lyrics: studio.mode === "Music3" ? studio.root.querySelector("[data-music-lyrics]").value : "",
       seed: newGenerationSeed(),
     })));
-    const output = studio.root.querySelector("[data-output]");
+    if (draftKey(studio.mode) !== workspace || output.value !== originalPrompt) {
+      showToast("Prompt kept", "The workspace or prompt changed during generation.");
+      return;
+    }
     output.value = result.prompt;
     studio.lastModelPrompt = result.prompt;
     renderPromptHighlights();

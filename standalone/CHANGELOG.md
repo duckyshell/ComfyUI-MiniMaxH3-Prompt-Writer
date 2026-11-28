@@ -1,5 +1,10 @@
 # Standalone changelog
 
+## 0.1.11 - 2026-11-28
+
+- Added H3 Image for text-to-image and image edit prompts.
+- Added custom Ollama context sizes and clearer Sequence context guidance.
+
 ## 0.1.10 - 2026-10-28
 
 - Added optional sampling controls for API providers, with saved overrides and a reset to provider defaults ([#44](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/44)).

@@ -1,19 +1,18 @@
-# H3 Prompt Writer Standalone v0.1.10
+# H3 Prompt Writer Standalone v0.1.11
 
 Standalone Windows version. ComfyUI is not required.
 
 ## Download
 
-Download **H3-Prompt-Writer-Standalone-Windows-v0.1.10.zip** from the release assets below.
+Download **H3-Prompt-Writer-Standalone-Windows-v0.1.11.zip** from the release assets below.
 
 Do not download **Source code (zip)** or **Source code (tar.gz)** for normal use.
 Do not install this package into ComfyUI `custom_nodes`.
 
 ## What's new
 
-- Optional sampling controls for API providers, with saved overrides and a reset to provider defaults ([#44](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/44)).
-- Compatibility fixes for Anthropic's OpenAI-compatible API endpoint ([#41](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/41)).
-- Updated the shared Writer core to `0.4.8`.
+- Added H3 Image for text-to-image and image edit prompts.
+- Added custom Ollama context sizes and clearer Sequence context guidance.
 
 Start Standalone with `start.bat` first; the installed app needs the local server running at the same address.
 
@@ -42,4 +41,4 @@ libraries are not bundled.
 - Python 3.10 or newer, or `uv`
 - At least one configured provider
 
-Based on H3 Prompt Writer extension `0.4.8`.
+Based on H3 Prompt Writer extension `0.4.9`.

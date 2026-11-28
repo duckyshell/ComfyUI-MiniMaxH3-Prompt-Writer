@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.9 - 2026-11-28
+
+- Added H3 Image for text-to-image and image edit prompts.
+- Added custom Ollama context sizes and clearer Sequence context guidance.
+
 ## 0.4.8 - 2026-10-28
 
 - Fixed generation and Refine failing with `Fetch timeout` after one minute on newer ComfyUI frontends ([#49](https://github.com/duckyshell/ComfyUI-MiniMaxH3-Prompt-Writer/issues/49)).

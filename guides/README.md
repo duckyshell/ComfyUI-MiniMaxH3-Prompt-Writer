@@ -11,3 +11,7 @@ The two English prompt-writing guides are vendored verbatim from the official
 normalizes only trailing line endings, and verifies content before use.
 
 Do not silently treat community prompting recipes as official guide content.
+
+## H3 Image
+
+Writer uses compact text-to-image and edit instructions adapted from the [official MiniMax H3 Image skill](https://github.com/MiniMax-AI/MiniMax-H3-Image/blob/40850901ab938303b5274122b5f305ebc5b75c80/skills/h3-image-prompt-writing/SKILL.md).

@@ -26,6 +26,7 @@ Standalone for Windows: **0.1.10** · [Download ZIP](../../releases/download/sta
 
 ## Releases
 
+**v0.4.9**: Added H3 Image for text-to-image and image edit prompts.\
 **v0.4.6**: Sequence workspace with Official and Compact output, internal planning, format recovery, shared highlighting, and per-chunk refinement.\
 **v0.4.5**: Media Composer, Media Editor, Floating Media, themes, and runtime improvements.\
 **v0.4.4**: Standalone, Qwen 3.8 and Qwen3-VL, expanded Direct GGUF support.\

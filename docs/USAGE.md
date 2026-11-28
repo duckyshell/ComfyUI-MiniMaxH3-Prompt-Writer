@@ -1,5 +1,12 @@
 # Usage
 
+## H3 Image
+
+- **Text to Image** writes a standalone prompt from text, photos, or both. With photos alone, Writer describes one image or combines several into a scene.
+- **Image Edit** needs a source photo and an instruction. Add the source first and any references after it. Use the same order in the edit workflow. **Refine** can revise an existing prompt without photos.
+
+For photos, select a vision model. Drag cards to reorder them. Picture tags follow their photos. Open **System Prompt** to edit the writing instructions, or **Official guides** to read the [MiniMax prompt-writing skill](https://github.com/MiniMax-AI/MiniMax-H3-Image/blob/40850901ab938303b5274122b5f305ebc5b75c80/skills/h3-image-prompt-writing/SKILL.md).
+
 ## Generate a prompt
 
 1. Open the floating **H3 Prompt Writer** button or use **Extensions > H3 Prompt Writer**.

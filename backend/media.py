@@ -24,6 +24,7 @@ CONTACT_SHEET_INDEX_BASE_SIZE = 18
 CONTACT_SHEET_INDEX_SCALE = 1.75
 MODE_LIMITS = {
     "T2VA": {},
+    "H3Image": {"image": 16},
     "I2VA": {"image": 1},
     "FL2VA": {"image": 2},
     "L2VA": {"image": 1},
@@ -470,7 +471,7 @@ class MediaStore:
                 asset["reference"] = None
                 continue
             per_type[asset["type"]] += 1
-            if mode == "Reference":
+            if mode in {"Reference", "H3Image"}:
                 names = {"image": "Picture", "video": "Video", "audio": "Audio"}
                 asset["reference"] = f"<{names[asset['type']]} {per_type[asset['type']]}>"
             elif mode == "FL2VA":

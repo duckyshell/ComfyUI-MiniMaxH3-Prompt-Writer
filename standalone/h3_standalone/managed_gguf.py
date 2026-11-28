@@ -429,7 +429,7 @@ class ManagedGGUFController:
             "configuration_verified": False,
             "verification_status": "metadata_detected" if verified_model else "unverified",
             "vision_status": "selected_unverified" if projector else "missing",
-            "capability_message": None if projector else "No vision projector is selected. T2VA and Music3 remain available.",
+            "capability_message": None if projector else "No vision projector is selected. T2VA, H3 Image and Music3 remain available.",
             "native_context_tokens": native_context,
             "embedding_length": item.get("embedding_length"),
             "model_policy": item.get("model_policy"),

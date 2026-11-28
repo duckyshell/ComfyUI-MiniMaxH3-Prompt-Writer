@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .guides import MODE_GUIDES, guide_for_mode, load_guide, reference_base_excerpt
+from .guides import MODE_GUIDES, guide_for_mode, image_writing_guide, load_guide, reference_base_excerpt
 from .media import STORE, MediaError, parse_session_id
 from .references import canonical_reference_tags
 from .system_prompts import SystemPromptError, resolve_system_prompt
@@ -61,7 +61,7 @@ def _validate_missing_media(text: str, field_label: str) -> None:
 
 
 def _validate_reference_tags(text: str, manifest: dict[str, Any], mode: str, field_label: str) -> None:
-    if mode != "Reference":
+    if mode not in {"Reference", "H3Image"}:
         return
     _validate_missing_media(text, field_label)
     available = {asset["reference"] for asset in manifest["assets"]}
@@ -161,8 +161,117 @@ def _final_contract(mode: str, task_text: str) -> str:
     )
 
 
+def _prepared_media_inputs(declared_references: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    eligible = [asset for asset in declared_references if asset["type"] != "audio"]
+    return [
+        {
+            "asset_id": asset["id"],
+            "reference": asset.get("reference"),
+            "type": asset["type"],
+            "requires_capability": CAPABILITY_BY_TYPE[asset["type"]],
+            "frames": [
+                {"timestamp": frame["timestamp"], "content_url": frame["url"]}
+                for frame in asset.get("frames", [])
+            ],
+            "content_url": asset["content_url"],
+            "visual_width": (
+                asset.get("prepared_width")
+                if asset["type"] == "image"
+                else asset.get("contact_sheet_width")
+            ),
+            "visual_height": (
+                asset.get("prepared_height")
+                if asset["type"] == "image"
+                else asset.get("contact_sheet_height")
+            ),
+        }
+        for asset in eligible
+    ]
+
+
+def _assemble_image_prompt(body: dict[str, Any], *, refine: bool) -> dict[str, Any]:
+    mode = "H3Image"
+    system, custom = _effective_system_prompt(body, mode)
+    try:
+        session = parse_session_id(body.get("session_id"))
+    except ValueError as error:
+        raise AssemblyError("INVALID_SESSION", "The session ID is invalid.") from error
+    task = body.get("image_task", "describe")
+    if task not in ("describe", "edit"):
+        raise AssemblyError("INVALID_REQUEST", "Select Text to Image or Image Edit.")
+    manifest = STORE.manifest(session, mode)
+    assets = manifest["assets"]
+    source_ids = [asset["id"] for asset in assets]
+    expected = body.get("image_asset_ids", source_ids)
+    if "image_asset_ids" not in body and "image_asset_id" in body:
+        expected = [body["image_asset_id"]] if body["image_asset_id"] is not None else []
+    if expected != source_ids:
+        raise AssemblyError("IMAGE_CHANGED", "The reference images or their order changed. Check them and try again.")
+    editing = task == "edit"
+    text_only_revision = editing and refine and not assets
+    if editing and not refine and not assets:
+        raise AssemblyError("IMAGE_REQUIRED", "Attach the image you want to edit.")
+    brief = body.get("creative_brief", "")
+    if not isinstance(brief, str):
+        raise AssemblyError("INVALID_REQUEST", "Image brief must be text.")
+    brief = "" if text_only_revision else normalize_unicode_text(brief).strip()
+    if not refine and not brief and (editing or not assets):
+        raise AssemblyError("INVALID_REQUEST", "Describe the change you want." if editing else "Add an image or write an image brief.")
+    _validate_reference_tags(brief, manifest, mode, "Creative brief")
+    inputs = {"mode": mode, "image_task": task, "creative_brief": brief, "duration_seconds": None,
+              "aspect_ratio": None, "media_manifest": manifest}
+    if text_only_revision:
+        goal = "Revise the existing image edit prompt using only the current prompt and the requested change."
+    elif editing:
+        goal = ("Edit <Picture 1>. For anything taken from a later picture, transfer exactly the requested "
+                "property and preserve the other properties of the source.")
+    elif assets:
+        goal = (
+            "Write a standalone text-to-image prompt. The generator receives text alone. "
+            "Describe what will appear in the new image without mentioning the input pictures or their labels."
+        )
+        if not brief:
+            goal += (" Describe the visible subject, composition and light." if len(assets) == 1 else
+                     f" There are {len(assets)} distinct images. Identify the main visible subject in each. "
+                     "Write one scene where all those subjects appear together, and say where they are relative to each other.")
+    else:
+        goal = "Write a standalone text-to-image prompt from the brief."
+    parts = [goal]
+    if brief:
+        parts.append(f"Image brief:\n{brief}")
+    if refine:
+        prompt = _required_text(body, "current_prompt", "Current image prompt")
+        instruction = _required_text(body, "instruction", "Revision instruction")
+        if len(prompt) > 20_000:
+            raise AssemblyError("PROMPT_TOO_LONG", "The current prompt cannot exceed 20,000 characters.")
+        if len(instruction) > 2_000:
+            raise AssemblyError("INSTRUCTION_TOO_LONG", "The revision instruction cannot exceed 2,000 characters.")
+        for text, field in ((prompt, "Current image prompt"), (instruction, "Revision instruction")):
+            if text_only_revision:
+                _validate_missing_media(text, field)
+            else:
+                _validate_reference_tags(text, manifest, mode, field)
+        inputs.update(current_prompt=prompt, instruction=instruction)
+        parts.extend([f"Current image prompt:\n{prompt}", f"Requested change:\n{instruction}"])
+    guide = ("Change only what was requested. Preserve the existing wording and picture labels elsewhere. "
+             "No photos are attached. Do not infer or add details about the source."
+             if text_only_revision else image_writing_guide(editing))
+    messages = [{"role": "system", "name": "minimax_image_writing_guide", "content": guide}]
+    if system:
+        messages.append({"role": "system", "name": "image_writer_instructions", "content": system})
+    messages.append({"role": "user", "content": "\n\n".join(parts)})
+    return {
+        "schema_version": 1,
+        "guide": {"id": "h3-image", "title": "MiniMax H3 Image"},
+        "input": inputs, "media_inputs": _prepared_media_inputs(assets), "supporting_guides": [],
+        "system_prompt": {"custom": custom, "content": system}, "messages": messages,
+    }
+
+
 def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
     mode = _required_text(body, "mode", "Mode")
+    if mode == "H3Image":
+        return _assemble_image_prompt(body, refine=False)
     if mode == MUSIC3_MODE:
         system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
         brief, lyrics = _validated_music_caption_context(body)
@@ -212,31 +321,7 @@ def assemble_request(body: dict[str, Any]) -> dict[str, Any]:
 
     _validate_reference_tags(brief, manifest, mode, "Creative Brief")
     declared_references = manifest["assets"]
-    eligible = [asset for asset in declared_references if asset["type"] != "audio"]
-    media_inputs = [
-        {
-            "asset_id": asset["id"],
-            "reference": asset.get("reference"),
-            "type": asset["type"],
-            "requires_capability": CAPABILITY_BY_TYPE[asset["type"]],
-            "frames": [
-                {"timestamp": frame["timestamp"], "content_url": frame["url"]}
-                for frame in asset.get("frames", [])
-            ],
-            "content_url": asset["content_url"],
-            "visual_width": (
-                asset.get("prepared_width")
-                if asset["type"] == "image"
-                else asset.get("contact_sheet_width")
-            ),
-            "visual_height": (
-                asset.get("prepared_height")
-                if asset["type"] == "image"
-                else asset.get("contact_sheet_height")
-            ),
-        }
-        for asset in eligible
-    ]
+    media_inputs = _prepared_media_inputs(declared_references)
     references = "\n".join(_media_line(asset) for asset in declared_references) or "None"
     user_content = (
         f"Mode: {mode}\n"
@@ -272,6 +357,8 @@ def assemble_refinement(
     cached_generation: dict[str, Any] | None,
 ) -> dict[str, Any]:
     mode = _required_text(body, "mode", "Mode")
+    if mode == "H3Image":
+        return _assemble_image_prompt(body, refine=True)
     if mode == MUSIC3_MODE:
         system_prompt, system_prompt_custom = _effective_system_prompt(body, mode)
         current_prompt = _required_text(body, "current_prompt", "Current caption")

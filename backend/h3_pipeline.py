@@ -210,15 +210,15 @@ def validate_media_capabilities(model_info: dict[str, Any], assembled: dict[str,
     if (
         model_info.get("family") == "gguf"
         and model_info.get("capabilities", {}).get("images") is False
-        and mode not in {"T2VA", "Music3"}
+        and mode not in {"T2VA", "Music3", "H3Image"}
     ):
         raise ModelError(
             "DIRECT_VISION_REQUIRED",
-            "This Direct GGUF model is running without a compatible vision projector. T2VA and Music3 are available.",
+            "This Direct GGUF model is running without a compatible vision projector. T2VA, H3 Image and Music3 are available.",
             {
                 "mode": mode,
-                "supported_modes": ["T2VA", "Music3"],
-                "suggestion": "Switch to T2VA or Music3, or add the matching mmproj GGUF beside the model.",
+                "supported_modes": ["T2VA", "Music3", "H3Image"],
+                "suggestion": "Switch to T2VA, H3 Image or Music3, or add the matching mmproj GGUF beside the model.",
             },
         )
     required = {item["requires_capability"] for item in assembled["media_inputs"]}

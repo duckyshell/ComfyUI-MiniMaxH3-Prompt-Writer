@@ -113,3 +113,7 @@
 .h3ps-music-system-prompt textarea::-webkit-resizer {
   background:linear-gradient(135deg, transparent 0 58%, #44444b 59% 66%, transparent 67% 74%, #55555d 75% 82%, transparent 83%) bottom 2px right 2px / 7px 7px no-repeat;
 }
+
+.h3ps-image-system summary { cursor: pointer; list-style: none; }
+.h3ps-image-system[open] summary svg { transform: rotate(90deg); }
+.h3ps-image-system .h3ps-system-prompt-editor-heading { display: none; }

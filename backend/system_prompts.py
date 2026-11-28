@@ -12,6 +12,9 @@ MUSIC3_SYSTEM_WRAPPER = """Turn the user's music brief and optional lyrics into 
 MUSIC3_LYRICS_SYSTEM_WRAPPER = """Create or revise lyrics for MiniMax Music 3 and return only the complete lyrics text, with no commentary or Markdown fences. Keep the final output within 4,000 characters. When Current Lyrics is empty, write finished, performable lyrics that follow the revision instruction and any included Music Brief, using clear bracketed section labels such as [Verse], [Chorus], or [Bridge] where they help the song structure. When Current Lyrics is provided, preserve its language, voice, meaning, rhyme approach, line order, and section structure except where the revision instruction explicitly asks for a change. Do not automatically translate, add rhyme, remove rhyme, rewrite unchanged lines, or add, remove, merge, split, or reorder sections. Treat an included Music Brief only as supporting context and never let it override a specific revision instruction or force unrelated lyric changes. Do not copy wording from the Music Brief into the lyrics unless the user explicitly requests it. Return a complete replacement Lyrics value, not a diff or explanation."""
 
 
+IMAGE_SYSTEM_WRAPPER = """Return the H3 Image prompt as plain text without headings or commentary. Write in natural English unless the user requests another language. Preserve requested visible text verbatim in its original language. Follow the brief and each reference's assigned role. Match the detail to the request. When revising, change only what the user asks."""
+
+
 class SystemPromptError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -20,6 +23,8 @@ class SystemPromptError(ValueError):
 
 
 def system_prompt_for_mode(mode: str) -> str:
+    if mode == "H3Image":
+        return IMAGE_SYSTEM_WRAPPER
     if mode not in {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3", "Music3Lyrics"}:
         raise SystemPromptError("INVALID_MODE", "The selected MiniMax mode is not supported.")
     if mode == "Music3Lyrics":

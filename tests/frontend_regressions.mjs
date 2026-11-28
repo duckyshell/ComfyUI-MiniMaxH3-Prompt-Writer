@@ -552,6 +552,7 @@ test("user preferences persist only stable non-secret settings", () => {
   const serialized = storage.entries()[USER_PREFERENCES_STORAGE_KEY];
   assert.doesNotMatch(serialized, /secret|creativeBrief|keepModelLoaded|thinking|connection/);
   assert.deepEqual(loadUserPreferences(storage), {
+    image_task: "describe",
     version: 1,
     mode: "Reference",
     duration_seconds: 14,
@@ -596,6 +597,7 @@ test("user preferences ignore corrupt or unknown versions and sanitize fields", 
   assert.deepEqual(loadUserPreferences(storage), {
     version: 1,
     mode: "Reference",
+    image_task: "describe",
     duration_seconds: 10,
     aspect_ratio: "16:9",
     active_provider: "direct",
@@ -784,7 +786,7 @@ test("clear prompts removes brief and generated output while preserving lyrics a
   assert.match(mainSource, /data-clear-media><strong>Clear media<\/strong>/);
   assert.match(mainSource, /data-clear-prompts><strong>Clear prompts<\/strong><small>Keep media<\/small>/);
   assert.match(mainSource, /data-clear-all><strong>Clear all<\/strong><small>Media and prompts<\/small>/);
-  assert.match(mainSource, /if \(!await clearCurrentMedia\(\{ notify: false \}\)\) return;/);
+  assert.match(mainSource, /clearCurrentMedia\(\{ includePrompts: true \}\)/);
   assert.match(stylesSource, /\.h3ps-clear-control \{[^}]*display: inline-flex;[^}]*border-radius: 7px;/);
   assert.match(stylesSource, /\.h3ps-clear-menu \{[^}]*right: -20px;[^}]*width: max-content;[^}]*max-width: calc\(100vw - 24px\);/);
   assert.match(stylesSource, /\.h3ps-clear-menu button \{[^}]*display: grid;[^}]*min-height: calc\(42px \* var\(--h3ps-interface-scale\)\);/);
@@ -1077,7 +1079,7 @@ test("External queue handoff waits for exact unloaded status and fails closed on
   }),error=>error.code==='WRITER_UNLOAD_FAILED');
 });
 
-test("text-only Direct models expose T2VA and Music3", () => {
+test("text-only Direct models support text-to-image, text-to-video and music", () => {
   const textOnly = {
     id: "direct-text-only",
     family: "gguf",
@@ -1094,12 +1096,36 @@ test("text-only Direct models expose T2VA and Music3", () => {
   assert.equal(isTextOnlyDirectModel(textOnly), true);
   assert.equal(isGenerationModeAvailable(textOnly, "T2VA"), true);
   assert.equal(isGenerationModeAvailable(textOnly, "Music3"), true);
+  assert.equal(isGenerationModeAvailable(textOnly, "H3Image"), true);
   for (const mode of ["I2VA", "FL2VA", "L2VA", "Reference"]) {
     assert.equal(isGenerationModeAvailable(textOnly, mode), false);
   }
   assert.equal(isTextOnlyDirectModel(vision), false);
   assert.equal(isGenerationModeAvailable(vision, "Reference"), true);
   assert.equal(isGenerationModeAvailable({ family: "external", capabilities: { images: false } }, "Reference"), true);
+});
+
+test("H3 Image keeps its draft and omits video settings from generation and refinement", () => {
+  const storage = memoryStorage();
+  const state = createStudioState({sessionId: "image-test", storage});
+  state.mode = "H3Image";
+  state.customSystemPrompts.standard = "Video only";
+  state.imageTask = "edit";
+  saveUserPreferences(storage, state);
+  assert.equal(createStudioState({sessionId: "next", storage}).imageTask, "edit");
+  state.assets = [{mode: "H3Image", id: "source"}, {mode: "Reference", id: "video-reference"}, {mode: "H3Image", id: "palette"}];
+  const draft = {brief: "A red kite", prompt: "A paper kite against a blue sky."};
+  saveModeDrafts(storage, {H3Image: draft});
+  assert.deepEqual(loadModeDrafts(storage).H3Image, draft);
+  const args = {creativeBrief: draft.brief, currentPrompt: draft.prompt, instruction: "Make it yellow"};
+  for (const payload of [buildGeneratePayload(state, args), buildRefinePayload(state, args)]) {
+    assert.equal(payload.mode, "H3Image");
+    assert.equal(payload.image_task, "edit");
+    assert.deepEqual(payload.image_asset_ids, ["source", "palette"]);
+    assert.equal(payload.system_prompt_override, null);
+    assert.equal("duration_seconds" in payload, false);
+    assert.equal("aspect_ratio" in payload, false);
+  }
 });
 
 test("Generate and Refine payloads are built from state rather than Settings DOM", () => {
@@ -1525,7 +1551,7 @@ test("active requests block add, reorder, and mode switching", () => {
 
 test("text-only Direct UI disables visual modes and explains the fallback", () => {
   assert.match(mainSource, /function syncModeAvailability\(\)/);
-  assert.match(mainSource, /Text-only model · T2VA and Music3 available/);
+  assert.match(mainSource, /Text-only model · T2VA, H3 Image and Music3 available/);
   assert.match(mainSource, /Switched to T2VA/);
   assert.match(mainSource, /if \(!generationModeIsAvailable\(\)\) return/);
   assert.match(stylesSource, /\.h3ps-modes button:disabled/);

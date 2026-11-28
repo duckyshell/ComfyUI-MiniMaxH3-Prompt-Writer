@@ -66,6 +66,23 @@ def load_guide(guide_id: str) -> dict[str, str]:
     }
 
 
+def image_writing_guide(edit: bool) -> str:
+    # Writer targets the caption field of the official workflow. The skill and
+    # template sources for these conventions are pinned in guides/README.md.
+    if edit:
+        return (
+            "Reference-image edit: write one paragraph describing the final state. Identify the relevant "
+            "content using <Picture N> in input order and stable <Subject N> labels where needed. "
+            "For each reference, describe only its assigned contribution. State what changes and which "
+            "source details stay the same."
+        )
+    return (
+        "Text-to-image: describe the finished image as a standalone scene. Establish its subject "
+        "and composition, then add the details that matter to the brief. Respect requested counts, "
+        "spatial relationships and exclusions."
+    )
+
+
 def guide_for_mode(mode: str) -> dict[str, str]:
     return load_guide(MODE_GUIDES[mode])
 

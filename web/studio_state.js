@@ -9,13 +9,13 @@ export const USER_PREFERENCES_STORAGE_KEY = "h3ps-preferences-v1";
 export const MODE_DRAFTS_STORAGE_KEY = "h3ps-mode-drafts-v1";
 export const INTERFACE_SIZES = ["100", "110", "120", "125"];
 
-const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
+const MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3", "H3Image"];
 const ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"];
 const PROVIDERS = ["direct", "external", "ollama", "api"];
 const CONTEXT_PROFILES = ["auto", "low", "standard", "extended", "large", "maximum", "custom"];
 const KV_CACHES = ["auto", "f16", "q8"];
 const GENERATION_BUDGETS = ["auto", "2048", "4096", "8192", "custom"];
-const DRAFT_MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"];
+const DRAFT_MODES = [...MODES, "H3ImageEdit"];
 
 export function isPersistedDraftMode(mode) {
   return DRAFT_MODES.includes(mode);
@@ -31,7 +31,7 @@ export function isTextOnlyDirectModel(model) {
 }
 
 export function isGenerationModeAvailable(model, mode) {
-  return !isTextOnlyDirectModel(model) || mode === "T2VA" || mode === "Music3";
+  return !isTextOnlyDirectModel(model) || mode === "T2VA" || mode === "Music3" || mode === "H3Image";
 }
 
 export function isModeDraftDirty(mode, draft, defaults) {
@@ -95,6 +95,7 @@ export function loadUserPreferences(storage = globalThis.localStorage) {
     return {
       version: 1,
       mode: MODES.includes(value.mode) ? value.mode : "Reference",
+      image_task: value.image_task === "edit" ? "edit" : "describe",
       duration_seconds: Number.isInteger(value.duration_seconds) && value.duration_seconds >= 1 && value.duration_seconds <= 20 ? value.duration_seconds : 10,
       aspect_ratio: ASPECT_RATIOS.includes(value.aspect_ratio) ? value.aspect_ratio : "16:9",
       active_provider: PROVIDERS.includes(value.active_provider) ? value.active_provider : "direct",
@@ -123,6 +124,7 @@ export function saveUserPreferences(storage, state) {
   const safe = {
     version: 1,
     mode: MODES.includes(state.mode) ? state.mode : "Reference",
+    image_task: state.imageTask === "edit" ? "edit" : "describe",
     duration_seconds: Number.isInteger(state.durationSeconds) && state.durationSeconds >= 1 && state.durationSeconds <= 20 ? state.durationSeconds : 10,
     aspect_ratio: ASPECT_RATIOS.includes(state.aspectRatio) ? state.aspectRatio : "16:9",
     active_provider: PROVIDERS.includes(state.settingsProvider) ? state.settingsProvider : "direct",
@@ -274,6 +276,7 @@ export function saveCustomSystemPrompts(storage, prompts) {
 }
 
 export function systemPromptProfile(mode) {
+  if (mode === "H3Image") return "image";
   if (mode === "Music3Lyrics") return "music3_lyrics";
   if (mode === "Music3") return "music3";
   return mode === "Reference" || mode === "reference" ? "reference" : "standard";
@@ -356,6 +359,10 @@ function sharedInferencePayload(state) {
   return {
     session_id: state.sessionId,
     mode: state.mode,
+    ...(state.mode === "H3Image" ? {
+      image_task: state.imageTask || "describe",
+      image_asset_ids: state.assets.filter(asset => asset.mode === "H3Image").map(asset => asset.id),
+    } : {}),
     model_id: state.selectedModel?.id,
     ...(directRuntime && state.selectedModel.selected_projector ? { gguf_projector: state.selectedModel.selected_projector } : {}),
     external_server: selectedExternalServer(state),
@@ -382,8 +389,7 @@ function sharedInferencePayload(state) {
 export function buildGeneratePayload(state, { creativeBrief, lyrics = "", seed }) {
   const payload = {
     ...sharedInferencePayload(state),
-    duration_seconds: state.durationSeconds,
-    aspect_ratio: state.aspectRatio,
+    ...(state.mode === "H3Image" ? {} : { duration_seconds: state.durationSeconds, aspect_ratio: state.aspectRatio }),
     creative_brief: creativeBrief,
     seed,
   };
@@ -396,8 +402,7 @@ export function buildRefinePayload(state, { currentPrompt, instruction, creative
     ...sharedInferencePayload(state),
     current_prompt: currentPrompt,
     instruction,
-    duration_seconds: state.durationSeconds,
-    aspect_ratio: state.aspectRatio,
+    ...(state.mode === "H3Image" ? {} : { duration_seconds: state.durationSeconds, aspect_ratio: state.aspectRatio }),
     creative_brief: creativeBrief,
     seed,
   };
@@ -429,7 +434,8 @@ export function createStudioState({ sessionId, storage = globalThis.localStorage
   const ollamaHost = loadOllamaHost(storage);
   return {
     mode: preferences?.mode || "Reference",
-    lastVideoMode: preferences?.mode && preferences.mode !== "Music3" ? preferences.mode : "Reference",
+    imageTask: preferences?.image_task || "describe",
+    lastVideoMode: preferences?.mode && !["Music3", "H3Image"].includes(preferences.mode) ? preferences.mode : "Reference",
     mediaFilter: "all",
     durationSeconds: preferences?.duration_seconds || 10,
     aspectRatio: preferences?.aspect_ratio || "16:9",

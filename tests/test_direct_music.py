@@ -389,7 +389,7 @@ class DirectMusicRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.code, "DIRECT_VISION_REQUIRED")
-        self.assertEqual(raised.exception.details["supported_modes"], ["T2VA", "Music3"])
+        self.assertEqual(raised.exception.details["supported_modes"], ["T2VA", "Music3", "H3Image"])
         self.assertIsNone(backend.model)
 
     def test_direct_model_without_template_control_rejects_thinking_before_load(self):

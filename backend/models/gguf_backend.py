@@ -421,7 +421,7 @@ class GGUFBackend:
                     reasoning_effort=reasoning_effort,
                 )
                 text_only = (
-                    assembled.get("input", {}).get("mode") == "Music3"
+                    (assembled.get("input", {}).get("mode") in {"Music3", "H3Image"} and not assembled.get("media_inputs"))
                     or model_info.get("capabilities", {}).get("images") is False
                 )
                 runtime_kind = "text" if text_only else "multimodal"

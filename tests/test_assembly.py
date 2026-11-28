@@ -14,6 +14,79 @@ from backend.system_prompts import (
 )
 
 
+class ImagePromptTests(unittest.TestCase):
+    def test_image_generate_and_refine_use_the_current_image_prompt(self):
+        body = {"mode": "H3Image", "creative_brief": 'A green sign reading "КАФЕ".'}
+        generated = assemble_request(body)
+        self.assertIn(body["creative_brief"], generated["messages"][-1]["content"])
+        self.assertEqual(generated["media_inputs"], [])
+        self.assertIsNone(generated["input"]["duration_seconds"])
+        self.assertEqual(generated["system_prompt"]["content"], system_prompt_for_mode("H3Image"))
+        self.assertNotEqual(generated["system_prompt"]["content"], SYSTEM_WRAPPER)
+        revised = assemble_refinement({**body, "current_prompt": "A green enamel sign.", "instruction": "Make it blue."}, None)
+        for fragment in ('"КАФЕ"', "green enamel", "Make it blue"):
+            self.assertIn(fragment, revised["messages"][-1]["content"])
+
+    def test_photo_description_and_edit_select_their_guides_and_attach_the_image(self):
+        source = {"id": "photo", "type": "image", "reference": "<Picture 1>",
+                  "content_url": "/source", "prepared_width": 640, "prepared_height": 480}
+        with patch("backend.assembly.STORE.manifest", return_value={"assets": [source], "valid": True}):
+            body = {"mode": "H3Image", "image_asset_id": "photo", "creative_brief": ""}
+            describe = assemble_request(body)
+            self.assertIn("text-to-image", describe["messages"][0]["content"].lower())
+            self.assertNotIn("## Examples", describe["messages"][0]["content"])
+            self.assertIn("text alone", describe["messages"][-1]["content"])
+            self.assertEqual(describe["media_inputs"][0]["visual_width"], 640)
+            edit = {**body, "image_task": "edit"}
+            with self.assertRaises(AssemblyError):
+                assemble_request(edit)
+            for item in (assemble_request({**edit, "creative_brief": "Change the glaze."}),
+                         assemble_refinement({**edit, "current_prompt": "Yellow glaze.", "instruction": "Use ochre."}, None)):
+                self.assertIn("reference-image edit", item["messages"][0]["content"].lower())
+                self.assertEqual(item["media_inputs"][0]["asset_id"], "photo")
+            with self.assertRaisesRegex(AssemblyError, "changed"):
+                assemble_request({**body, "image_asset_id": "old"})
+
+    def test_multiple_photos_keep_order_for_blank_directed_and_edit_requests(self):
+        sources = [{"id": name, "type": "image", "reference": f"<Picture {index}>", "content_url": "/img"}
+                   for index, name in enumerate(("scene", "palette"), start=1)]
+        with patch("backend.assembly.STORE.manifest", return_value={"assets": sources}):
+            body = {"mode": "H3Image", "image_asset_ids": ["scene", "palette"]}
+            for task, brief in (("describe", ""), ("describe", "Only the light from <Picture 2>."),
+                                ("edit", "Use the palette from <Picture 2> on <Picture 1>.")):
+                result = assemble_request({**body, "image_task": task, "creative_brief": brief})
+                self.assertEqual([asset["asset_id"] for asset in result["media_inputs"]], body["image_asset_ids"])
+            for invalid in ({"image_asset_ids": ["palette", "scene"]}, {"image_asset_ids": ["scene"]},
+                            {"creative_brief": "Use <Picture 3>."}, {"image_task": "edit"}):
+                with self.assertRaises(AssemblyError):
+                    assemble_request({**body, **invalid})
+
+    def test_edit_without_a_reference_is_rejected(self):
+        with self.assertRaises(AssemblyError) as error:
+            assemble_request({"mode": "H3Image", "image_task": "edit", "creative_brief": "Change the glaze."})
+        self.assertEqual(error.exception.code, "IMAGE_REQUIRED")
+
+    def test_refine_edit_without_photos_keeps_workflow_labels_and_uses_only_the_current_text(self):
+        body = {"mode": "H3Image", "image_task": "edit", "image_asset_ids": [],
+                "creative_brief": "Old brief about a window in <Missing Picture 1>.",
+                "current_prompt": "Paint the door in <Picture 1> red.", "instruction": "Use blue instead."}
+        revised = assemble_refinement(body, None)
+        self.assertEqual(revised["media_inputs"], [])
+        message = revised["messages"][-1]["content"]
+        self.assertIn(body["current_prompt"], message)
+        self.assertIn(body["instruction"], message)
+        self.assertNotIn("window", message)
+        with self.assertRaises(AssemblyError) as error:
+            assemble_refinement({**body, "current_prompt": "Edit <Missing Picture 1>."}, None)
+        self.assertEqual(error.exception.code, "REFERENCE_NOT_FOUND")
+
+    def test_image_brief_required_only_for_generation(self):
+        with self.assertRaises(AssemblyError):
+            assemble_request({"mode": "H3Image", "creative_brief": " "})
+        result = assemble_refinement({"mode": "H3Image", "current_prompt": "A vase.", "instruction": "Use glass."}, None)
+        self.assertIn("A vase.", result["messages"][-1]["content"])
+
+
 class SystemPromptTests(unittest.TestCase):
     def test_music_mode_has_a_dedicated_caption_contract(self):
         self.assertEqual(system_prompt_for_mode("Music3"), MUSIC3_SYSTEM_WRAPPER)

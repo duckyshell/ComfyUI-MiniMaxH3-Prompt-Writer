@@ -35,7 +35,7 @@ from .sequence_routes import register_sequence_routes
 
 
 ROUTE_PREFIX = "/h3studio"
-MODES = {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3"}
+MODES = {"T2VA", "I2VA", "FL2VA", "L2VA", "Reference", "Music3", "H3Image"}
 STATE: dict[str, Any] = {
     "phase": "idle",
     "active_request_id": None,
@@ -659,7 +659,8 @@ async def get_system_prompt(request: web.Request) -> web.Response:
         return _error(error.code, error.message, status=404)
     return web.json_response({
         "mode": mode,
-        "profile": "music3_lyrics" if mode == "Music3Lyrics" else "music3" if mode == "Music3" else "reference" if mode == "Reference" else "standard",
+        "profile": {"H3Image": "image", "Music3Lyrics": "music3_lyrics", "Music3": "music3",
+                    "Reference": "reference"}.get(mode, "standard"),
         "system_prompt": prompt,
     })
 
@@ -685,7 +686,11 @@ async def generate(request: web.Request) -> web.Response:
     if body is None:
         return _error("INVALID_REQUEST", "Expected a JSON object.", status=400)
 
-    required = ("mode", "creative_brief", "model_id", "session_id") if body.get("mode") == "Music3" else ("mode", "creative_brief", "model_id", "session_id", "aspect_ratio", "duration_seconds")
+    required = ("mode", "model_id", "session_id")
+    if body.get("mode") != "H3Image":
+        required += ("creative_brief",)
+    if body.get("mode") not in ("Music3", "H3Image"):
+        required += ("aspect_ratio", "duration_seconds")
     missing = [key for key in required if not body.get(key)]
     if missing:
         return _error("INVALID_REQUEST", "Required fields are missing.", status=400, details={"fields": missing})

@@ -17,7 +17,7 @@ function systemPromptPanel(profile, label, description, icon, hidden = false) {
         <span class="h3ps-system-prompt-panel-status"><em data-system-prompt-status="${profile}">Default</em>${icon("check", 13)}</span>
       </header>
       <p>${description} Official MiniMax guides are applied separately and are not modified.</p>
-      <textarea data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
+      <textarea aria-label="${label} system prompt" data-system-prompt="${profile}" maxlength="8000" spellcheck="true" disabled></textarea>
       <footer><small data-system-prompt-count="${profile}">0 / 8,000</small><button type="button" data-system-prompt-reset="${profile}" hidden>Reset to default</button></footer>
     </div>`;
 }
@@ -114,9 +114,14 @@ export function settingsMarkup(icon) {
               <span><strong>Reference</strong><small>Reference mode</small></span>
               <span><em data-system-prompt-summary-status="reference">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
             </button>
+            <button type="button" data-system-prompt-profile="image">
+              <span><strong>H3 Image</strong><small>Generation and photo editing</small></span>
+              <span><em data-system-prompt-summary-status="image">Default</em><b>Edit</b>${icon("chevron", 12)}</span>
+            </button>
           </div>
           <div class="h3ps-system-prompt-editor" data-system-prompt-editor hidden>
             ${systemPromptPanel("standard", "Standard", "Instructions used by T2VA, I2VA, FL2VA and L2VA.", icon)}
+            ${systemPromptPanel("image", "H3 Image", "Instructions for still-image prompts.", icon, true)}
             ${systemPromptPanel("reference", "Reference", "Instructions used by Reference mode.", icon, true)}
           </div>
           <div class="h3ps-draft-defaults-action" data-draft-defaults-action>

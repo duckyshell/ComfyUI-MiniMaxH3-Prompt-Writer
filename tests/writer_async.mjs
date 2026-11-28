@@ -48,16 +48,17 @@ test("Clear everything does not clear another mode or newer input", async () => 
     const pending = deferred();
     const studio = { mode: "Reference" };
     let fields = { brief: "old", prompt: "old", lyrics: "" };
-    const api = controller(["clearEverything"], {
+    const api = controller(["clearCurrentMedia", "draftKey"], {
       studio, currentDraftFields: () => ({ ...fields }),
-      clearCurrentMedia: () => pending.promise,
+      clearMedia: () => pending.promise,
+      acceptMediaAssets() {}, renderMedia() {},
       clearCurrentPrompts: () => { fields = { brief: "", prompt: "" }; },
       showToast() {},
     });
-    const operation = api.clearEverything();
+    const operation = api.clearCurrentMedia({ includePrompts: true });
     if (changeMode) studio.mode = "I2VA";
     fields = { brief: "new", prompt: "new", lyrics: "" };
-    pending.resolve(true);
+    pending.resolve({ assets: [] });
     await operation;
     assert.equal(fields.prompt, "new");
   }

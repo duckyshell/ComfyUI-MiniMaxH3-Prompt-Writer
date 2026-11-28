@@ -266,7 +266,7 @@ async function syncSystemPromptEditor(profile) {
   const summaryStatus = studio.root.querySelector(`[data-system-prompt-summary-status="${profile}"]`);
   const reset = studio.root.querySelector(`[data-system-prompt-reset="${profile}"]`);
   const count = studio.root.querySelector(`[data-system-prompt-count="${profile}"]`);
-  const requestMode = profile === "music3_lyrics" ? "Music3Lyrics" : profile === "music3" ? "Music3" : profile === "reference" ? "Reference" : "T2VA";
+  const requestMode = { music3_lyrics: "Music3Lyrics", music3: "Music3", image: "H3Image", reference: "Reference" }[profile] || "T2VA";
   textarea.disabled = true;
   if (!studio.systemPromptDefaults[profile]) {
     try {
@@ -294,6 +294,7 @@ async function syncSystemPromptEditor(profile) {
 function syncSystemPromptEditors() {
   return Promise.all([
     syncSystemPromptEditor("standard"),
+    syncSystemPromptEditor("image"),
     syncSystemPromptEditor("reference"),
     syncSystemPromptEditor("music3"),
     syncSystemPromptEditor("music3_lyrics"),
@@ -302,7 +303,7 @@ function syncSystemPromptEditors() {
 
 function setSystemPromptProfile(profile) {
   if (!studio) return;
-  studio.settingsPromptProfile = profile === "reference" ? "reference" : "standard";
+  studio.settingsPromptProfile = ["reference", "image"].includes(profile) ? profile : "standard";
   studio.root.querySelectorAll("[data-system-prompt-profile]").forEach((button) => {
     const selected = button.dataset.systemPromptProfile === studio.settingsPromptProfile;
     button.classList.toggle("is-selected", selected);
@@ -487,10 +488,40 @@ function notifyMediaCompatibility() {
   if(messages.length)showToast("Reference media",messages.join(" "),null,null,{dismissOnWorkspaceClick:true});
 }
 
+function assetGrid(assets, visibleAssets, isReference, canAdd, addLabel) {
+  return `<div class="h3ps-assets ${isReference ? "is-reference" : ""}">${visibleAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
+        ${canAdd ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 18)}<span>${addLabel}</span><small>Drop files here</small></button>` : ""}
+      </div>`;
+}
+
+function renderImageInput() {
+  const assets = studio.assets.filter(asset => asset.mode === "H3Image");
+  const editing = studio.imageTask === "edit";
+  const media = studio.root.querySelector("[data-image-media]");
+  media.innerHTML = assetGrid(assets, assets, true, assets.length < 16, "Add image");
+  studio.root.querySelectorAll("[data-image-task]").forEach(button => {
+    const selected = button.dataset.imageTask === studio.imageTask;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.disabled = studio.requestBusy;
+  });
+  studio.root.querySelector("[data-image-hint]").textContent = editing
+    ? "Add the image to edit first, then any references."
+    : "Optional · Use photos to guide the prompt.";
+  const brief = studio.root.querySelector("[data-image-brief]");
+  if (editing) brief.placeholder = "What should change? Mention what to keep.";
+  else if (assets.length > 1) brief.placeholder = "Leave blank to combine the images, or say what to take from each.";
+  else if (assets.length) brief.placeholder = "Leave blank to describe the image, or say what to take from it.";
+  else brief.placeholder = "Describe the image you want to create.";
+  bindMediaActions("H3Image", media, media);
+}
+
 function renderMedia(mode) {
   mode = studio.sequence?.mediaMode(mode) ?? mode;
   studio.floatingMedia?.refresh();
-  if (mode === "Music3") {
+  if (mode === "H3Image") renderImageInput();
+  else studio.root.querySelector("[data-image-media]").replaceChildren();
+  if (mode === "Music3" || mode === "H3Image") {
     studio.root.querySelectorAll("[data-mode]").forEach((button) => button.classList.remove("is-active"));
     syncComposerControl(mode);
     syncModeAvailability();
@@ -528,11 +559,7 @@ function renderMedia(mode) {
       </div>` : "";
     const addLabel = !isReference || filter === "image" ? "Add image" : filter === "video" ? "Add video" : filter === "audio" ? "Add audio" : "Add media";
     const canAdd = isReference || assets.length < data.limit;
-    media.innerHTML = `
-      ${filters}
-      <div class="h3ps-assets ${isReference ? "is-reference" : ""}">${visibleAssets.map((asset) => renderAsset(asset, assets.indexOf(asset))).join("")}
-        ${canAdd ? `<button class="${assets.length ? "h3ps-add-asset" : "h3ps-empty-drop"}" type="button" data-add-media ${studio.requestBusy ? "disabled" : ""}>${icon("plus", 18)}<span>${addLabel}</span><small>Drop files here</small></button>` : ""}
-      </div>`;
+    media.innerHTML = filters + assetGrid(assets, visibleAssets, isReference, canAdd, addLabel);
   }
   notifyMediaCompatibility();
   bindMediaActions(mode);
@@ -580,7 +607,7 @@ function rememberReferenceInsertTarget(editor) {
 function insertSelectedReference(reference, assetId) {
   if (studio.sequence?.insert(assetId)) return;
   if (studio.mode === "Music3") return;
-  const fallback = studio.root.querySelector("[data-output]");
+  const fallback = studio.mode === "H3Image" ? currentBriefTextarea() : studio.root.querySelector("[data-output]");
   const target = referenceInsertTarget?.editor?.isConnected ? referenceInsertTarget : { editor: fallback, caret: fallback.selectionStart };
   target.editor.setSelectionRange(target.caret, target.caret);
   if (insertReferenceAtCaret(target.editor, reference, target.caret)) {
@@ -589,18 +616,24 @@ function insertSelectedReference(reference, assetId) {
 }
 
 function acceptMediaAssets(assets) {
-  const rewrite = referenceTextRemapper(studio.assets, assets);
+  const remappers = Object.fromEntries(["Reference", "H3Image"].map(mode =>
+    [mode, referenceTextRemapper(studio.assets, assets, mode)]));
+  const rewrite = remappers[studio.mode] || remappers.Reference;
   let missing = false;
   const remap = text => {
     const next = rewrite(text);
     if (next !== text && /<Missing (Picture|Video|Audio) [1-9]\d*>/.test(next)) missing = true;
     return next;
   };
-  const saved = studio.modeDrafts.Reference;
-  if (saved) studio.modeDrafts.Reference = {...saved, brief:remap(saved.brief), prompt:remap(saved.prompt)};
-  // Sequence owns request-local labels. Only the separate Single draft is rewritten.
-  if (studio.mode === "Reference") {
-    for (const selector of ["[data-video-brief]", "[data-output]", "[data-refine-instruction]"]) {
+  for (const key of ["Reference", "H3Image", "H3ImageEdit"]) {
+    const saved = studio.modeDrafts[key];
+    if (!saved) continue;
+    const rewriteDraft = key === "Reference" ? remappers.Reference : remappers.H3Image;
+    studio.modeDrafts[key] = {...saved, brief: rewriteDraft(saved.brief), prompt: rewriteDraft(saved.prompt)};
+  }
+  if (studio.mode === "Reference" || studio.mode === "H3Image") {
+    const brief = studio.mode === "Reference" ? "[data-video-brief]" : "[data-image-brief]";
+    for (const selector of [brief, "[data-output]", "[data-refine-instruction]"]) {
       const input = studio.root.querySelector(selector), next = remap(input.value);
       if (next !== input.value) input.value = next;
     }
@@ -616,18 +649,17 @@ function acceptMediaAssets(assets) {
     updateBriefLayout(); renderPromptHighlights(); syncModifiedState(); saveCurrentModeDraft();
   } else saveModeDrafts(localStorage, studio.modeDrafts);
   studio.assets = assets;
-  if (missing) showToast("Reference removed", "Missing media tags are marked in your Single text. Replace or remove them before Generate or Refine.");
+  if (missing) showToast("Reference removed", "Removed references are marked in your text. Replace or remove them before Generate or Refine.");
 }
 
-function bindMediaActions(mode) {
-  const media = studio.root.querySelector("[data-h3ps-media]");
-  studio.root.querySelectorAll("[data-media-filter]").forEach((button) => {
+function bindMediaActions(mode, media = studio.root.querySelector("[data-h3ps-media]"), scope = studio.root) {
+  scope.querySelectorAll("[data-media-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       studio.mediaFilter = button.dataset.mediaFilter;
       renderMedia(mode);
     });
   });
-  studio.root.querySelectorAll("[data-asset-index]").forEach((button) => {
+  scope.querySelectorAll("[data-asset-index]").forEach((button) => {
     button.addEventListener("keydown",event=>{
       if(event.target===button && ["Enter"," "].includes(event.key)){event.preventDefault();button.click();}
     });
@@ -638,18 +670,18 @@ function bindMediaActions(mode) {
       else previewAsset(asset);
     });
   });
-  studio.root.querySelectorAll("[data-replace-asset]").forEach((button) => {
+  scope.querySelectorAll("[data-replace-asset]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       button.blur();
       chooseMedia(mode, button.dataset.replaceAsset);
     });
   });
-  studio.root.querySelectorAll("[data-media-tag]").forEach(button=>{
+  scope.querySelectorAll("[data-media-tag]").forEach(button=>{
     button.addEventListener("pointerdown",e=>e.preventDefault());
     button.addEventListener("click",e=>{e.stopPropagation();if(!studio.requestBusy)insertSelectedReference(button.dataset.mediaTag,button.closest("[data-asset-id]")?.dataset.assetId);});
   });
-  studio.root.querySelectorAll("[data-remove-asset]").forEach((button) => {
+  scope.querySelectorAll("[data-remove-asset]").forEach((button) => {
     button.addEventListener("click", async (event) => {
       event.stopPropagation();
       try {
@@ -661,10 +693,10 @@ function bindMediaActions(mode) {
       }
     });
   });
-  studio.root.querySelectorAll("[data-add-media]").forEach((button) => {
+  scope.querySelectorAll("[data-add-media]").forEach((button) => {
     button.addEventListener("click", () => chooseMedia(mode));
   });
-  studio.root.querySelectorAll("[data-asset-id]").forEach((card) => {
+  scope.querySelectorAll("[data-asset-id]").forEach((card) => {
     card.addEventListener("dragstart", (event) => {
       if (studio.requestBusy) {
         event.preventDefault();
@@ -687,12 +719,12 @@ function bindMediaActions(mode) {
       media.classList.remove("is-reordering");
       studio.dragGhost?.remove();
       studio.dragGhost = null;
-      studio.root.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after, .is-file-replace-target").forEach((item) => item.classList.remove("is-dragging", "is-drop-before", "is-drop-after", "is-file-replace-target"));
+      scope.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after, .is-file-replace-target").forEach((item) => item.classList.remove("is-dragging", "is-drop-before", "is-drop-after", "is-file-replace-target"));
     });
     card.addEventListener("dragover", (event) => {
       if (!studio.draggedAssetId && [...(event.dataTransfer.types || [])].includes("Files")) {
         event.preventDefault();
-        studio.root.querySelectorAll(".is-file-replace-target").forEach((item) => item.classList.remove("is-file-replace-target"));
+        scope.querySelectorAll(".is-file-replace-target").forEach((item) => item.classList.remove("is-file-replace-target"));
         if (replacementTargetForFileDrop(card.dataset.assetId, fileCountFromDataTransfer(event.dataTransfer))) {
           card.classList.add("is-file-replace-target");
         }
@@ -700,7 +732,7 @@ function bindMediaActions(mode) {
         return;
       }
       if (!studio.draggedAssetId || studio.draggedAssetId === card.dataset.assetId) return;
-      studio.root.querySelectorAll(".is-drop-before, .is-drop-after").forEach((item) => item.classList.remove("is-drop-before", "is-drop-after"));
+      scope.querySelectorAll(".is-drop-before, .is-drop-after").forEach((item) => item.classList.remove("is-drop-before", "is-drop-after"));
       const modeAssets = studio.assets.filter((asset) => asset.mode === mode);
       const sourceIndex = modeAssets.findIndex((asset) => asset.id === studio.draggedAssetId);
       const targetIndex = modeAssets.findIndex((asset) => asset.id === card.dataset.assetId);
@@ -720,7 +752,7 @@ function bindMediaActions(mode) {
     if (studio.requestBusy) return;
     const sourceId = event.dataTransfer.getData("application/x-h3ps-asset") || studio.draggedAssetId;
     const targetId = event.target.closest("[data-asset-id]")?.dataset.assetId;
-    studio.root.querySelectorAll(".is-file-replace-target").forEach((item) => item.classList.remove("is-file-replace-target"));
+    scope.querySelectorAll(".is-file-replace-target").forEach((item) => item.classList.remove("is-file-replace-target"));
     if (sourceId) {
       if (!targetId || sourceId === targetId) return;
       const modeAssets = studio.assets.filter((asset) => asset.mode === mode);
@@ -747,7 +779,7 @@ function previewAsset(asset) {
 function chooseMedia(mode, replaceAssetId = null) {
   const input = document.createElement("input");
   input.type = "file";
-  input.multiple = !replaceAssetId && (mode === "Reference" || mode === "FL2VA");
+  input.multiple = !replaceAssetId && ["Reference", "FL2VA", "H3Image"].includes(mode);
   input.accept = mode === "Reference" ? "image/*,video/*,audio/*" : "image/*";
   input.addEventListener("change", () => uploadFiles(mode, [...input.files], replaceAssetId));
   input.click();
@@ -756,11 +788,11 @@ function chooseMedia(mode, replaceAssetId = null) {
 async function uploadFiles(mode, files, replaceAssetId = null) {
   if (!files.length || studio.requestBusy) return;
   const existing = studio.assets.filter((asset) => asset.mode === mode);
-  if (mode !== "Reference" && !replaceAssetId && existing.length + files.length > MODES[mode].limit) {
-    showToast("Reference slot is full", "Use Replace on the existing image.");
+  if (mode !== "Reference" && !replaceAssetId && existing.length + files.length > (mode === "H3Image" ? 16 : MODES[mode].limit)) {
+    showToast("Image limit reached", mode === "H3Image" ? "Use up to 16 images. Remove a picture or select fewer files." : "Use Replace on the existing image.");
     return;
   }
-  showToast("Processing media", "Creating previews and the ordered contact sheet…");
+  showToast("Processing media", mode === "H3Image" ? "Preparing image preview…" : "Creating previews and the ordered contact sheet…");
   const previousAssets = [...studio.assets];
   try {
     const result = await uploadMedia(studio.sessionId, mode, files, replaceAssetId);
@@ -824,6 +856,7 @@ function showToast(title, message, details = null, action = null, options = {}) 
 }
 
 function defaultModeDraft(mode) {
+  if (mode === "H3Image") return { brief: "", prompt: "" };
   if (mode === "Music3") return MUSIC3_DEFAULT_DRAFT;
   if (mode === "Reference") {
     return { brief: REFERENCE_DEFAULT_BRIEF, prompt: SAMPLE_PROMPT };
@@ -840,6 +873,7 @@ function currentDraftFields() {
 }
 
 function currentBriefTextarea() {
+  if (studio.mode === "H3Image") return studio.root.querySelector("[data-image-brief]");
   return studio.root.querySelector(studio.mode === "Music3" ? "[data-music-brief]" : "[data-video-brief]");
 }
 
@@ -884,15 +918,29 @@ function clearCurrentPrompts({ notify = true } = {}) {
   return true;
 }
 
-async function clearCurrentMedia({ notify = true } = {}) {
+async function clearCurrentMedia({ includePrompts = false } = {}) {
   if (!studio || studio.requestBusy) return false;
+  const mode = studio.sequence?.mediaMode(studio.mode) ?? studio.mode;
+  const workspace = draftKey(studio.mode);
+  const sequence = studio.sequence?.active;
+  const submitted = includePrompts ? currentDraftFields() : null;
   try {
-    const result = await clearMedia(studio.sessionId, studio.sequence?.mediaMode(studio.mode) ?? studio.mode);
-    studio.assets = result.assets;
-
-
+    const result = await clearMedia(studio.sessionId, mode);
+    const current = includePrompts ? currentDraftFields() : null;
+    const clearPrompts = includePrompts && workspace === draftKey(studio.mode) && sequence === studio.sequence?.active
+      && current.brief === submitted.brief && current.prompt === submitted.prompt;
+    acceptMediaAssets(result.assets);
     renderMedia(studio.mode);
-    if (notify) showToast("Media cleared", "The temporary session files were removed.");
+    if (clearPrompts) {
+      clearCurrentPrompts({ notify: false });
+      const detail = studio.mode === "Music3"
+        ? "Media, Music Brief and generated caption were removed. Lyrics were kept."
+        : "Media, Creative Brief and generated prompt were removed.";
+      showToast("Everything cleared", detail);
+    } else {
+      showToast("Media cleared", includePrompts ? "Your current prompts were kept because the workspace changed."
+        : "The temporary session files were removed.");
+    }
     return true;
   } catch (error) {
     showToast(error.code || "Clear failed", error.message, error.details);
@@ -900,25 +948,9 @@ async function clearCurrentMedia({ notify = true } = {}) {
   }
 }
 
-async function clearEverything() {
-  const mode = studio.mode;
-  const submittedDraft = currentDraftFields();
-  if (!await clearCurrentMedia({ notify: false })) return;
-  const currentDraft = currentDraftFields();
-  if (studio.mode !== mode || currentDraft.brief !== submittedDraft.brief || currentDraft.prompt !== submittedDraft.prompt) {
-    showToast("Media cleared", "Your current prompts were kept because the workspace changed.");
-    return;
-  }
-  clearCurrentPrompts({ notify: false });
-  const detail = studio.mode === "Music3"
-    ? "Media, Music Brief and generated caption were removed. Lyrics were kept."
-    : "Media, Creative Brief and generated prompt were removed.";
-  showToast("Everything cleared", detail);
-}
-
 function saveCurrentModeDraft() {
   if (!studio || !isPersistedDraftMode(studio.mode)) return;
-  studio.modeDrafts[studio.mode] = currentDraftFields();
+  studio.modeDrafts[draftKey(studio.mode)] = currentDraftFields();
   saveModeDrafts(localStorage, studio.modeDrafts);
 }
 
@@ -1014,9 +1046,13 @@ function updateMusicLyricsCount() {
   lyrics.closest(".h3ps-brief").querySelector(".h3ps-char-count").textContent = `${lyrics.value.length.toLocaleString()} / 4,000`;
 }
 
+function draftKey(mode) {
+  return mode === "H3Image" && studio.imageTask === "edit" ? "H3ImageEdit" : mode;
+}
+
 function restoreModeDraft(mode) {
   if (!studio) return;
-  const draft = studio.modeDrafts[mode] || defaultModeDraft(mode);
+  const draft = studio.modeDrafts[draftKey(mode)] || defaultModeDraft(mode);
   const output = studio.root.querySelector("[data-output]");
   currentBriefTextarea().value = draft.brief;
   if (mode === "Music3") studio.root.querySelector("[data-music-lyrics]").value = draft.lyrics || "";
@@ -1037,14 +1073,21 @@ function restoreModeDraft(mode) {
 function syncWorkspace() {
   if (!studio) return;
   const music = studio.mode === "Music3";
+  const image = studio.mode === "H3Image";
+  studio.root.classList.toggle("is-image", image);
   studio.root.classList.toggle("is-music", music);
   studio.root.querySelectorAll("[data-workspace]").forEach((button) => {
-    const selected = button.dataset.workspace === (music ? "music" : "video");
+    const selected = button.dataset.workspace === (music ? "music" : image ? "image" : "video");
     button.classList.toggle("is-active", selected);
     button.setAttribute("aria-pressed", String(selected));
   });
-  studio.root.querySelector("[data-video-modes]").hidden = music;
-  studio.root.querySelector("[data-video-inputs]").hidden = music;
+  studio.root.querySelector("[data-video-modes]").hidden = music || image;
+  studio.root.querySelector("[data-image-modes]").hidden = !image;
+  studio.root.querySelector("[data-video-inputs]").hidden = music || image;
+  studio.root.querySelector("[data-image-inputs]").hidden = !image;
+  const actions = studio.root.querySelector(image ? "[data-image-inputs] .h3ps-section-heading" : "[data-video-inputs] .h3ps-section-actions");
+  actions.append(studio.root.querySelector("[data-clear-control]"));
+  studio.root.querySelectorAll("[data-draft-save], [data-draft-load], [data-draft-separator]").forEach(item => { item.hidden = image; });
   studio.root.querySelector("[data-music-inputs]").hidden = !music;
   const outputLabel = music ? "Generated caption" : "Generated prompt";
   studio.root.querySelector("[data-output-label]").textContent = outputLabel;
@@ -1052,13 +1095,14 @@ function syncWorkspace() {
   studio.root.querySelector("[data-output]").setAttribute("aria-label", outputLabel);
   studio.root.querySelector("[data-copy-label]").textContent = music ? "Copy caption" : "Copy prompt";
   studio.root.querySelector("[data-generate-label]").textContent = music ? "Generate caption" : "Generate prompt";
-  studio.root.querySelector("[data-refine-media-note]").textContent = music ? "Lyrics stay separate" : "No media re-upload";
+  studio.root.querySelector("[data-refine-media-note]").textContent = music ? "Lyrics stay separate" : image ? "" : "No media re-upload";
   studio.root.querySelector("[data-refine-title]").textContent = music ? "Refine caption" : "Refine prompt";
   studio.root.querySelector("[data-refine-helper]").textContent = music ? "Describe the musical change" : "Describe only what should change";
   studio.root.querySelector("[data-refine-instruction]").placeholder = music
     ? "For example: keep the verses sparse and let the final chorus open wider."
+    : image ? "For example: keep the composition and change the lighting to late afternoon."
     : "For example: make the camera movement slower and keep the ending more ambiguous.";
-  if (studio.mode !== "Music3") rememberReferenceInsertTarget(studio.root.querySelector("[data-output]"));
+  if (!music && !image) rememberReferenceInsertTarget(studio.root.querySelector("[data-output]"));
   else referenceInsertTarget = null;
 
   if (music) {
@@ -1090,10 +1134,14 @@ function syncModeAvailability() {
 }
 
 function generationModeIsAvailable() {
+  if (studio.mode === "H3Image" && studio.assets.some(asset => asset.mode === "H3Image") && studio.selectedModel?.capabilities?.images === false) {
+    showToast("Vision model required", "Select a prompt model that can see the attached photo, or remove the photo to write from text.");
+    return false;
+  }
   if (isGenerationModeAvailable(studio.selectedModel, studio.mode)) return true;
   showToast(
     "Text-only Direct GGUF",
-    "Use T2VA or Music3, or add the matching mmproj to enable visual modes.",
+    "Use T2VA, H3 Image or Music3, or add the matching mmproj to enable visual modes.",
   );
   return false;
 }
@@ -2135,7 +2183,7 @@ function renderInferenceSettings() {
       : runtimeRequirement.state === "update_required"
         ? renderDirectModelRuntimeUpdate(directModel)
         : isTextOnlyDirectModel(directModel)
-          ? `<div class="h3ps-direct-model-note"><strong>Text-only model · T2VA and Music3 available</strong><span>${escapeHtml(directModel.capability_message || "No compatible vision projector is active.")}</span></div>`
+          ? `<div class="h3ps-direct-model-note"><strong>Text-only model · T2VA, H3 Image and Music3 available</strong><span>${escapeHtml(directModel.capability_message || "No compatible vision projector is active.")}</span></div>`
           : "";
   } else {
     directStatus.innerHTML = "";
@@ -2471,6 +2519,16 @@ function syncRuntimeSummary(result = null) {
   });
 }
 
+function placeImageSystemEditor(settingsOpen) {
+  const details = studio.root.querySelector("[data-image-system]");
+  const panel = studio.root.querySelector('[data-system-prompt-panel="image"]');
+  const inline = details.open && !settingsOpen;
+  const destination = inline ? details : studio.root.querySelector("[data-system-prompt-editor]");
+  if (panel.parentElement !== destination) destination.append(panel);
+  panel.hidden = !inline && studio.settingsPromptProfile !== "image";
+  if (inline) syncSystemPromptEditor("image");
+}
+
 function setSettingsOpen(open) {
   if (!studio) return;
   setOtherModelsPopover(false);
@@ -2480,6 +2538,7 @@ function setSettingsOpen(open) {
   studio.root.querySelectorAll("[data-generate-view]").forEach((element) => { element.hidden = open; });
   studio.root.querySelector("[data-open-settings-header]").hidden = open;
   studio.root.classList.toggle("is-settings-open", open);
+  placeImageSystemEditor(open);
   if (open) {
     if (selectedProvider) studio.settingsProvider = selectedProvider;
     renderInferenceSettings();
@@ -3155,6 +3214,7 @@ function createStudio() {
         </div>
         <nav class="h3ps-workspaces" aria-label="Writer workspace">
           <button type="button" data-workspace="video">H3 Video</button>
+          <button type="button" data-workspace="image">H3 Image</button>
           <button type="button" data-workspace="music">Music 3</button>
         </nav>
         <div class="h3ps-header-meta">
@@ -3184,6 +3244,10 @@ function createStudio() {
         <nav class="h3ps-modes" role="tablist" aria-label="Generation mode" data-video-modes>
           ${Object.keys(MODES).map((mode) => `<button type="button" role="tab" data-mode="${mode}">${mode}</button>`).join("")}
         </nav>
+        <nav class="h3ps-modes" role="tablist" aria-label="Image mode" data-image-modes hidden>
+          <button type="button" role="tab" data-image-task="describe">Text to Image</button>
+          <button type="button" role="tab" data-image-task="edit">Image Edit</button>
+        </nav>
         <div class="h3ps-output-toolbar">
           <span data-output-label>Generated prompt</span>
           <div class="h3ps-output-badges"><button type="button" data-undo-edits hidden>Undo</button></div>
@@ -3204,7 +3268,7 @@ function createStudio() {
                   <button type="button" data-draft-save><strong>Save text draft</strong><small>Download JSON</small></button>
                   <button type="button" data-draft-load><strong>Load text draft</strong><small>Open JSON</small></button>
                   <input type="file" accept=".json,application/json" data-draft-file hidden>
-                  <hr>
+                  <hr data-draft-separator>
                   <button type="button" data-clear-action data-clear-media><strong>Clear media</strong><small>Keep prompts</small></button>
                   <button type="button" data-clear-action data-clear-prompts><strong>Clear prompts</strong><small>Keep media</small></button>
                   <button class="is-destructive" type="button" data-clear-action data-clear-all><strong>Clear all</strong><small>Media and prompts</small></button>
@@ -3226,6 +3290,20 @@ function createStudio() {
             <small class="h3ps-char-count">0 characters</small>
           </label>
 
+          </div>
+
+          <div data-image-inputs hidden>
+            <div class="h3ps-section-heading"><span><small>Media</small><strong>Reference images</strong></span></div>
+            <p class="h3ps-section-hint" data-image-hint></p>
+            <div class="h3ps-media" data-image-media></div>
+            <label class="h3ps-brief">
+              <span><strong>Creative brief</strong></span>
+              <textarea spellcheck="true" data-image-brief></textarea>
+              <small class="h3ps-char-count">0 characters</small>
+            </label>
+            <details class="h3ps-music-system-prompt h3ps-image-system" data-image-system>
+              <summary class="h3ps-music-system-prompt-toggle"><strong>System Prompt</strong><span>${icon("chevron", 12)}</span></summary>
+            </details>
           </div>
 
           <div class="h3ps-music-inputs" data-music-inputs hidden>
@@ -3432,11 +3510,11 @@ function createStudio() {
     if (!event.target.closest("[data-clear-control]")) setClearMenuOpen(false);
   });
   root.querySelectorAll("[data-workspace]").forEach((button) => button.addEventListener("click", () => {
-    const nextMode = button.dataset.workspace === "music" ? "Music3" : studio.lastVideoMode;
+    const nextMode = button.dataset.workspace === "music" ? "Music3" : button.dataset.workspace === "image" ? "H3Image" : studio.lastVideoMode;
     if (!isGenerationModeAvailable(studio.selectedModel, nextMode)) return;
     if (nextMode === studio.mode) return;
     stashCurrentModeDraft();
-    if (studio.mode !== "Music3") studio.lastVideoMode = studio.mode;
+    if (!["Music3", "H3Image"].includes(studio.mode)) studio.lastVideoMode = studio.mode;
     studio.mode = nextMode;
     syncWorkspace();
     restoreModeDraft(studio.mode);
@@ -3456,6 +3534,19 @@ function createStudio() {
     syncRuntimeSummary();
     saveUserPreferences(localStorage, studio);
   }));
+  root.querySelector("[data-image-system]").addEventListener("toggle", () => {
+    placeImageSystemEditor(root.classList.contains("is-settings-open"));
+  });
+  root.querySelectorAll("[data-image-task]").forEach(button => button.addEventListener("click", () => {
+    if (studio.requestBusy || studio.imageTask === button.dataset.imageTask) return;
+    stashCurrentModeDraft();
+    studio.imageTask = button.dataset.imageTask;
+    saveUserPreferences(localStorage, studio);
+    toggleRefine(false);
+    restoreModeDraft("H3Image");
+    rememberReferenceInsertTarget(currentBriefTextarea());
+    renderImageInput();
+  }));
   root.querySelector("[data-open-settings-header]").addEventListener("click", () => setSettingsOpen(true));
   root.querySelector("[data-open-settings]").addEventListener("click", () => setSettingsOpen(true));
   root.querySelector("[data-close-settings]").addEventListener("click", () => setSettingsOpen(false));
@@ -3473,7 +3564,7 @@ function createStudio() {
   });
   root.querySelector("[data-clear-all]").addEventListener("click", () => {
     setClearMenuOpen(false);
-    clearEverything();
+    clearCurrentMedia({ includePrompts: true });
   });
   root.querySelector("[data-generate]").addEventListener("click", startGenerationPreview);
   studio.desktopNotifications = createDesktopNotifications({ storage: localStorage, document, window });
@@ -3522,6 +3613,10 @@ function createStudio() {
     menu.hidden = !menu.hidden;
     root.querySelector("[data-guide-toggle]").setAttribute("aria-expanded", String(!menu.hidden));
     if (menu.hidden) return;
+    if (studio.mode === "H3Image") {
+      menu.innerHTML = `<a href="https://github.com/MiniMax-AI/MiniMax-H3-Image/blob/40850901ab938303b5274122b5f305ebc5b75c80/skills/h3-image-prompt-writing/SKILL.md" target="_blank" rel="noopener noreferrer"><strong>MiniMax H3 Image</strong><small>Official prompt-writing skill</small></a>`;
+      return;
+    }
     if (studio.mode === "Music3") {
       menu.innerHTML = `<a href="${MUSIC3_GUIDE_URL}" target="_blank" rel="noopener noreferrer"><strong>Music Caption Rewriter</strong><small>Official MiniMax Music 3 guide</small></a>`;
       return;
@@ -3638,7 +3733,7 @@ function createStudio() {
     updateBriefLayout();
     saveCurrentModeDraft();
   };
-  root.querySelectorAll("[data-video-brief], [data-music-brief]").forEach((brief) => brief.addEventListener("input", updateBriefCount));
+  root.querySelectorAll("[data-video-brief], [data-music-brief], [data-image-brief]").forEach((brief) => brief.addEventListener("input", updateBriefCount));
   root.querySelector("[data-music-lyrics]").addEventListener("input", () => {
     updateMusicLyricsCount();
     saveCurrentModeDraft();
@@ -3847,7 +3942,7 @@ function createStudio() {
   root.querySelector("[data-output]").addEventListener("scroll", renderPromptHighlights);
   const editor = root.querySelector("[data-output]");
   new ResizeObserver(renderPromptHighlights).observe(editor);
-  const supportedReferenceEditors = root.querySelectorAll("[data-video-brief], [data-output], [data-refine-instruction]");
+  const supportedReferenceEditors = root.querySelectorAll("[data-video-brief], [data-image-brief], [data-output], [data-refine-instruction]");
   supportedReferenceEditors.forEach((field) => {
     ["focus", "click", "keyup", "select", "input"].forEach((type) => field.addEventListener(type, () => rememberReferenceInsertTarget(field)));
   });
@@ -3862,7 +3957,7 @@ function createStudio() {
     const mark = event.target.closest("[data-prompt-reference]");
     if (!mark || editorWrap.classList.contains("is-editing")) return;
     const reference = mark.dataset.promptReference;
-    const asset = studio.assets.find((item) => item.reference === reference);
+    const asset = studio.assets.find((item) => item.mode === studio.mode && item.reference === reference);
     if (!asset) return;
     const visual = asset.type === "audio"
       ? `<span class="h3ps-peek-audio">${icon("audio", 18)}</span>`
